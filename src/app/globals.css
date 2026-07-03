@@ -1,26 +1,92 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  --color-void: #0a0b0d;
+  --color-panel: #111318;
+  --color-panel-2: #171a21;
+  --color-line: #23262e;
+  --color-line-2: #2e323c;
+  --color-ink: #e9ebee;
+  --color-ink-dim: #8a9099;
+  --color-ink-faint: #565c66;
+  --color-signal: #d7ff3e;
+  --color-onair: #ff4438;
+  --color-amber: #ffb454;
+  --color-scope: #58d6ff;
+  --font-display: var(--font-bricolage), sans-serif;
+  --font-mono: var(--font-martian), monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  background: var(--color-void);
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(88, 214, 255, 0.05), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(215, 255, 62, 0.04), transparent 60%),
+    var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  min-height: 100vh;
 }
+
+/* CRT scanline + grain atmosphere */
+.scanlines::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.015) 0px,
+    rgba(255, 255, 255, 0.015) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+.display {
+  font-family: var(--font-display);
+}
+
+@keyframes led-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px currentColor; }
+  50% { opacity: 0.45; box-shadow: 0 0 1px currentColor; }
+}
+.led-live { animation: led-pulse 1.6s ease-in-out infinite; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rise { animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+
+@keyframes vu-in {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.vu-fill {
+  transform-origin: left;
+  animation: vu-in 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.tile-hover {
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.tile-hover:hover {
+  border-color: var(--color-line-2);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px -18px rgba(0, 0, 0, 0.9);
+}
+
+::selection {
+  background: var(--color-signal);
+  color: var(--color-void);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--color-line-2); border-radius: 0; }
+::-webkit-scrollbar-track { background: transparent; }
