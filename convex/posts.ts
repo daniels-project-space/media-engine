@@ -41,6 +41,32 @@ export const reject = mutation({
   },
 });
 
+export const setStatus = mutation({
+  args: { id: v.id("posts"), status: postStatus },
+  handler: async (ctx, { id, status }) => {
+    await ctx.db.patch(id, { status });
+  },
+});
+
+export const attachResult = mutation({
+  args: {
+    id: v.id("posts"),
+    slides: v.array(
+      v.object({ r2Key: v.optional(v.string()), url: v.optional(v.string()), prompt: v.string() }),
+    ),
+  },
+  handler: async (ctx, { id, slides }) => {
+    await ctx.db.patch(id, { slides, status: "ready", error: undefined });
+  },
+});
+
+export const fail = mutation({
+  args: { id: v.id("posts"), error: v.string() },
+  handler: async (ctx, { id, error }) => {
+    await ctx.db.patch(id, { status: "failed", error });
+  },
+});
+
 export const create = mutation({
   args: {
     streamSlug: v.string(),
