@@ -29,7 +29,7 @@ function today(): string {
 export const generateShort = task({
   id: "generate-short",
   maxDuration: 900,
-  run: async (payload: Payload) => {
+  run: async (payload: Payload, { ctx }) => {
     const convex = new ConvexHttpClient(CONVEX_URL);
 
     const settings = await convex.query(api.settings.all, {});
@@ -43,15 +43,22 @@ export const generateShort = task({
     const motion =
       payload.motionPrompt ?? templates.find((t) => t.category === "motion")?.body ?? DEFAULT_MOTION;
 
-    const postId = (await convex.mutation(api.posts.create, {
-      streamSlug: payload.streamSlug,
-      personaId: payload.personaId as Id<"personas"> | undefined,
-      platform: "instagram",
-      kind: "short",
-      title: payload.title,
-      caption: payload.caption,
-      slides: [{ prompt: motion }],
-    })) as Id<"posts">;
+    // Idempotent across Trigger retries: reuse the post tagged with this run id.
+    const failedPosts = await convex.query(api.posts.byStatus, { status: "failed" });
+    const generating = await convex.query(api.posts.byStatus, { status: "generating" });
+    const prior = [...failedPosts, ...generating].find((p) => p.externalId === ctx.run.id);
+    const postId =
+      prior?._id ??
+      ((await convex.mutation(api.posts.create, {
+        streamSlug: payload.streamSlug,
+        personaId: payload.personaId as Id<"personas"> | undefined,
+        platform: "instagram",
+        kind: "short",
+        title: payload.title,
+        caption: payload.caption,
+        slides: [{ prompt: motion }],
+        externalId: ctx.run.id,
+      })) as Id<"posts">);
     await convex.mutation(api.posts.setStatus, { id: postId, status: "generating" });
 
     const { FAL_KEY } = await vaultService("fal");
@@ -69,20 +76,19 @@ export const generateShort = task({
         }),
       });
       if (!submit.ok) throw new Error(`fal submit HTTP ${submit.status}: ${(await submit.text()).slice(0, 300)}`);
-      const { request_id } = (await submit.json()) as { request_id: string };
-      logger.log("fal queued", { request_id });
+      // fal returns canonical polling URLs (base path differs from the model path) — always use them.
+      const sub = (await submit.json()) as { request_id: string; status_url: string; response_url: string };
+      logger.log("fal queued", { request_id: sub.request_id });
 
       let videoUrl: string | null = null;
       for (let i = 0; i < 90; i++) {
         await new Promise((r) => setTimeout(r, 5000));
-        const st = await fetch(`https://queue.fal.run/${FAL_MODEL}/requests/${request_id}/status`, {
-          headers: { authorization: `Key ${FAL_KEY}` },
-        });
+        const st = await fetch(sub.status_url, { headers: { authorization: `Key ${FAL_KEY}` } });
+        if (!st.ok) throw new Error(`fal status HTTP ${st.status}: ${(await st.text()).slice(0, 200)}`);
         const sd = (await st.json()) as { status: string };
         if (sd.status === "COMPLETED") {
-          const res = await fetch(`https://queue.fal.run/${FAL_MODEL}/requests/${request_id}`, {
-            headers: { authorization: `Key ${FAL_KEY}` },
-          });
+          const res = await fetch(sub.response_url, { headers: { authorization: `Key ${FAL_KEY}` } });
+          if (!res.ok) throw new Error(`fal result HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
           const rd = (await res.json()) as { video?: { url?: string } };
           videoUrl = rd.video?.url ?? null;
           break;
