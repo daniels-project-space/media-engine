@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
+import Link from "next/link";
 
 const STAGES = ["grow", "brand_ready", "monetized"] as const;
 
@@ -28,11 +29,11 @@ export default function Personas() {
     <div className="max-w-5xl">
       <h1 className="display font-extrabold text-4xl tracking-tight mb-2 rise">PERSONAS</h1>
       <p className="text-ink-dim text-xs tracking-wider mb-8 rise">
-        GLOBAL LOCK IN EVERY GENERATION — IDENTITY DRIFT IS FAILURE MODE #1
+        YOUR AI MODELS — CLICK ONE TO OPEN ITS PLANNER, CALENDAR AND IMAGE GALLERY
       </p>
 
       {personas === undefined ? (
-        <div className="text-ink-faint text-xs tracking-widest">TUNING…</div>
+        <div className="text-ink-faint text-xs tracking-widest">Loading…</div>
       ) : personas.length === 0 ? (
         <div className="border border-dashed border-line-2 p-12 text-center text-ink-faint text-xs tracking-[0.25em] rise">
           NO PERSONAS — INITIALIZE THE ENGINE FROM MASTER CONTROL
@@ -47,7 +48,9 @@ export default function Personas() {
             >
               <div className="p-5 border-b border-line flex items-start justify-between gap-4">
                 <div>
-                  <div className="display font-bold text-2xl leading-none">{p.name}</div>
+                  <Link href={`/personas/${p._id}`} className="display font-bold text-2xl leading-none hover:text-signal transition-colors">
+                    {p.name} <span className="text-ink-faint text-sm">→</span>
+                  </Link>
                   <div className="text-scope text-xs mt-1">{p.handle}</div>
                 </div>
                 <span

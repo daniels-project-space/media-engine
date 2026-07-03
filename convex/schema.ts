@@ -83,7 +83,14 @@ export default defineSchema({
     hook: v.optional(v.string()),
     caption: v.optional(v.string()),
     slides: v.optional(
-      v.array(v.object({ r2Key: v.optional(v.string()), url: v.optional(v.string()), prompt: v.string() })),
+      v.array(
+        v.object({
+          r2Key: v.optional(v.string()),
+          url: v.optional(v.string()),
+          prompt: v.string(),
+          role: v.optional(v.string()),
+        }),
+      ),
     ),
     scheduledAt: v.optional(v.number()),
     publishedAt: v.optional(v.number()),
@@ -112,6 +119,11 @@ export default defineSchema({
     source: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_category", ["category"]),
+
+  settings: defineTable({
+    key: v.string(),
+    value: v.any(),
+  }).index("by_key", ["key"]),
 
   spend: defineTable({
     day: v.string(),

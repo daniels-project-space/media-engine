@@ -17,7 +17,7 @@ export default function Queue() {
     <div className="max-w-5xl">
       <h1 className="display font-extrabold text-4xl tracking-tight mb-2 rise">APPROVAL QUEUE</h1>
       <p className="text-ink-dim text-xs tracking-wider mb-8 rise">
-        HYBRID AUTONOMY — FLAGSHIP PERSONAS GATE HERE, FACELESS STREAMS PASS THROUGH
+        EVERY POST'S LIFECYCLE: PLANNED → GENERATED → AWAITING YOUR APPROVAL → PUBLISHED
       </p>
 
       <div className="flex gap-px bg-line border border-line mb-8 w-fit rise">
@@ -35,10 +35,15 @@ export default function Queue() {
       </div>
 
       {posts === undefined ? (
-        <div className="text-ink-faint text-xs tracking-widest">TUNING…</div>
+        <div className="text-ink-faint text-xs tracking-widest">Loading…</div>
       ) : posts.length === 0 ? (
         <div className="border border-dashed border-line-2 p-12 text-center text-ink-faint text-xs tracking-[0.25em] rise">
           NOTHING IN «{tab.toUpperCase()}»
+          {tab === "ready" && (
+            <div className="mt-2 normal-case tracking-normal">
+              Generated posts land here for your review. Plan posts from a persona&apos;s page.
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-4">

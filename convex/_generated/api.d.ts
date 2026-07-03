@@ -8,11 +8,13 @@
  * @module
  */
 
+import type * as analytics from "../analytics.js";
 import type * as personas from "../personas.js";
 import type * as posts from "../posts.js";
 import type * as prompts from "../prompts.js";
 import type * as seed from "../seed.js";
 import type * as seedData from "../seedData.js";
+import type * as settings from "../settings.js";
 import type * as spend from "../spend.js";
 import type * as streams from "../streams.js";
 
@@ -23,11 +25,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  analytics: typeof analytics;
   personas: typeof personas;
   posts: typeof posts;
   prompts: typeof prompts;
   seed: typeof seed;
   seedData: typeof seedData;
+  settings: typeof settings;
   spend: typeof spend;
   streams: typeof streams;
 }>;

@@ -5,10 +5,12 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 const NAV = [
-  { href: "/", code: "MC", label: "Master Control" },
-  { href: "/queue", code: "AQ", label: "Approval Queue" },
-  { href: "/personas", code: "PS", label: "Personas" },
-  { href: "/prompts", code: "PL", label: "Prompt Library" },
+  { href: "/", code: "MC", label: "Dashboard", hint: "streams & spend" },
+  { href: "/queue", code: "AQ", label: "Approval Queue", hint: "review & publish" },
+  { href: "/personas", code: "PS", label: "Personas", hint: "AI models & planner" },
+  { href: "/analytics", code: "AN", label: "Analytics", hint: "output & costs" },
+  { href: "/prompts", code: "PL", label: "Prompt Library", hint: "reusable templates" },
+  { href: "/settings", code: "ST", label: "Settings", hint: "budget & services" },
 ];
 
 function Timecode() {
@@ -62,7 +64,12 @@ export default function Shell({ children }: { children: React.ReactNode }) {
                 >
                   {n.code}
                 </span>
-                <span className="hidden md:inline">{n.label}</span>
+                <span className="hidden md:block leading-tight">
+                  {n.label}
+                  <span className="block text-[9px] text-ink-faint normal-case tracking-normal">
+                    {n.hint}
+                  </span>
+                </span>
               </Link>
             );
           })}
@@ -77,8 +84,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="h-16 shrink-0 border-b border-line bg-panel/40 flex items-center justify-between px-6">
           <div className="flex items-center gap-3">
-            <span className="size-2 rounded-full bg-onair led-live" />
-            <span className="text-[11px] tracking-[0.3em] text-ink-dim">ENGINE STANDBY</span>
+            <span className="size-2 rounded-full bg-signal led-live" />
+            <span className="text-[11px] tracking-[0.3em] text-ink-dim">ENGINE ONLINE</span>
+            <span className="hidden lg:inline text-[10px] text-ink-faint">
+              — generates content, you approve, it publishes
+            </span>
           </div>
           <Timecode />
         </header>

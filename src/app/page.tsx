@@ -46,7 +46,7 @@ export default function Dashboard() {
   const setAutonomy = useMutation(api.streams.setAutonomy);
 
   if (streams === undefined) {
-    return <div className="text-ink-faint text-xs tracking-widest">TUNING…</div>;
+    return <div className="text-ink-faint text-xs tracking-widest">Loading…</div>;
   }
 
   if (streams.length === 0) {
@@ -77,10 +77,11 @@ export default function Dashboard() {
       <div className="flex flex-wrap items-end justify-between gap-6 mb-10 rise">
         <div>
           <h1 className="display font-extrabold text-4xl tracking-tight leading-none">
-            MASTER CONTROL
+            DASHBOARD
           </h1>
           <p className="text-ink-dim text-xs mt-2 tracking-wider">
-            {streams.length} STREAMS · {counts?.total ?? 0} POSTS TOTAL
+            {streams.length} CONTENT STREAMS · {counts?.total ?? 0} POSTS TOTAL — A STREAM IS ONE
+            MARKETING PIPELINE (E.G. «GROW @ELARAVOSS»)
           </p>
         </div>
         <div className="flex items-end gap-10">
@@ -138,22 +139,24 @@ export default function Dashboard() {
                     onClick={() =>
                       setAutonomy({ id: s._id, autonomy: s.autonomy === "auto" ? "approve" : "auto" })
                     }
+                    title="Click to switch. Needs approval = posts wait for you in the queue. Fully automatic = publishes without review."
                     className={`uppercase tracking-widest hover:underline ${
                       s.autonomy === "auto" ? "text-signal" : "text-amber"
                     }`}
                   >
-                    {s.autonomy === "auto" ? "AUTO" : "APPROVE-GATED"}
+                    {s.autonomy === "auto" ? "FULLY AUTOMATIC" : "NEEDS APPROVAL"}
                   </button>
                 </span>
                 <button
                   onClick={() => setStatus({ id: s._id, status: live ? "paused" : "active" })}
+                  title={live ? "Pause this stream — it stops planning and posting." : "Activate this stream — it starts planning and posting on schedule."}
                   className={`text-[10px] tracking-[0.2em] px-3 py-1.5 border transition ${
                     live
                       ? "border-onair text-onair hover:bg-onair hover:text-void"
                       : "border-line-2 text-ink-dim hover:border-signal hover:text-signal"
                   }`}
                 >
-                  {live ? "TAKE OFF AIR" : "PUT ON AIR"}
+                  {live ? "PAUSE STREAM" : "ACTIVATE STREAM"}
                 </button>
               </div>
             </div>

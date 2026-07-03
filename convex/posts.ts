@@ -41,6 +41,30 @@ export const reject = mutation({
   },
 });
 
+export const get = query({
+  args: { id: v.id("posts") },
+  handler: async (ctx, { id }) => {
+    return await ctx.db.get(id);
+  },
+});
+
+export const forPersona = query({
+  args: { personaId: v.id("personas") },
+  handler: async (ctx, { personaId }) => {
+    const posts = await ctx.db.query("posts").collect();
+    return posts
+      .filter((p) => p.personaId === personaId)
+      .sort((a, b) => (a.scheduledAt ?? a.createdAt) - (b.scheduledAt ?? b.createdAt));
+  },
+});
+
+export const remove = mutation({
+  args: { id: v.id("posts") },
+  handler: async (ctx, { id }) => {
+    await ctx.db.delete(id);
+  },
+});
+
 export const setStatus = mutation({
   args: { id: v.id("posts"), status: postStatus },
   handler: async (ctx, { id, status }) => {
@@ -52,7 +76,12 @@ export const attachResult = mutation({
   args: {
     id: v.id("posts"),
     slides: v.array(
-      v.object({ r2Key: v.optional(v.string()), url: v.optional(v.string()), prompt: v.string() }),
+      v.object({
+        r2Key: v.optional(v.string()),
+        url: v.optional(v.string()),
+        prompt: v.string(),
+        role: v.optional(v.string()),
+      }),
     ),
   },
   handler: async (ctx, { id, slides }) => {
@@ -84,9 +113,17 @@ export const create = mutation({
     hook: v.optional(v.string()),
     caption: v.optional(v.string()),
     slides: v.optional(
-      v.array(v.object({ r2Key: v.optional(v.string()), url: v.optional(v.string()), prompt: v.string() })),
+      v.array(
+        v.object({
+          r2Key: v.optional(v.string()),
+          url: v.optional(v.string()),
+          prompt: v.string(),
+          role: v.optional(v.string()),
+        }),
+      ),
     ),
     scheduledAt: v.optional(v.number()),
+    externalId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("posts", {
