@@ -32,6 +32,8 @@ function Timecode() {
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
+  // Public pages (link-in-bio) render without the engine chrome.
+  if (path.startsWith("/p/")) return <>{children}</>;
   return (
     <div className="flex min-h-screen">
       <aside className="w-16 md:w-56 shrink-0 border-r border-line bg-panel/60 flex flex-col">

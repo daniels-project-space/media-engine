@@ -58,6 +58,17 @@ export const forPersona = query({
   },
 });
 
+export const due = query({
+  args: { status: postStatus, before: v.number() },
+  handler: async (ctx, { status, before }) => {
+    const posts = await ctx.db
+      .query("posts")
+      .withIndex("by_status", (q) => q.eq("status", status))
+      .collect();
+    return posts.filter((p) => (p.scheduledAt ?? 0) <= before);
+  },
+});
+
 export const remove = mutation({
   args: { id: v.id("posts") },
   handler: async (ctx, { id }) => {

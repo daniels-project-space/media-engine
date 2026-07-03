@@ -9,6 +9,8 @@ type ServiceStatus = { service: string; label: string; role: string; present: bo
 export default function Settings() {
   const settings = useQuery(api.settings.all);
   const streams = useQuery(api.streams.list);
+  const accounts = useQuery(api.accounts.list);
+  const contacts = useQuery(api.email.contacts, {});
   const setSetting = useMutation(api.settings.set);
   const setAutonomy = useMutation(api.streams.setAutonomy);
   const [services, setServices] = useState<ServiceStatus[] | null>(null);
@@ -113,6 +115,36 @@ export default function Settings() {
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="border border-line bg-panel p-5 mb-6 rise">
+        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">SOCIAL ACCOUNTS</h2>
+        <p className="text-ink-faint text-[11px] mb-4">
+          The engine publishes through these. To link Instagram: create the account (Business),
+          create a Meta developer app, then the access token goes in the vault — I&apos;ll walk you
+          through it once accounts exist. Until linked, posts stop at «approved».
+        </p>
+        <div className="divide-y divide-line border border-line">
+          {(accounts ?? []).map((a) => (
+            <div key={a._id} className="flex items-center justify-between px-4 py-2.5 bg-panel-2/40">
+              <div>
+                <span className="text-xs font-bold">{a.handle}</span>
+                <span className="text-[10px] text-ink-faint ml-2 uppercase">{a.platform}</span>
+              </div>
+              <span
+                className={`text-[10px] tracking-widest ${
+                  a.status === "active" ? "text-signal" : a.status === "banned" ? "text-onair" : "text-amber"
+                }`}
+              >
+                {a.tokenKey ? a.status.toUpperCase() : "NOT LINKED"}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="text-[10px] text-ink-faint mt-3">
+          Email list: {contacts?.length ?? 0} subscribed contact{(contacts?.length ?? 0) === 1 ? "" : "s"} (captured
+          via the public link-in-bio pages, e.g. /p/elaravoss).
+        </p>
       </section>
 
       <section className="border border-line bg-panel p-5 rise">

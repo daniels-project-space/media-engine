@@ -9,9 +9,23 @@ type Tab = (typeof TABS)[number];
 
 export default function Queue() {
   const [tab, setTab] = useState<Tab>("ready");
+  const [busy, setBusy] = useState<string | null>(null);
   const posts = useQuery(api.posts.byStatus, { status: tab });
   const approve = useMutation(api.posts.approve);
   const reject = useMutation(api.posts.reject);
+
+  async function publishNow(postId: string) {
+    setBusy(postId);
+    try {
+      await fetch("/api/trigger", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "publish", postId }),
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
     <div className="max-w-5xl">
@@ -55,7 +69,17 @@ export default function Queue() {
             >
               <div className="flex gap-2 shrink-0">
                 {(p.slides ?? []).slice(0, 4).map((s, j) =>
-                  s.url ? (
+                  s.url && s.r2Key?.endsWith(".mp4") ? (
+                    <video
+                      key={j}
+                      src={s.url}
+                      muted
+                      loop
+                      autoPlay
+                      playsInline
+                      className="size-16 object-cover border border-line-2"
+                    />
+                  ) : s.url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       key={j}
@@ -105,6 +129,16 @@ export default function Queue() {
                     KILL
                   </button>
                 </div>
+              )}
+              {tab === "approved" && (
+                <button
+                  onClick={() => publishNow(p._id)}
+                  disabled={busy !== null}
+                  title="Posts immediately via the linked account. Fails with a clear error if the account isn't connected yet."
+                  className="px-4 py-2 bg-signal text-void display font-bold text-xs hover:brightness-110 transition disabled:opacity-50 shrink-0"
+                >
+                  {busy === p._id ? "PUBLISHING…" : "PUBLISH NOW"}
+                </button>
               )}
             </div>
           ))}

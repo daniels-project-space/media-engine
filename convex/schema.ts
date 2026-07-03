@@ -63,8 +63,19 @@ export default defineSchema({
       v.literal("banned"),
     ),
     tokenService: v.optional(v.string()),
+    tokenKey: v.optional(v.string()),
+    meta: v.optional(v.any()),
     notes: v.optional(v.string()),
   }).index("by_persona", ["personaId"]),
+
+  emailContacts: defineTable({
+    email: v.string(),
+    source: v.string(),
+    personaHandle: v.optional(v.string()),
+    tags: v.array(v.string()),
+    status: v.union(v.literal("subscribed"), v.literal("unsubscribed")),
+    createdAt: v.number(),
+  }).index("by_email", ["email"]),
 
   posts: defineTable({
     streamSlug: v.string(),

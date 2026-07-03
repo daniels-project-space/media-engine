@@ -7,11 +7,17 @@ export const maxDuration = 30;
 // Body: { action: "generate", postId } | { action: "plan", personaId, days?, postsPerDay? }
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as {
-    action: "generate" | "plan";
+    action: "generate" | "plan" | "publish" | "short" | "campaign";
     postId?: string;
     personaId?: string;
     days?: number;
     postsPerDay?: number;
+    imageUrl?: string;
+    streamSlug?: string;
+    title?: string;
+    subject?: string;
+    html?: string;
+    tag?: string;
   };
 
   const trigger = await vaultService("trigger");
@@ -26,6 +32,20 @@ export async function POST(req: NextRequest) {
   } else if (body.action === "plan" && body.personaId) {
     taskId = "plan-week";
     payload = { personaId: body.personaId, days: body.days, postsPerDay: body.postsPerDay };
+  } else if (body.action === "publish" && body.postId) {
+    taskId = "publish-post";
+    payload = { postId: body.postId };
+  } else if (body.action === "short" && body.imageUrl && body.streamSlug && body.title) {
+    taskId = "generate-short";
+    payload = {
+      imageUrl: body.imageUrl,
+      streamSlug: body.streamSlug,
+      personaId: body.personaId,
+      title: body.title,
+    };
+  } else if (body.action === "campaign" && body.subject && body.html) {
+    taskId = "send-campaign";
+    payload = { subject: body.subject, html: body.html, tag: body.tag };
   } else {
     return NextResponse.json({ error: "bad request" }, { status: 400 });
   }
