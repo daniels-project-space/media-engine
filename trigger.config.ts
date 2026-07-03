@@ -1,4 +1,5 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
+import { ffmpeg } from "@trigger.dev/build/extensions/core";
 
 export default defineConfig({
   // Hardcoded on purpose: env-fallback once deployed music-house tasks to a phantom project.
@@ -11,4 +12,7 @@ export default defineConfig({
     default: { maxAttempts: 3, minTimeoutInMs: 1000, maxTimeoutInMs: 10000, factor: 2, randomize: true },
   },
   dirs: ["./src/trigger"],
+  build: {
+    extensions: [ffmpeg({ version: "7" })],
+  },
 });
