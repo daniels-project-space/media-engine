@@ -4,16 +4,23 @@ import { higgsBalance, higgsGenerateVideo } from "./higgsfield";
 
 // Friendly model name -> Higgsfield job_set_type (credits) + fal fallback id (pence).
 // Higgsfield is tried FIRST whenever the account has credits; fal is the fallback.
+// Timing measured 2026-07-04 on Higgsfield (credits · render time):
+//   kling3_0 10cr/41s ✓  · kling3_0_turbo 7.5cr/172s (slow) · seedance1_5 4.8cr/68s ✓
+//   veo3_1_lite 6cr/417s+ (too slow → hfSkip, go straight to fal)
+// hfDuration must match each model's schema enum or the job 422s:
+//   kling3_0: min 3 · kling2_6: [5,10] · seedance1_5: [4,8,12] · seedance_2_0: min 4
 export const VIDEO_MODELS: Record<
   string,
-  { hf: string; hfDuration?: number; fal: string; falPence: number; hfExtra?: Record<string, unknown> }
+  { hf: string; hfDuration?: number; hfSkip?: boolean; fal: string; falPence: number; hfExtra?: Record<string, unknown> }
 > = {
-  "kling-pro": { hf: "kling3_0", fal: "fal-ai/kling-video/v2.6/pro/image-to-video", falPence: 30, hfExtra: { mode: "std" } },
-  "kling-turbo": { hf: "kling3_0_turbo", fal: "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", falPence: 30 },
-  "kling-26": { hf: "kling2_6", fal: "fal-ai/kling-video/v2.6/pro/image-to-video", falPence: 30 },
-  "seedance-lite": { hf: "seedance1_5", fal: "fal-ai/bytedance/seedance/v1/lite/image-to-video", falPence: 16 },
-  "seedance-pro": { hf: "seedance_2_0", fal: "fal-ai/bytedance/seedance/v1/pro/image-to-video", falPence: 74 },
-  "veo-lite": { hf: "veo3_1_lite", fal: "fal-ai/veo3.1/lite/image-to-video", falPence: 35 },
+  "kling-pro": { hf: "kling3_0", hfDuration: 5, fal: "fal-ai/kling-video/v2.6/pro/image-to-video", falPence: 30, hfExtra: { mode: "std" } },
+  // "turbo" on HF is 4x slower than kling3_0 std — route it to the fast one.
+  "kling-turbo": { hf: "kling3_0", hfDuration: 5, fal: "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", falPence: 30, hfExtra: { mode: "std" } },
+  "kling-26": { hf: "kling2_6", hfDuration: 5, fal: "fal-ai/kling-video/v2.6/pro/image-to-video", falPence: 30 },
+  "seedance-lite": { hf: "seedance1_5", hfDuration: 4, fal: "fal-ai/bytedance/seedance/v1/lite/image-to-video", falPence: 16 },
+  "seedance-pro": { hf: "seedance_2_0", hfDuration: 5, fal: "fal-ai/bytedance/seedance/v1/pro/image-to-video", falPence: 74 },
+  // HF veo renders in ~7min — too slow to block on; go straight to fal.
+  "veo-lite": { hf: "veo3_1_lite", hfSkip: true, fal: "fal-ai/veo3.1/lite/image-to-video", falPence: 35 },
 };
 
 async function falImageToVideo(
@@ -59,9 +66,10 @@ export async function renderClip(opts: {
   const m = VIDEO_MODELS[opts.model];
   const duration = opts.durationSeconds ?? 5;
 
-  // 1) Higgsfield first — only if the account currently has credits.
+  // 1) Higgsfield first — unless this model renders too slowly on HF (hfSkip) or
+  //    the account is out of credits.
   try {
-    const balance = await higgsBalance();
+    const balance = m.hfSkip ? 0 : await higgsBalance();
     if (balance > 0) {
       const { url, credits } = await higgsGenerateVideo({
         jobSetType: m.hf,

@@ -109,8 +109,10 @@ export async function higgsGenerateVideo(opts: {
   const jobId = Array.isArray(ids) ? ids[0] : (ids as { id?: string }).id;
   if (!jobId) throw new Error("higgs submit returned no job id");
 
-  for (let i = 0; i < 120; i++) {
-    await new Promise((res) => setTimeout(res, 6000));
+  // ~5min ceiling: HF clips normally finish in under a minute, so a longer wait
+  // means the job is stuck — bail and let the router fall back to fal.
+  for (let i = 0; i < 60; i++) {
+    await new Promise((res) => setTimeout(res, 5000));
     const p = await authed("GET", `/jobs/${jobId}`);
     if (!p.ok) continue;
     const d = (await p.json()) as { status: string; result_url?: string; h264_url?: string };
