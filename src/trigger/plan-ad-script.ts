@@ -61,10 +61,14 @@ Return STRICT JSON only: {"hook": string, "caption": string, "shots": [{"imagePr
     });
     if (!r.ok) throw new Error(`openrouter HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
     const d = (await r.json()) as { choices: { message: { content: string } }[] };
+    const content = d.choices[0].message.content ?? "";
+    // DeepSeek sometimes wraps JSON in ```fences``` or a preamble — extract the object.
     let parsed: { hook?: string; caption?: string; shots?: { imagePrompt: string; motion: string; onText?: string }[] };
+    const jsonStr = (content.match(/\{[\s\S]*\}/) ?? [content])[0];
     try {
-      parsed = JSON.parse(d.choices[0].message.content);
+      parsed = JSON.parse(jsonStr);
     } catch {
+      logger.error("script LLM non-JSON", { content: content.slice(0, 300) });
       throw new Error("script LLM returned non-JSON");
     }
     const raw = (parsed.shots ?? []).slice(0, n);
