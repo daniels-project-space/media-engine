@@ -2,11 +2,10 @@ import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { vaultService } from "../lib/vault";
 import { putObject, presignedGet } from "../lib/storage";
+import { renderClip } from "../lib/video-router";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
-const FAL_MODEL = "fal-ai/bytedance/seedance/v1/lite/image-to-video";
 const EST_PENCE_PER_CLIP = 40;
 
 const DEFAULT_MOTION =
@@ -61,52 +60,28 @@ export const generateShort = task({
       })) as Id<"posts">);
     await convex.mutation(api.posts.setStatus, { id: postId, status: "generating" });
 
-    const { FAL_KEY } = await vaultService("fal");
-    if (!FAL_KEY) throw new AbortTaskRunError("vault fal/FAL_KEY missing");
-
     try {
-      const submit = await fetch(`https://queue.fal.run/${FAL_MODEL}`, {
-        method: "POST",
-        headers: { authorization: `Key ${FAL_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          prompt: motion,
-          image_url: payload.imageUrl,
-          resolution: "720p",
-          duration: "5",
-        }),
+      // Animate the still — Higgsfield credits first, fal fallback (via shared router).
+      const imageBytes = Buffer.from(await (await fetch(payload.imageUrl)).arrayBuffer());
+      const clip = await renderClip({
+        model: "seedance-lite",
+        imageUrl: payload.imageUrl,
+        imageBytes,
+        motion,
+        durationSeconds: 5,
+        aspectRatio: "9:16",
       });
-      if (!submit.ok) throw new Error(`fal submit HTTP ${submit.status}: ${(await submit.text()).slice(0, 300)}`);
-      // fal returns canonical polling URLs (base path differs from the model path) — always use them.
-      const sub = (await submit.json()) as { request_id: string; status_url: string; response_url: string };
-      logger.log("fal queued", { request_id: sub.request_id });
 
-      let videoUrl: string | null = null;
-      for (let i = 0; i < 90; i++) {
-        await new Promise((r) => setTimeout(r, 5000));
-        const st = await fetch(sub.status_url, { headers: { authorization: `Key ${FAL_KEY}` } });
-        if (!st.ok) throw new Error(`fal status HTTP ${st.status}: ${(await st.text()).slice(0, 200)}`);
-        const sd = (await st.json()) as { status: string };
-        if (sd.status === "COMPLETED") {
-          const res = await fetch(sub.response_url, { headers: { authorization: `Key ${FAL_KEY}` } });
-          if (!res.ok) throw new Error(`fal result HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-          const rd = (await res.json()) as { video?: { url?: string } };
-          videoUrl = rd.video?.url ?? null;
-          break;
-        }
-        if (sd.status === "FAILED" || sd.status === "ERROR") throw new Error(`fal render failed: ${JSON.stringify(sd)}`);
-      }
-      if (!videoUrl) throw new Error("fal render timed out");
-
-      const mp4 = Buffer.from(await (await fetch(videoUrl)).arrayBuffer());
+      const mp4 = Buffer.from(await (await fetch(clip.url)).arrayBuffer());
       const r2Key = `posts/${postId}/short.mp4`;
       await putObject(r2Key, mp4, "video/mp4");
       const url = await presignedGet(r2Key);
 
       await convex.mutation(api.spend.log, {
         day: today(),
-        service: "fal",
-        model: FAL_MODEL,
-        costPence: EST_PENCE_PER_CLIP,
+        service: clip.provider,
+        model: `seedance-lite${clip.credits ? ` (${clip.credits}cr)` : ""}`,
+        costPence: clip.costPence,
         ref: postId,
       });
       await convex.mutation(api.posts.attachResult, {

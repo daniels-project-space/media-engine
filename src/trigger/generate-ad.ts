@@ -9,6 +9,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { vaultService } from "../lib/vault";
 import { putObject, presignedGet } from "../lib/storage";
+import { renderClip, VIDEO_MODELS } from "../lib/video-router";
 
 const exec = promisify(execFile);
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -161,47 +162,58 @@ export const generateAd = task({
         logger.log(`scene ${i + 1}/${payload.scenes.length} (${scene.model})`);
 
         let firstUrl: string;
+        let firstBytes: Buffer;
         if (scene.imageUrl) {
           firstUrl = scene.imageUrl;
+          firstBytes = Buffer.from(await (await fetch(scene.imageUrl)).arrayBuffer());
         } else {
           if (!scene.imagePrompt) throw new Error(`scene ${i + 1}: needs imagePrompt or imageUrl`);
-          const firstImg = await genImage(OPENAI_API_KEY, scene.imagePrompt);
+          firstBytes = await genImage(OPENAI_API_KEY, scene.imagePrompt);
           const firstKey = `posts/${postId}/scene-${i + 1}-a.png`;
-          await putObject(firstKey, firstImg, "image/png");
+          await putObject(firstKey, firstBytes, "image/png");
           firstUrl = await presignedGet(firstKey);
           await convex.mutation(api.spend.log, { day: today(), service: "openai", model: "gpt-image-2", costPence: IMG_PENCE, ref: postId });
         }
 
-        let body: Record<string, unknown>;
+        let videoUrl: string;
         if (scene.kind === "flf" && scene.lastImagePrompt) {
+          // First↔last-frame morph stays on fal (its FLF endpoints; HF param shape differs).
           const lastImg = await genImage(OPENAI_API_KEY, scene.lastImagePrompt);
           const lastKey = `posts/${postId}/scene-${i + 1}-b.png`;
           await putObject(lastKey, lastImg, "image/png");
           const lastUrl = await presignedGet(lastKey);
           await convex.mutation(api.spend.log, { day: today(), service: "openai", model: "gpt-image-2", costPence: IMG_PENCE, ref: postId });
-          body = { prompt: scene.motion, first_frame_url: firstUrl, last_frame_url: lastUrl };
+          try {
+            videoUrl = await falQueue(FAL_KEY, model.id, { prompt: scene.motion, first_frame_url: firstUrl, last_frame_url: lastUrl });
+          } catch (err) {
+            if (String(err).includes("422")) {
+              videoUrl = await falQueue(FAL_KEY, model.id, { prompt: scene.motion, image_url: firstUrl, end_image_url: lastUrl });
+            } else throw err;
+          }
+          await convex.mutation(api.spend.log, { day: today(), service: "fal", model: model.id, costPence: model.pence, ref: postId });
         } else if (scene.kind === "lipsync") {
           if (!voUrl) throw new Error("lipsync scene requires voScript");
-          body = { image_url: firstUrl, audio_url: voUrl };
+          videoUrl = await falQueue(FAL_KEY, model.id, { image_url: firstUrl, audio_url: voUrl });
+          await convex.mutation(api.spend.log, { day: today(), service: "fal", model: model.id, costPence: model.pence, ref: postId });
         } else {
-          body = { prompt: scene.motion, image_url: firstUrl, duration: "5" };
+          // Standard image-to-video: Higgsfield credits FIRST, fal fallback.
+          const clip = await renderClip({
+            model: scene.model as keyof typeof VIDEO_MODELS,
+            imageUrl: firstUrl,
+            imageBytes: firstBytes,
+            motion: scene.motion,
+            durationSeconds: 5,
+            aspectRatio: "9:16",
+          });
+          videoUrl = clip.url;
+          await convex.mutation(api.spend.log, {
+            day: today(),
+            service: clip.provider,
+            model: `${scene.model}${clip.credits ? ` (${clip.credits}cr)` : ""}`,
+            costPence: clip.costPence,
+            ref: postId,
+          });
         }
-
-        let videoUrl: string;
-        try {
-          videoUrl = await falQueue(FAL_KEY, model.id, body);
-        } catch (err) {
-          // FLF param names vary per model — one retry with the alternate shape.
-          if (scene.kind === "flf" && String(err).includes("422")) {
-            logger.warn("flf 422 — retrying with image_url/end_image_url shape");
-            videoUrl = await falQueue(FAL_KEY, model.id, {
-              prompt: scene.motion,
-              image_url: body.first_frame_url,
-              end_image_url: body.last_frame_url,
-            });
-          } else throw err;
-        }
-        await convex.mutation(api.spend.log, { day: today(), service: "fal", model: model.id, costPence: model.pence, ref: postId });
 
         const raw = path.join(dir, `raw-${i}.mp4`);
         await writeFile(raw, Buffer.from(await (await fetch(videoUrl)).arrayBuffer()));
