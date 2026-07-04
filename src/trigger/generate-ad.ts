@@ -28,6 +28,8 @@ const MODELS: Record<string, { id: string; pence: number }> = {
   "kling-pro": { id: "fal-ai/kling-video/v2.6/pro/image-to-video", pence: 30 },
   "kling-turbo": { id: "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", pence: 30 },
   "seedance-lite": { id: "fal-ai/bytedance/seedance/v1/lite/image-to-video", pence: 16 },
+  "seedance-draft": { id: "bytedance/seedance-2.0/image-to-video", pence: 20 },
+  "seedance-4k": { id: "bytedance/seedance-2.0/image-to-video", pence: 250 },
   "veo-lite": { id: "fal-ai/veo3.1/lite/image-to-video", pence: 35 },
   "veo-flf": { id: "fal-ai/veo3.1/first-last-frame-to-video", pence: 90 },
   lipsync: { id: "fal-ai/kling-video/ai-avatar/v2/standard", pence: 50 },
@@ -243,8 +245,10 @@ export const generateAd = task({
     let bestScoreCount = 0;
 
     const estimate =
-      payload.scenes.reduce((sum, s) => sum + MODELS[s.model].pence + IMG_PENCE * (s.kind === "flf" ? 2 : 1), 0) +
-      (payload.voScript ? VO_PENCE : 0);
+      payload.scenes.reduce(
+        (sum, s) => sum + (s.kind === "card" ? 0 : (MODELS[s.model]?.pence ?? 30) + IMG_PENCE * (s.kind === "flf" ? 2 : 1)),
+        0,
+      ) + (payload.voScript ? VO_PENCE : 0);
     const settings = await convex.query(api.settings.all, {});
     const cap = Number(settings.dailyCapPence ?? 500);
     const spend = await convex.query(api.spend.forDay, { day: today() });
