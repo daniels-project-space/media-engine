@@ -14,6 +14,7 @@ import { vaultService } from "../lib/vault";
 import { putObject, presignedGet } from "../lib/storage";
 import { renderClip, VIDEO_MODELS, primeHiggsfield } from "../lib/video-router";
 import { higgsGenerateAudio } from "../lib/higgsfield";
+import { scoreImage } from "../lib/vision";
 
 const exec = promisify(execFile);
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -32,12 +33,17 @@ const IMG_PENCE = 8;
 const VO_PENCE = 5;
 
 type Scene = {
-  kind?: "i2v" | "flf" | "lipsync";
+  kind?: "i2v" | "flf" | "lipsync" | "card";
   model: keyof typeof MODELS;
   imagePrompt?: string; // for flf: the FIRST frame
   imageUrl?: string; // client-supplied or pre-generated image — skips generation
   lastImagePrompt?: string; // flf only: the LAST frame
   motion: string; // motion/video prompt (lipsync: ignored)
+  // card kind: deterministic ffmpeg text card (sharp brand text — never AI-generated).
+  cardTitle?: string;
+  cardSub?: string;
+  // QC intent override (defaults to imagePrompt). What the render should depict.
+  intent?: string;
 };
 
 type Payload = {
@@ -117,6 +123,56 @@ async function genImage(apiKey: string, prompt: string): Promise<Buffer> {
   }
 }
 
+// Quality-gated image gen: generate, vision-QC against the intent, and regenerate
+// (up to 2 retries) if it's off-intent or low quality. Returns the best attempt.
+async function genImageChecked(
+  apiKey: string,
+  prompt: string,
+  intent: string,
+): Promise<{ bytes: Buffer; score: number; issues: string }> {
+  let best: { bytes: Buffer; score: number; issues: string } | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const p = attempt === 0 ? prompt : `${prompt}. Clear, literal, single clean subject, no extra people or scenery.`;
+    const bytes = await genImage(apiKey, p);
+    // QC needs a URL — upload a temp data URL is too big; score via a short-lived R2
+    // object would need a round-trip, so we score the base64 data URL directly.
+    const dataUrl = `data:image/png;base64,${bytes.toString("base64")}`;
+    const { score, issues } = await scoreImage(dataUrl, intent);
+    logger.log(`image QC attempt ${attempt + 1}: score ${score} ${issues ? "— " + issues : ""}`);
+    if (!best || score > best.score) best = { bytes, score, issues };
+    if (score >= 60) break;
+  }
+  return best!;
+}
+
+function escDraw(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "’").replace(/%/g, "\\%");
+}
+
+// Deterministic brand text card via ffmpeg — sharp, correct typography every time
+// (AI-generated text cards garble; this never does).
+async function makeCard(
+  ffmpeg: string,
+  out: string,
+  title: string,
+  sub: string | undefined,
+  seconds: number,
+): Promise<void> {
+  const filters = [
+    `drawtext=text='${escDraw(title.toUpperCase())}':fontcolor=white:fontsize=110:font=sans:x=(w-tw)/2:y=(h-th)/2-40:box=0`,
+  ];
+  if (sub) {
+    filters.push(
+      `drawtext=text='${escDraw(sub.toUpperCase())}':fontcolor=0xd7ff3e:fontsize=42:font=sans:x=(w-tw)/2:y=(h/2)+70`,
+    );
+  }
+  await promisify(execFile)(ffmpeg, [
+    "-y", "-f", "lavfi", "-i", `color=c=0x0a0b0d:s=1080x1920:d=${seconds}:r=30`,
+    "-vf", filters.join(",") + ",format=yuv420p",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "20", out,
+  ]);
+}
+
 // Produces a stitched 9:16 video ad: per-scene image gen -> fal image-to-video,
 // optional ElevenLabs voiceover, ffmpeg normalize+concat+mix -> R2 -> ready post.
 export const generateAd = task({
@@ -190,17 +246,29 @@ export const generateAd = task({
       // Scenes run concurrently so a 4-scene ad finishes in ~one scene's wall-time
       // instead of the sum (the 30-min-timeout fix).
       const renderScene = async (scene: Scene, i: number): Promise<string> => {
-        logger.log(`scene ${i + 1}/${payload.scenes.length} (${scene.model})`);
+        logger.log(`scene ${i + 1}/${payload.scenes.length} (${scene.kind ?? scene.model})`);
         const model = MODELS[scene.model];
+
+        // Brand text card — deterministic ffmpeg, no AI (sharp correct typography).
+        if (scene.kind === "card") {
+          const norm = path.join(dir, `norm-${i}.mp4`);
+          await makeCard(FFMPEG, norm, scene.cardTitle ?? "", scene.cardSub, quick ? seg : 4);
+          await putObject(`posts/${postId}/scene-${i + 1}.mp4`, await readFile(norm), "video/mp4");
+          return norm;
+        }
 
         let firstUrl: string;
         let firstBytes: Buffer;
+        const intent = scene.intent ?? scene.imagePrompt ?? scene.motion;
         if (scene.imageUrl) {
           firstUrl = scene.imageUrl;
           firstBytes = Buffer.from(await (await fetch(scene.imageUrl)).arrayBuffer());
         } else {
           if (!scene.imagePrompt) throw new Error(`scene ${i + 1}: needs imagePrompt or imageUrl`);
-          firstBytes = await genImage(OPENAI_API_KEY, scene.imagePrompt);
+          // Quality gate: regenerate off-intent / low-quality images before spending on video.
+          const checked = await genImageChecked(OPENAI_API_KEY, scene.imagePrompt, intent);
+          firstBytes = checked.bytes;
+          if (checked.score < 40) logger.warn(`scene ${i + 1} image still weak after retries (score ${checked.score}: ${checked.issues})`);
           const firstKey = `posts/${postId}/scene-${i + 1}-a.png`;
           await putObject(firstKey, firstBytes, "image/png");
           firstUrl = await presignedGet(firstKey);
@@ -260,6 +328,30 @@ export const generateAd = task({
           "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1,format=yuv420p",
           "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-an", norm,
         ]);
+
+        // Drift guard: i2v can warp the subject away from the source (the ARRI clip
+        // stopped looking like a camera). QC the clip's last frame; if it drifted off
+        // the intent, fall back to a slow Ken-Burns push on the real still — the
+        // product then stays 100% accurate.
+        if (scene.kind !== "flf") {
+          const lastFrame = path.join(dir, `lf-${i}.jpg`);
+          await exec(FFMPEG, ["-y", "-sseof", "-0.2", "-i", norm, "-frames:v", "1", lastFrame]);
+          const lf = await readFile(lastFrame);
+          const { score, issues } = await scoreImage(`data:image/jpeg;base64,${lf.toString("base64")}`, intent);
+          logger.log(`scene ${i + 1} motion QC: last-frame score ${score}${issues ? " — " + issues : ""}`);
+          if (score < 45) {
+            logger.warn(`scene ${i + 1} drifted (score ${score}) — Ken-Burns fallback on the real still`);
+            const stillPng = path.join(dir, `still-${i}.png`);
+            await writeFile(stillPng, firstBytes);
+            const dur = quick ? seg : 5;
+            await exec(FFMPEG, [
+              "-y", "-loop", "1", "-i", stillPng, "-t", String(dur),
+              "-vf", `scale=1350:2400,zoompan=z='min(zoom+0.0009,1.12)':d=${Math.round(dur * 30)}:s=1080x1920:fps=30,setsar=1,format=yuv420p`,
+              "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-an", norm,
+            ]);
+          }
+        }
+
         // Persist the paid clip — a later stitch failure must never re-cost the render.
         await putObject(`posts/${postId}/scene-${i + 1}.mp4`, await readFile(norm), "video/mp4");
         return norm;
