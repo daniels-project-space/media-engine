@@ -267,7 +267,10 @@ export const generateAd = task({
         slides: payload.scenes.map((s) => ({ prompt: s.motion, role: s.kind ?? "i2v" })),
         externalId: ctx.run.id,
         variantTag: tag.variantTag,
-        concept: tag.concept,
+        // Store the RAW concept for exact linking (studio-<id>-draft, order-<id>);
+        // the variantTag embeds the slugged form for readability. (tag.concept is
+        // truncated to 18 chars and must NOT be the link key.)
+        concept: payload.concept ?? tag.concept,
         hookId: tag.hookId,
         variantId: tag.variantId,
       })) as Id<"posts">);
