@@ -7,7 +7,7 @@ export const maxDuration = 30;
 // Body: { action: "generate", postId } | { action: "plan", personaId, days?, postsPerDay? }
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as {
-    action: "generate" | "plan" | "publish" | "short" | "campaign";
+    action: "generate" | "plan" | "publish" | "short" | "campaign" | "remix";
     postId?: string;
     personaId?: string;
     days?: number;
@@ -46,6 +46,9 @@ export async function POST(req: NextRequest) {
   } else if (body.action === "campaign" && body.subject && body.html) {
     taskId = "send-campaign";
     payload = { subject: body.subject, html: body.html, tag: body.tag };
+  } else if (body.action === "remix" && body.postId) {
+    taskId = "remix-content";
+    payload = { sourcePostId: body.postId };
   } else {
     return NextResponse.json({ error: "bad request" }, { status: 400 });
   }

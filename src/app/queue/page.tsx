@@ -16,13 +16,13 @@ export default function Queue() {
   const approve = useMutation(api.posts.approve);
   const reject = useMutation(api.posts.reject);
 
-  async function publishNow(postId: string) {
-    setBusy(postId);
+  async function callAction(action: string, postId: string) {
+    setBusy(postId + action);
     try {
       await fetch("/api/trigger", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "publish", postId }),
+        body: JSON.stringify({ action, postId }),
       });
     } finally {
       setBusy(null);
@@ -107,14 +107,24 @@ export default function Queue() {
                   </button>
                 </div>
               )}
+              {(tab === "ready" || tab === "approved" || tab === "published") && (p.slides ?? []).some((s) => (s as Slide).r2Key) && (
+                <button
+                  onClick={() => callAction("remix", p._id)}
+                  disabled={busy !== null}
+                  title="Fan this out into every format (Reel / Feed / Square) with fresh caption variants — one piece becomes many posts."
+                  className="px-4 py-2 border border-scope text-scope text-xs tracking-widest hover:bg-scope hover:text-void transition disabled:opacity-50 shrink-0"
+                >
+                  {busy === p._id + "remix" ? "REMIXING…" : "REMIX ⤨"}
+                </button>
+              )}
               {tab === "approved" && (
                 <button
-                  onClick={() => publishNow(p._id)}
+                  onClick={() => callAction("publish", p._id)}
                   disabled={busy !== null}
                   title="Posts immediately via the linked account. Fails with a clear error if the account isn't connected yet."
                   className="px-4 py-2 bg-signal text-void display font-bold text-xs hover:brightness-110 transition disabled:opacity-50 shrink-0"
                 >
-                  {busy === p._id ? "PUBLISHING…" : "PUBLISH NOW"}
+                  {busy === p._id + "publish" ? "PUBLISHING…" : "PUBLISH NOW"}
                 </button>
               )}
             </div>
