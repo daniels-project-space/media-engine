@@ -13,6 +13,7 @@ const NAV_GROUPS: { section: string; items: { href: string; code: string; label:
     section: "Instagram Girls",
     items: [
       { href: "/personas", code: "IG", label: "Personas", hint: "AI models & feeds" },
+      { href: "/instagram", code: "PH", label: "Phone Viewer", hint: "live IG emulator" },
       { href: "/queue", code: "AQ", label: "Review & Publish", hint: "approve posts" },
     ],
   },
