@@ -32,6 +32,16 @@ export const create = mutation({
   },
 });
 
+export const get = query({
+  args: { id: v.id("personas") },
+  handler: async (ctx, { id }) => {
+    const persona = await ctx.db.get(id);
+    if (!persona) return null;
+    const accounts = (await ctx.db.query("accounts").collect()).filter((a) => a.personaId === id);
+    return { ...persona, accounts };
+  },
+});
+
 export const setStage = mutation({
   args: {
     id: v.id("personas"),

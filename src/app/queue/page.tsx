@@ -3,6 +3,8 @@
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { useState } from "react";
+import { MediaTile } from "@/components/media-tile";
+import type { Slide } from "@/lib/media";
 
 const TABS = ["ready", "planned", "approved", "published", "rejected", "failed"] as const;
 type Tab = (typeof TABS)[number];
@@ -68,34 +70,9 @@ export default function Queue() {
               style={{ animationDelay: `${i * 50}ms` }}
             >
               <div className="flex gap-2 shrink-0">
-                {(p.slides ?? []).slice(0, 4).map((s, j) =>
-                  s.url && s.r2Key?.endsWith(".mp4") ? (
-                    <video
-                      key={j}
-                      src={s.url}
-                      muted
-                      loop
-                      autoPlay
-                      playsInline
-                      className="size-16 object-cover border border-line-2"
-                    />
-                  ) : s.url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      key={j}
-                      src={s.url}
-                      alt=""
-                      className="size-16 object-cover border border-line-2"
-                    />
-                  ) : (
-                    <div
-                      key={j}
-                      className="size-16 border border-line-2 bg-panel-2 grid place-items-center text-[9px] text-ink-faint"
-                    >
-                      GEN
-                    </div>
-                  ),
-                )}
+                {(p.slides ?? []).slice(0, 4).map((s, j) => (
+                  <MediaTile key={j} slide={s as Slide} aspect="size-16" className="shrink-0" />
+                ))}
                 {(p.slides ?? []).length === 0 && (
                   <div className="size-16 border border-line-2 bg-panel-2 grid place-items-center text-[9px] text-ink-faint">
                     {p.kind.toUpperCase()}
