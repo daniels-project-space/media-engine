@@ -15,6 +15,7 @@ import { putObject, presignedGet } from "../lib/storage";
 import { renderClip, VIDEO_MODELS, primeHiggsfield } from "../lib/video-router";
 import { higgsGenerateAudio } from "../lib/higgsfield";
 import { scoreImage } from "../lib/vision";
+import sharp from "sharp";
 
 const exec = promisify(execFile);
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -145,11 +146,7 @@ async function genImageChecked(
   return best!;
 }
 
-function escDraw(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "’").replace(/%/g, "\\%");
-}
-
-// The container has no system fonts, so drawtext needs an explicit fontfile. The
+// The container has no system fonts, so we embed the font in the card SVG. The
 // brand font is bundled via trigger.config additionalFiles; resolve it robustly.
 import { existsSync } from "node:fs";
 function brandFont(): string | null {
@@ -161,9 +158,13 @@ function brandFont(): string | null {
   return candidates.find((c) => existsSync(c)) ?? null;
 }
 
-// Deterministic brand text card via ffmpeg — sharp, correct typography every time
-// (AI-generated text cards garble; this never does). Resilient: if the font is
-// missing it renders a clean solid card rather than failing the whole ad.
+function escXml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// Deterministic brand text card: render an SVG (with the font embedded) to a PNG
+// via sharp, then loop it into a clip. Sidesteps ffmpeg's container font engine —
+// text is always sharp and correct. AI-generated text cards garble; this never does.
 async function makeCard(
   ffmpeg: string,
   out: string,
@@ -172,24 +173,21 @@ async function makeCard(
   seconds: number,
 ): Promise<void> {
   const font = brandFont();
-  const base = ["-y", "-f", "lavfi", "-i", `color=c=0x0a0b0d:s=1080x1920:d=${seconds}:r=30`];
-  if (!font) {
-    logger.warn("brand font not found — rendering plain card");
-    await promisify(execFile)(ffmpeg, [...base, "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20", out]);
-    return;
-  }
-  const ff = font.replace(/:/g, "\\:");
-  const filters = [
-    `drawtext=fontfile='${ff}':text='${escDraw(title.toUpperCase())}':fontcolor=white:fontsize=110:x=(w-tw)/2:y=(h-th)/2-40`,
-  ];
-  if (sub) {
-    filters.push(
-      `drawtext=fontfile='${ff}':text='${escDraw(sub.toUpperCase())}':fontcolor=0xd7ff3e:fontsize=40:x=(w-tw)/2:y=(h/2)+80`,
-    );
-  }
+  const fontFace = font
+    ? `@font-face{font-family:'Brand';src:url('data:font/ttf;base64,${(await readFile(font)).toString("base64")}') format('truetype');}`
+    : "";
+  const svg = `<svg width="1080" height="1920" xmlns="http://www.w3.org/2000/svg">
+    <style>${fontFace} .t{font-family:'Brand',sans-serif;} </style>
+    <rect width="1080" height="1920" fill="#0a0b0d"/>
+    <rect x="0" y="948" width="1080" height="4" fill="#d7ff3e"/>
+    <text class="t" x="540" y="915" font-size="112" fill="#ffffff" text-anchor="middle">${escXml(title.toUpperCase())}</text>
+    ${sub ? `<text class="t" x="540" y="1030" font-size="40" fill="#d7ff3e" text-anchor="middle">${escXml(sub.toUpperCase())}</text>` : ""}
+  </svg>`;
+  const png = path.join(path.dirname(out), `card-${path.basename(out)}.png`);
+  await sharp(Buffer.from(svg)).png().toFile(png);
   await promisify(execFile)(ffmpeg, [
-    ...base, "-vf", filters.join(",") + ",format=yuv420p",
-    "-c:v", "libx264", "-preset", "fast", "-crf", "20", out,
+    "-y", "-loop", "1", "-i", png, "-t", String(seconds),
+    "-vf", "fps=30,setsar=1,format=yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20", out,
   ]);
 }
 
