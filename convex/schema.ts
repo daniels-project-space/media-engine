@@ -165,6 +165,47 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_status", ["status"]),
 
+  // Ad Studio projects — the staged pipeline: script → cheap 480p draft → approval →
+  // 4K final. Shots are approved once and reused across draft and final so the 4K cut
+  // is faithful to what was signed off cheaply.
+  adProjects: defineTable({
+    buyer: v.string(),
+    title: v.string(),
+    brief: v.string(),
+    orderId: v.optional(v.id("clientOrders")),
+    stage: v.union(
+      v.literal("scripting"),
+      v.literal("script_ready"),
+      v.literal("drafting"),
+      v.literal("draft_ready"),
+      v.literal("rendering"),
+      v.literal("final_ready"),
+      v.literal("failed"),
+    ),
+    shots: v.optional(
+      v.array(
+        v.object({
+          kind: v.optional(v.string()), // "card" for the brand end-card
+          imagePrompt: v.optional(v.string()),
+          imageUrl: v.optional(v.string()), // real product / reference image
+          imageKey: v.optional(v.string()), // R2 key of the approved draft image (reused in 4K)
+          motion: v.string(),
+          seconds: v.number(),
+          onText: v.optional(v.string()),
+          cardTitle: v.optional(v.string()),
+          cardSub: v.optional(v.string()),
+        }),
+      ),
+    ),
+    hook: v.optional(v.string()),
+    caption: v.optional(v.string()),
+    musicPrompt: v.optional(v.string()),
+    draftPostId: v.optional(v.id("posts")),
+    finalPostId: v.optional(v.id("posts")),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_stage", ["stage"]),
+
   settings: defineTable({
     key: v.string(),
     value: v.any(),

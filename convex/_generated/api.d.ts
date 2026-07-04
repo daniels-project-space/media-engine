@@ -20,6 +20,7 @@ import type * as seedData from "../seedData.js";
 import type * as settings from "../settings.js";
 import type * as spend from "../spend.js";
 import type * as streams from "../streams.js";
+import type * as studio from "../studio.js";
 
 import type {
   ApiFromModules,
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   settings: typeof settings;
   spend: typeof spend;
   streams: typeof streams;
+  studio: typeof studio;
 }>;
 
 /**

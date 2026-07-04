@@ -21,6 +21,7 @@ const NAV_GROUPS: { section: string; items: { href: string; code: string; label:
     section: "Ads Studio",
     items: [
       { href: "/clients", code: "CO", label: "Client Orders", hint: "Fiverr agency" },
+      { href: "/studio", code: "AS", label: "Ad Studio", hint: "script→draft→4K" },
       { href: "/ads", code: "AD", label: "Ad Portfolio", hint: "rendered work" },
       { href: "/reference", code: "RF", label: "Reference Board", hint: "quality benchmarks" },
     ],

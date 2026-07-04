@@ -33,8 +33,18 @@ export const VIDEO_MODELS: Record<
   "kling-26": { hf: "kling2_6", hfDuration: 5, fal: "fal-ai/kling-video/v2.6/pro/image-to-video", falPence: 30 },
   "seedance-lite": { hf: "seedance1_5", hfDuration: 4, fal: "fal-ai/bytedance/seedance/v1/lite/image-to-video", falPence: 16 },
   "seedance-pro": { hf: "seedance_2_0", hfDuration: 5, fal: "fal-ai/bytedance/seedance/v1/pro/image-to-video", falPence: 74 },
-  // Seedance 2.0 at 4K — the premium CLIENT tier (Fiverr fulfilment). HF seedance_2_0
-  // first (4k mode), fal bytedance/seedance-2.0 fallback with resolution 4k.
+  // Seedance 2.0 CHEAP DRAFT — 480p, for the script→draft approval gate before
+  // spending 4K credits. Same model as the final, so the draft previews real motion.
+  "seedance-draft": {
+    hf: "seedance_2_0",
+    hfDuration: 5,
+    hfExtra: { resolution: "480p" },
+    fal: "bytedance/seedance-2.0/image-to-video",
+    falPence: 20,
+    falExtra: { resolution: "480p" },
+  },
+  // Seedance 2.0 at 4K — the premium CLIENT final tier (Fiverr fulfilment). HF
+  // seedance_2_0 first (4k mode), fal bytedance/seedance-2.0 fallback at 4k.
   "seedance-4k": {
     hf: "seedance_2_0",
     hfDuration: 5,

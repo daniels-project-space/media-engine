@@ -47,6 +47,9 @@ type Scene = {
   cardSub?: string;
   // QC intent override (defaults to imagePrompt). What the render should depict.
   intent?: string;
+  // Per-scene clip length (seconds). Overrides the quick-mode uniform trim, so a
+  // planned 10s shot renders full-length. Seedance 2.0 supports 4–15s.
+  seconds?: number;
 };
 
 type Payload = {
@@ -224,6 +227,12 @@ export const generateAd = task({
     const streamSlug = payload.streamSlug ?? "client-ads";
     const quick = payload.quick !== false; // quick UGC is the default
     const seg = payload.segSeconds ?? 1.4; // per-scene trim in quick mode
+    // Each scene's clip length: explicit scene.seconds wins (planned shots), else the
+    // quick-mode uniform trim, else 5s. Cumulative offsets drive the SFX cut points.
+    const sceneDur = (s: Scene): number => s.seconds ?? (quick ? seg : 5);
+    const sceneOffset = (idx: number): number =>
+      payload.scenes.slice(0, idx).reduce((sum, s) => sum + sceneDur(s), 0);
+    const totalDur = payload.scenes.reduce((sum, s) => sum + sceneDur(s), 0);
     const bestOf = Math.max(1, Math.min(4, payload.bestOf ?? 2)); // candidates per scene image
     const tag = buildVariantTag({
       concept: payload.concept ?? payload.title,
@@ -304,7 +313,7 @@ export const generateAd = task({
         // Brand text card — deterministic ffmpeg, no AI (sharp correct typography).
         if (scene.kind === "card") {
           const norm = path.join(dir, `norm-${i}.mp4`);
-          await makeCard(FFMPEG, norm, scene.cardTitle ?? "", scene.cardSub, quick ? seg : 4);
+          await makeCard(FFMPEG, norm, scene.cardTitle ?? "", scene.cardSub, sceneDur(scene));
           await putObject(`posts/${postId}/scene-${i + 1}.mp4`, await readFile(norm), "video/mp4");
           return norm;
         }
@@ -358,7 +367,7 @@ export const generateAd = task({
             imageUrl: firstUrl,
             imageBytes: firstBytes,
             motion: scene.motion,
-            durationSeconds: 5,
+            durationSeconds: Math.round(sceneDur(scene)),
             aspectRatio: "9:16",
           });
           videoUrl = clip.url;
@@ -379,8 +388,8 @@ export const generateAd = task({
         const norm = path.join(dir, `norm-${i}.mp4`);
         await exec(FFMPEG, [
           "-y", "-i", raw,
-          // Quick mode trims each scene to a punchy hard-cut length.
-          ...(quick ? ["-t", String(seg)] : []),
+          // Trim to the scene's planned length (quick uniform trim, or explicit seconds).
+          ...(quick || scene.seconds ? ["-t", String(sceneDur(scene))] : []),
           "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1,format=yuv420p",
           "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-an", norm,
         ]);
@@ -399,7 +408,7 @@ export const generateAd = task({
             logger.warn(`scene ${i + 1} drifted (score ${score}) — Ken-Burns fallback on the real still`);
             const stillPng = path.join(dir, `still-${i}.png`);
             await writeFile(stillPng, firstBytes);
-            const dur = quick ? seg : 5;
+            const dur = sceneDur(scene);
             await exec(FFMPEG, [
               "-y", "-loop", "1", "-i", stillPng, "-t", String(dur),
               "-vf", `scale=1350:2400,zoompan=z='min(zoom+0.0009,1.12)':d=${Math.round(dur * 30)}:s=1080x1920:fps=30,setsar=1,format=yuv420p`,
@@ -433,7 +442,7 @@ export const generateAd = task({
       const final = path.join(dir, "final.mp4");
       if (quick) {
         // Quick UGC audio: AI music bed + whoosh SFX on each cut (Higgsfield), no VO.
-        const videoDur = seg * payload.scenes.length;
+        const videoDur = totalDur;
         const musicPrompt =
           payload.musicPrompt ??
           "upbeat modern commercial music bed, glossy and driving, no vocals, social-ad energy";
@@ -459,7 +468,7 @@ export const generateAd = task({
             );
             let idx = 2;
             for (let k = 1; k < payload.scenes.length; k++) {
-              const t = Math.round(seg * k * 1000);
+              const t = Math.round(sceneOffset(k) * 1000);
               inputs.push("-i", whooshPath);
               amix.push(`[${idx}:a]adelay=${t}|${t},volume=0.6[w${k}]`);
               labels.push(`[w${k}]`);
