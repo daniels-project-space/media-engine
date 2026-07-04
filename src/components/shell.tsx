@@ -27,6 +27,13 @@ const NAV_GROUPS: { section: string; items: { href: string; code: string; label:
     ],
   },
   {
+    section: "Sales",
+    items: [
+      { href: "/leads", code: "LD", label: "Leads", hint: "inbound pipeline" },
+      { href: "/services", code: "SV", label: "Service Pages", hint: "public landing pages" },
+    ],
+  },
+  {
     section: "System",
     items: [
       { href: "/analytics", code: "AN", label: "Analytics", hint: "output & costs" },
@@ -55,8 +62,8 @@ function Timecode() {
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  // Public pages (link-in-bio) render without the engine chrome.
-  if (path.startsWith("/p/")) return <>{children}</>;
+  // Public pages (link-in-bio, service landing pages) render without engine chrome.
+  if (path.startsWith("/p/") || path.startsWith("/services")) return <>{children}</>;
   return (
     <div className="flex min-h-screen">
       <aside className="w-16 md:w-56 shrink-0 border-r border-line bg-panel/60 flex flex-col">

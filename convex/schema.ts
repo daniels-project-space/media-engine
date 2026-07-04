@@ -206,6 +206,67 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_stage", ["stage"]),
 
+  // Productized services — one record per service, drives its public landing page.
+  services: defineTable({
+    slug: v.string(),
+    active: v.boolean(),
+    order: v.number(),
+    name: v.string(),
+    tagline: v.string(),
+    seoTitle: v.string(),
+    seoDescription: v.string(),
+    heroHeadline: v.string(),
+    heroSubhead: v.string(),
+    heroClipKey: v.optional(v.string()), // R2 key of the autoplay hero clip
+    proofPoints: v.array(v.string()), // "500+ clips", "4K", "48h turnaround"
+    howItWorks: v.array(v.object({ title: v.string(), body: v.string() })),
+    gallery: v.array(
+      v.object({
+        clipKey: v.optional(v.string()),
+        imageKey: v.optional(v.string()),
+        label: v.string(),
+        beforeKey: v.optional(v.string()), // before/after pair = strongest format
+      }),
+    ),
+    valueProps: v.array(v.object({ header: v.string(), body: v.string() })),
+    pricingTiers: v.array(
+      v.object({
+        name: v.string(),
+        price: v.string(),
+        unit: v.optional(v.string()),
+        popular: v.optional(v.boolean()),
+        features: v.array(v.string()),
+      }),
+    ),
+    faq: v.array(v.object({ q: v.string(), a: v.string() })),
+    createdAt: v.number(),
+  }).index("by_slug", ["slug"]),
+
+  // Inbound leads — the sales funnel. Full-auto on our surfaces; on marketplaces the
+  // draftReply is surfaced for a human send-click (auto-messaging buyers = ban).
+  leads: defineTable({
+    service: v.optional(v.string()), // service slug
+    name: v.string(),
+    email: v.string(),
+    brandLink: v.optional(v.string()),
+    budget: v.optional(v.string()),
+    timeline: v.optional(v.string()),
+    message: v.optional(v.string()),
+    source: v.string(), // "landing" | "fiverr" | "upwork" | "cold" | ...
+    stage: v.union(
+      v.literal("new"),
+      v.literal("qualifying"),
+      v.literal("sample"),
+      v.literal("quoted"),
+      v.literal("won"),
+      v.literal("lost"),
+    ),
+    draftReply: v.optional(v.string()),
+    sampleKey: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_stage", ["stage"]),
+
   settings: defineTable({
     key: v.string(),
     value: v.any(),
