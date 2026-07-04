@@ -92,7 +92,7 @@ async function genImage(apiKey: string, prompt: string): Promise<Buffer> {
 // optional ElevenLabs voiceover, ffmpeg normalize+concat+mix -> R2 -> ready post.
 export const generateAd = task({
   id: "generate-ad",
-  maxDuration: 1800,
+  maxDuration: 3600,
   machine: "medium-1x", // ffmpeg 1080x1920 x264 OOMs the default small machine
   retry: { maxAttempts: 1 },
   run: async (payload: Payload, { ctx }) => {
@@ -154,12 +154,12 @@ export const generateAd = task({
         await convex.mutation(api.spend.log, { day: today(), service: "elevenlabs", model: "tts", costPence: VO_PENCE, ref: postId });
       }
 
-      // Scenes sequentially (keeps budget checks honest, avoids fal rate spikes).
-      const scenePaths: string[] = [];
-      for (let i = 0; i < payload.scenes.length; i++) {
-        const scene = payload.scenes[i];
-        const model = MODELS[scene.model];
+      // Render one scene end-to-end: image -> video (routed) -> normalized 9:16 clip.
+      // Scenes run concurrently so a 4-scene ad finishes in ~one scene's wall-time
+      // instead of the sum (the 30-min-timeout fix).
+      const renderScene = async (scene: Scene, i: number): Promise<string> => {
         logger.log(`scene ${i + 1}/${payload.scenes.length} (${scene.model})`);
+        const model = MODELS[scene.model];
 
         let firstUrl: string;
         let firstBytes: Buffer;
@@ -225,8 +225,10 @@ export const generateAd = task({
         ]);
         // Persist the paid clip — a later stitch failure must never re-cost the render.
         await putObject(`posts/${postId}/scene-${i + 1}.mp4`, await readFile(norm), "video/mp4");
-        scenePaths.push(norm);
-      }
+        return norm;
+      };
+
+      const scenePaths = await Promise.all(payload.scenes.map((scene, i) => renderScene(scene, i)));
 
       // Concat scenes, lay voiceover over the whole cut.
       const listFile = path.join(dir, "list.txt");
