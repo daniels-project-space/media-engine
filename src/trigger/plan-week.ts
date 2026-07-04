@@ -38,7 +38,8 @@ export const planWeek = task({
 
     const templates = await convex.query(api.prompts.list, {});
     const captionRules = templates.find((t) => t.category === "caption")?.body ?? "";
-    const realism = templates.find((t) => t.category === "realism_suffix")?.body ?? "";
+    const realism = templates.find((t) => t.category === "realism_suffix" && t.name.startsWith("Realism"))?.body ?? "";
+    const facelessAddon = templates.find((t) => t.name.startsWith("Faceless UGC") && t.category === "realism_suffix")?.body ?? "";
     const examples = templates
       .filter((t) => t.category === "base_model" || t.category === "niche_slide")
       .slice(0, 4)
@@ -48,13 +49,21 @@ export const planWeek = task({
     const { OPENROUTER_API_KEY } = await vaultService("openrouter");
     if (!OPENROUTER_API_KEY) throw new AbortTaskRunError("vault openrouter key missing");
 
+    // Faceless personas (no trained LoRA / faceless archetype) hide the face for the
+    // Karolis look; flagship personas (Elara/Kira) show their consistent face.
+    const faceless = persona.archetype === "faceless" || !persona.loraTrigger;
+    const modelSlideRule = faceless
+      ? `Slide 1 role "base_model" = a mirror-selfie or over-the-shoulder shot where she HOLDS HER PHONE UP COVERING HER FACE (face never visible). Describe the SCENE, outfit and setting only; refer to her as "the woman". Append to this slide's prompt: "${facelessAddon}"`
+      : `Slide 1 role "base_model" = the persona in a specific environment/outfit/activity, her face visible (her exact appearance is injected separately — refer to her as "the woman").`;
+
     const system = `You plan Instagram carousel posts for an AI persona. Reply with ONLY a JSON array, no markdown fences, no commentary.`;
     const user = `Persona: ${persona.name} (${persona.handle}) — ${persona.niche ?? "lifestyle"}.
 Identity: ${persona.identitySummary ?? persona.bio ?? ""}
+This persona is ${faceless ? "FACELESS — her face must never be shown, keep it hidden behind her phone in every shot of her." : "a flagship face-shown persona."}
 
 Plan ${days * perDay} Instagram carousel posts (${perDay}/day for ${days} days, dayOffset 0..${days - 1}).
-Each post: 3-4 slides. Slide 1 role "base_model" = the persona in a specific environment/outfit/activity (describe the SCENE only — her exact appearance is injected separately, refer to her as "the woman"). Slides 2-3 role "niche_slide" = supporting lifestyle detail shots matching her niche (hands, objects, food, setups — no faces). Optional last slide role "cta_slide".
-Every slide prompt must be photorealistic-style and end with: "${realism}"
+Each post: 3-4 slides. ${modelSlideRule} Slides 2-3 role "niche_slide" = supporting lifestyle detail shots matching her niche (hands, objects, food, setups — no faces). Optional last slide role "cta_slide".
+Every slide prompt must be photorealistic-style and end with this realism instruction: "${realism}"
 Vary environments and activities across posts (permutation, no repeats). Hooks: short, curiosity-gap, max 8 words.
 Caption rules: ${captionRules}
 

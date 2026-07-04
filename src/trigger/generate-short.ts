@@ -9,7 +9,7 @@ const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const EST_PENCE_PER_CLIP = 40;
 
 const DEFAULT_MOTION =
-  "Natural breathing motion only. Subtle fabric movement. No hair flying, no morphing, no warping. Camera completely locked.";
+  "Natural breathing and subtle body sway only. If a phone covers her face it stays exactly in place — she never lowers it, her face is never revealed. Camera completely locked, no zoom, no hair flying, no morphing, no warping.";
 
 type Payload = {
   // Animate an existing image into a 9:16 short.
@@ -39,8 +39,12 @@ export const generateShort = task({
     }
 
     const templates = await convex.query(api.prompts.list, {});
+    // Prefer the locked faceless motion (no face-reveal, no morph) for persona shorts.
     const motion =
-      payload.motionPrompt ?? templates.find((t) => t.category === "motion")?.body ?? DEFAULT_MOTION;
+      payload.motionPrompt ??
+      templates.find((t) => t.name === "Faceless UGC motion (locked, no face reveal)")?.body ??
+      templates.find((t) => t.category === "motion")?.body ??
+      DEFAULT_MOTION;
 
     // Idempotent across Trigger retries: reuse the post tagged with this run id.
     const failedPosts = await convex.query(api.posts.byStatus, { status: "failed" });

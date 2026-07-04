@@ -2,7 +2,16 @@ import { mutation } from "./_generated/server";
 import { MAXFUSION_PROMPTS } from "./seedData";
 
 const REALISM_SUFFIX =
-  "Shot on iPhone, ultra realistic, slight film grain, soft natural light, natural shadows, imperfect staging, nothing polished, no beauty-filter look, no text overlays.";
+  "Shot on an iPhone, 1080p phone-photo quality (not 4K — slightly soft and grainy with subtle motion blur), natural imperfect indoor lighting slightly underexposed. Natural matte skin, NO beauty filter, NO skin glow, NO retouching, realistic pores and texture. Candid casual Instagram energy, nothing polished or professional — looks like a real person's camera roll. No text overlays.";
+
+// Added for faceless UGC persona shots (the Karolis method): keep the face hidden.
+const FACELESS_ADDON =
+  "She holds her phone up so it FULLY COVERS HER FACE — face completely hidden behind the phone, only hair visible above it. Slightly dirty mirror with faint fingerprint smudges.";
+
+// Motion for faceless UGC image-to-video: the #1 failure is the model animating a
+// face-reveal, so lock the phone in place.
+const FACELESS_MOTION =
+  "Natural breathing and subtle body sway only. The phone stays exactly in front of her face the entire time — she does NOT lower it and her face is never revealed. Camera locked, no zoom, no hair flying, no morphing, no warping.";
 
 const ELARA_LOCK =
   "elaravoss. 26-year-old Swedish-Italian woman, tall slender elegant build, olive-toned skin with natural freckles on the nose, dark brown wavy shoulder-length hair with a single silver-platinum streak on the left side, hazel eyes with golden flecks, three thin gold rings, minimal gold jewelry, quiet-luxury wardrobe in earth tones, cashmere and linen. " +
@@ -110,7 +119,9 @@ export const run = mutation({
     for (const t of [
       { name: "GLOBAL LOCK — Elara Voss", category: "global_lock" as const, body: ELARA_LOCK, source: "ai-instagram persona port" },
       { name: "GLOBAL LOCK — Kira Vex", category: "global_lock" as const, body: KIRA_LOCK, source: "ai-instagram persona port" },
-      { name: "Realism suffix (apply to every image)", category: "realism_suffix" as const, body: REALISM_SUFFIX, source: "karolis + maxfusion" },
+      { name: "Realism suffix (apply to every image)", category: "realism_suffix" as const, body: REALISM_SUFFIX, source: "karolis + daniel" },
+      { name: "Faceless UGC — hide the face", category: "realism_suffix" as const, body: FACELESS_ADDON, source: "karolis" },
+      { name: "Faceless UGC motion (locked, no face reveal)", category: "motion" as const, body: FACELESS_MOTION, source: "karolis + daniel" },
       { name: "3-scene reel storyboard", category: "storyboard" as const, body: STORYBOARD_TEMPLATE, source: "chloe-vs-history + emythecop" },
       { name: "Caption rules", category: "caption" as const, body: CAPTION_RULES, source: "chloe-vs-history" },
     ]) {
