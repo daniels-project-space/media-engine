@@ -16,6 +16,7 @@ import { renderClip, VIDEO_MODELS, primeHiggsfield } from "../lib/video-router";
 import { higgsGenerateAudio } from "../lib/higgsfield";
 import { scoreImage } from "../lib/vision";
 import sharp from "sharp";
+import * as opentype from "opentype.js";
 
 const exec = promisify(execFile);
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -158,13 +159,20 @@ function brandFont(): string | null {
   return candidates.find((c) => existsSync(c)) ?? null;
 }
 
-function escXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+// Convert a line of text to a centered SVG <path> using the bundled font's glyph
+// outlines — pure vector, no font-loading at render time, so it renders identically
+// in any container (the Trigger sharp/resvg couldn't load an embedded @font-face).
+function textPath(font: opentype.Font, text: string, cy: number, fontSize: number, fill: string): string {
+  const scale = fontSize / font.unitsPerEm;
+  const width = font.getAdvanceWidth(text, fontSize);
+  const x = 540 - width / 2;
+  const ascent = font.ascender * scale;
+  const p = font.getPath(text, x, cy + ascent / 2 - fontSize * 0.1, fontSize);
+  return `<path d="${p.toPathData(2)}" fill="${fill}"/>`;
 }
 
-// Deterministic brand text card: render an SVG (with the font embedded) to a PNG
-// via sharp, then loop it into a clip. Sidesteps ffmpeg's container font engine —
-// text is always sharp and correct. AI-generated text cards garble; this never does.
+// Deterministic brand text card: glyph-outline SVG → PNG (sharp) → looped clip.
+// AI-generated text cards garble; this never does.
 async function makeCard(
   ffmpeg: string,
   out: string,
@@ -172,17 +180,16 @@ async function makeCard(
   sub: string | undefined,
   seconds: number,
 ): Promise<void> {
-  const font = brandFont();
-  const fontFace = font
-    ? `@font-face{font-family:'Brand';src:url('data:font/ttf;base64,${(await readFile(font)).toString("base64")}') format('truetype');}`
-    : "";
-  const svg = `<svg width="1080" height="1920" xmlns="http://www.w3.org/2000/svg">
-    <style>${fontFace} .t{font-family:'Brand',sans-serif;} </style>
-    <rect width="1080" height="1920" fill="#0a0b0d"/>
-    <rect x="0" y="948" width="1080" height="4" fill="#d7ff3e"/>
-    <text class="t" x="540" y="915" font-size="112" fill="#ffffff" text-anchor="middle">${escXml(title.toUpperCase())}</text>
-    ${sub ? `<text class="t" x="540" y="1030" font-size="40" fill="#d7ff3e" text-anchor="middle">${escXml(sub.toUpperCase())}</text>` : ""}
-  </svg>`;
+  const fontPath = brandFont();
+  let inner = "";
+  if (fontPath) {
+    const font = opentype.parse(
+      (await readFile(fontPath)).buffer.slice(0) as ArrayBuffer,
+    );
+    inner = textPath(font, title.toUpperCase(), 900, 116, "#ffffff");
+    if (sub) inner += textPath(font, sub.toUpperCase(), 1010, 40, "#d7ff3e");
+  }
+  const svg = `<svg width="1080" height="1920" xmlns="http://www.w3.org/2000/svg"><rect width="1080" height="1920" fill="#0a0b0d"/><rect x="0" y="952" width="1080" height="4" fill="#d7ff3e"/>${inner}</svg>`;
   const png = path.join(path.dirname(out), `card-${path.basename(out)}.png`);
   await sharp(Buffer.from(svg)).png().toFile(png);
   await promisify(execFile)(ffmpeg, [
