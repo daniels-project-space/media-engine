@@ -18,7 +18,10 @@ const NAV_GROUPS: { section: string; items: { href: string; code: string; label:
   },
   {
     section: "Ads Studio",
-    items: [{ href: "/ads", code: "AD", label: "Client Ads", hint: "Fiverr fulfilment" }],
+    items: [
+      { href: "/ads", code: "AD", label: "Client Ads", hint: "Fiverr fulfilment" },
+      { href: "/reference", code: "RF", label: "Reference Board", hint: "quality benchmarks" },
+    ],
   },
   {
     section: "System",
