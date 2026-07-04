@@ -79,9 +79,20 @@ async function falImageToVideo(
     const sd = (await st.json()) as { status: string };
     if (sd.status === "COMPLETED") {
       const res = await fetch(sub.response_url, { headers: { authorization: `Key ${falKey}` } });
-      const rd = (await res.json()) as { video?: { url?: string } };
-      if (!rd.video?.url) throw new Error(`fal ${modelId}: no video url in result`);
-      return rd.video.url;
+      const rd = (await res.json()) as {
+        video?: { url?: string };
+        videos?: { url?: string }[];
+        output?: { url?: string } | string;
+        url?: string;
+      };
+      // Seedance/Kling/Veo return slightly different shapes — try the known ones.
+      const url =
+        rd.video?.url ??
+        rd.videos?.[0]?.url ??
+        (typeof rd.output === "string" ? rd.output : rd.output?.url) ??
+        rd.url;
+      if (!url) throw new Error(`fal ${modelId}: no video url in result — ${JSON.stringify(rd).slice(0, 300)}`);
+      return url;
     }
     if (sd.status === "FAILED" || sd.status === "ERROR") throw new Error(`fal ${modelId} failed`);
   }
