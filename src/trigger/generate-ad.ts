@@ -3,6 +3,9 @@ import { ConvexHttpClient } from "convex/browser";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { writeFile, readFile, mkdtemp } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { api } from "../../convex/_generated/api";
@@ -237,7 +240,10 @@ export const generateAd = task({
         }
 
         const raw = path.join(dir, `raw-${i}.mp4`);
-        await writeFile(raw, Buffer.from(await (await fetch(videoUrl)).arrayBuffer()));
+        // Stream to disk — a whole 4K clip in a Buffer was the OOM source.
+        const resp = await fetch(videoUrl);
+        if (!resp.ok || !resp.body) throw new Error(`clip download HTTP ${resp.status}`);
+        await pipeline(Readable.fromWeb(resp.body as import("node:stream/web").ReadableStream), createWriteStream(raw));
         const norm = path.join(dir, `norm-${i}.mp4`);
         await exec(FFMPEG, [
           "-y", "-i", raw,
@@ -249,23 +255,16 @@ export const generateAd = task({
         return norm;
       };
 
-      // Refresh the Higgsfield token once up front so the concurrent scenes below
-      // share it instead of each racing to rotate the single-use refresh token.
+      // Refresh the Higgsfield token once up front so the sequential scenes below
+      // reuse it instead of each rotating the single-use refresh token.
       await primeHiggsfield();
 
-      // Bounded concurrency (2 at a time): HF serializes jobs anyway, and it caps
-      // peak memory so 4 concurrent 1080x1920 ffmpeg encodes can't OOM the box.
-      const scenePaths: string[] = new Array(payload.scenes.length);
-      const POOL = 2;
-      let next = 0;
-      await Promise.all(
-        Array.from({ length: Math.min(POOL, payload.scenes.length) }, async () => {
-          while (next < payload.scenes.length) {
-            const i = next++;
-            scenePaths[i] = await renderScene(payload.scenes[i], i);
-          }
-        }),
-      );
+      // Sequential: HF serializes jobs anyway, and one image+video+ffmpeg in flight
+      // at a time keeps peak memory flat (concurrent 1080p encodes were the OOM).
+      const scenePaths: string[] = [];
+      for (let i = 0; i < payload.scenes.length; i++) {
+        scenePaths.push(await renderScene(payload.scenes[i], i));
+      }
 
       // Concat scenes, lay voiceover over the whole cut.
       const listFile = path.join(dir, "list.txt");
