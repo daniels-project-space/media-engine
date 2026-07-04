@@ -114,7 +114,7 @@ async function genImage(apiKey: string, prompt: string): Promise<Buffer> {
 export const generateAd = task({
   id: "generate-ad",
   maxDuration: 3600,
-  machine: "medium-1x", // ffmpeg 1080x1920 x264 OOMs the default small machine
+  machine: "large-1x", // 4 concurrent 1080x1920 x264 encodes need the RAM headroom
   retry: { maxAttempts: 1 },
   run: async (payload: Payload, { ctx }) => {
     const convex = new ConvexHttpClient(CONVEX_URL);
@@ -252,7 +252,20 @@ export const generateAd = task({
       // Refresh the Higgsfield token once up front so the concurrent scenes below
       // share it instead of each racing to rotate the single-use refresh token.
       await primeHiggsfield();
-      const scenePaths = await Promise.all(payload.scenes.map((scene, i) => renderScene(scene, i)));
+
+      // Bounded concurrency (2 at a time): HF serializes jobs anyway, and it caps
+      // peak memory so 4 concurrent 1080x1920 ffmpeg encodes can't OOM the box.
+      const scenePaths: string[] = new Array(payload.scenes.length);
+      const POOL = 2;
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(POOL, payload.scenes.length) }, async () => {
+          while (next < payload.scenes.length) {
+            const i = next++;
+            scenePaths[i] = await renderScene(payload.scenes[i], i);
+          }
+        }),
+      );
 
       // Concat scenes, lay voiceover over the whole cut.
       const listFile = path.join(dir, "list.txt");
