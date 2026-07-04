@@ -9,7 +9,8 @@ export const maxDuration = 15;
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ key: string[] }> }) {
   const { key } = await ctx.params;
   const objectKey = key.join("/");
-  if (!objectKey.startsWith("posts/") && !objectKey.startsWith("demo/") && !objectKey.startsWith("buildout/")) {
+  const allowed = ["posts/", "demo/", "buildout/", "reference/"];
+  if (!allowed.some((p) => objectKey.startsWith(p))) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   try {
