@@ -140,6 +140,31 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_category", ["category"]),
 
+  // Fiverr / direct AI-ad client orders — the fulfilment control room. Fiverr has
+  // no seller API, so orders are logged here (manually or via forwarded email) and
+  // fulfilled with the ad pipeline; replies are AI-drafted for the seller to send.
+  clientOrders: defineTable({
+    buyer: v.string(),
+    source: v.string(), // "fiverr" | "direct" | ...
+    tier: v.union(v.literal("basic"), v.literal("standard"), v.literal("premium")),
+    brief: v.string(),
+    productImageKey: v.optional(v.string()), // R2 key of the client's product image
+    status: v.union(
+      v.literal("new"),
+      v.literal("in_progress"),
+      v.literal("delivered"),
+      v.literal("revision"),
+      v.literal("complete"),
+      v.literal("cancelled"),
+    ),
+    pricePence: v.optional(v.number()), // what the buyer paid
+    costPence: v.optional(v.number()), // our model spend so far
+    deliveryPostId: v.optional(v.id("posts")), // the generated ad
+    dueAt: v.optional(v.number()),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_status", ["status"]),
+
   settings: defineTable({
     key: v.string(),
     value: v.any(),

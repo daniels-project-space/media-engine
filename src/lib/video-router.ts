@@ -17,7 +17,15 @@ export async function primeHiggsfield(): Promise<void> {
 //   kling3_0: min 3 · kling2_6: [5,10] · seedance1_5: [4,8,12] · seedance_2_0: min 4
 export const VIDEO_MODELS: Record<
   string,
-  { hf: string; hfDuration?: number; hfSkip?: boolean; fal: string; falPence: number; hfExtra?: Record<string, unknown> }
+  {
+    hf: string;
+    hfDuration?: number;
+    hfSkip?: boolean;
+    fal: string;
+    falPence: number;
+    hfExtra?: Record<string, unknown>;
+    falExtra?: Record<string, unknown>;
+  }
 > = {
   "kling-pro": { hf: "kling3_0", hfDuration: 5, fal: "fal-ai/kling-video/v2.6/pro/image-to-video", falPence: 30, hfExtra: { mode: "std" } },
   // "turbo" on HF is 4x slower than kling3_0 std — route it to the fast one.
@@ -25,6 +33,16 @@ export const VIDEO_MODELS: Record<
   "kling-26": { hf: "kling2_6", hfDuration: 5, fal: "fal-ai/kling-video/v2.6/pro/image-to-video", falPence: 30 },
   "seedance-lite": { hf: "seedance1_5", hfDuration: 4, fal: "fal-ai/bytedance/seedance/v1/lite/image-to-video", falPence: 16 },
   "seedance-pro": { hf: "seedance_2_0", hfDuration: 5, fal: "fal-ai/bytedance/seedance/v1/pro/image-to-video", falPence: 74 },
+  // Seedance 2.0 at 4K — the premium CLIENT tier (Fiverr fulfilment). HF seedance_2_0
+  // first (4k mode), fal bytedance/seedance-2.0 fallback with resolution 4k.
+  "seedance-4k": {
+    hf: "seedance_2_0",
+    hfDuration: 5,
+    hfExtra: { resolution: "4k" },
+    fal: "bytedance/seedance-2.0/image-to-video",
+    falPence: 250,
+    falExtra: { resolution: "4k" },
+  },
   // HF veo renders in ~7min — too slow to block on; go straight to fal.
   "veo-lite": { hf: "veo3_1_lite", hfSkip: true, fal: "fal-ai/veo3.1/lite/image-to-video", falPence: 35 },
 };
@@ -35,11 +53,12 @@ async function falImageToVideo(
   imageUrl: string,
   motion: string,
   durationSeconds: number,
+  extra?: Record<string, unknown>,
 ): Promise<string> {
   const submit = await fetch(`https://queue.fal.run/${modelId}`, {
     method: "POST",
     headers: { authorization: `Key ${falKey}`, "content-type": "application/json" },
-    body: JSON.stringify({ prompt: motion, image_url: imageUrl, duration: String(durationSeconds) }),
+    body: JSON.stringify({ prompt: motion, image_url: imageUrl, duration: String(durationSeconds), ...extra }),
   });
   if (!submit.ok) throw new Error(`fal ${modelId} HTTP ${submit.status}: ${(await submit.text()).slice(0, 300)}`);
   const sub = (await submit.json()) as { status_url: string; response_url: string };
@@ -96,7 +115,7 @@ export async function renderClip(opts: {
   // 2) fal fallback.
   const { FAL_KEY } = await vaultService("fal");
   if (!FAL_KEY) throw new Error("higgsfield unavailable and fal key missing");
-  const url = await falImageToVideo(FAL_KEY, m.fal, opts.imageUrl, opts.motion, duration);
+  const url = await falImageToVideo(FAL_KEY, m.fal, opts.imageUrl, opts.motion, duration, m.falExtra);
   logger.log(`clip via fal (${m.fal}), ~${m.falPence}p`);
   return { url, provider: "fal", costPence: m.falPence, credits: 0 };
 }
