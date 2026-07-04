@@ -1,5 +1,5 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
-import { ffmpeg } from "@trigger.dev/build/extensions/core";
+import { ffmpeg, additionalFiles } from "@trigger.dev/build/extensions/core";
 
 export default defineConfig({
   // Hardcoded on purpose: env-fallback once deployed music-house tasks to a phantom project.
@@ -13,6 +13,7 @@ export default defineConfig({
   },
   dirs: ["./src/trigger"],
   build: {
-    extensions: [ffmpeg({ version: "7" })],
+    // Bundle the brand font so ffmpeg drawtext works in the fontless container.
+    extensions: [ffmpeg({ version: "7" }), additionalFiles({ files: ["./assets/brand.ttf"] })],
   },
 });

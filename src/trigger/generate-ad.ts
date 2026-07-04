@@ -149,8 +149,21 @@ function escDraw(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "’").replace(/%/g, "\\%");
 }
 
+// The container has no system fonts, so drawtext needs an explicit fontfile. The
+// brand font is bundled via trigger.config additionalFiles; resolve it robustly.
+import { existsSync } from "node:fs";
+function brandFont(): string | null {
+  const candidates = [
+    path.join(process.cwd(), "assets/brand.ttf"),
+    "/app/assets/brand.ttf",
+    path.join(process.cwd(), "../assets/brand.ttf"),
+  ];
+  return candidates.find((c) => existsSync(c)) ?? null;
+}
+
 // Deterministic brand text card via ffmpeg — sharp, correct typography every time
-// (AI-generated text cards garble; this never does).
+// (AI-generated text cards garble; this never does). Resilient: if the font is
+// missing it renders a clean solid card rather than failing the whole ad.
 async function makeCard(
   ffmpeg: string,
   out: string,
@@ -158,17 +171,24 @@ async function makeCard(
   sub: string | undefined,
   seconds: number,
 ): Promise<void> {
+  const font = brandFont();
+  const base = ["-y", "-f", "lavfi", "-i", `color=c=0x0a0b0d:s=1080x1920:d=${seconds}:r=30`];
+  if (!font) {
+    logger.warn("brand font not found — rendering plain card");
+    await promisify(execFile)(ffmpeg, [...base, "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20", out]);
+    return;
+  }
+  const ff = font.replace(/:/g, "\\:");
   const filters = [
-    `drawtext=text='${escDraw(title.toUpperCase())}':fontcolor=white:fontsize=110:font=sans:x=(w-tw)/2:y=(h-th)/2-40:box=0`,
+    `drawtext=fontfile='${ff}':text='${escDraw(title.toUpperCase())}':fontcolor=white:fontsize=110:x=(w-tw)/2:y=(h-th)/2-40`,
   ];
   if (sub) {
     filters.push(
-      `drawtext=text='${escDraw(sub.toUpperCase())}':fontcolor=0xd7ff3e:fontsize=42:font=sans:x=(w-tw)/2:y=(h/2)+70`,
+      `drawtext=fontfile='${ff}':text='${escDraw(sub.toUpperCase())}':fontcolor=0xd7ff3e:fontsize=40:x=(w-tw)/2:y=(h/2)+80`,
     );
   }
   await promisify(execFile)(ffmpeg, [
-    "-y", "-f", "lavfi", "-i", `color=c=0x0a0b0d:s=1080x1920:d=${seconds}:r=30`,
-    "-vf", filters.join(",") + ",format=yuv420p",
+    ...base, "-vf", filters.join(",") + ",format=yuv420p",
     "-c:v", "libx264", "-preset", "fast", "-crf", "20", out,
   ]);
 }
