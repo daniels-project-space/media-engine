@@ -211,6 +211,8 @@ export const generateAd = task({
           "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1,format=yuv420p",
           "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-an", norm,
         ]);
+        // Persist the paid clip — a later stitch failure must never re-cost the render.
+        await putObject(`posts/${postId}/scene-${i + 1}.mp4`, await readFile(norm), "video/mp4");
         scenePaths.push(norm);
       }
 
@@ -222,9 +224,12 @@ export const generateAd = task({
 
       const final = path.join(dir, "final.mp4");
       if (voPath) {
+        // apad makes the VO stream infinite, -shortest then cuts at the VIDEO end —
+        // a short voiceover can no longer truncate the cut (the original 3s bug).
         await exec(FFMPEG, [
           "-y", "-i", silent, "-i", voPath,
-          "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-shortest",
+          "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac",
+          "-af", "apad", "-shortest",
           "-movflags", "+faststart", final,
         ]);
       } else {
