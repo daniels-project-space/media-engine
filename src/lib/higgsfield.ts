@@ -4,21 +4,25 @@ const API = "https://fnf.higgsfield.ai/agents";
 const AUTH = "https://fnf-device-auth.higgsfield.ai";
 const UA = "hf-cli/1";
 
-// Higgsfield access tokens expire hourly and refresh tokens rotate on use, so a
-// naive per-call refresh would race and burn the rotating token. We refresh at
-// most once per cold task, persist the rotated pair, and reuse the access token.
+// Higgsfield access tokens expire hourly and refresh tokens rotate (single-use)
+// on refresh. Under concurrent scene rendering, two clips hitting 401 at once
+// must NOT both refresh — the second would burn the token the first just rotated.
+// So refresh is single-flight: concurrent callers await one shared refresh.
 let cachedAccess: string | null = null;
+let refreshInFlight: Promise<string | null> | null = null;
 
 async function tokens(): Promise<{ access: string; refresh: string | null }> {
   const s = await vaultService("higgsfield");
   return { access: s.HIGGSFIELD_ACCESS_TOKEN, refresh: s.HIGGSFIELD_REFRESH_TOKEN ?? null };
 }
 
-async function refresh(refreshToken: string): Promise<string | null> {
+async function doRefresh(): Promise<string | null> {
+  const { refresh: rt } = await tokens();
+  if (!rt) return null;
   const r = await fetch(`${AUTH}/refresh`, {
     method: "POST",
     headers: { "content-type": "application/json", "user-agent": UA },
-    body: JSON.stringify({ refresh_token: refreshToken }),
+    body: JSON.stringify({ refresh_token: rt }),
   });
   if (!r.ok) return null;
   const t = (await r.json()) as { access_token: string; refresh_token: string };
@@ -27,6 +31,23 @@ async function refresh(refreshToken: string): Promise<string | null> {
   await vaultSet("higgsfield", "HIGGSFIELD_REFRESH_TOKEN", t.refresh_token);
   cachedAccess = t.access_token;
   return t.access_token;
+}
+
+function refreshOnce(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+// Proactively refresh + persist a fresh token before a batch of concurrent calls,
+// so the parallel scenes never each trigger a reactive refresh. Safe to call once
+// at task start; no-op-cheap if it fails (falls through to fal downstream).
+export async function higgsEnsureFresh(): Promise<boolean> {
+  const fresh = await refreshOnce();
+  return fresh !== null;
 }
 
 async function authed(
@@ -46,11 +67,8 @@ async function authed(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if ((r.status === 401 || r.status === 403) && !retried) {
-    const { refresh: rt } = await tokens();
-    if (rt) {
-      const fresh = await refresh(rt);
-      if (fresh) return authed(method, path, body, true);
-    }
+    const fresh = await refreshOnce();
+    if (fresh) return authed(method, path, body, true);
     cachedAccess = null;
   }
   return r;

@@ -1,6 +1,12 @@
 import { logger } from "@trigger.dev/sdk/v3";
 import { vaultService } from "./vault";
-import { higgsBalance, higgsGenerateVideo } from "./higgsfield";
+import { higgsBalance, higgsGenerateVideo, higgsEnsureFresh } from "./higgsfield";
+
+// Call ONCE before a batch of concurrent renderClip() calls so the parallel
+// scenes share a single token refresh instead of each racing to refresh.
+export async function primeHiggsfield(): Promise<void> {
+  await higgsEnsureFresh().catch(() => {});
+}
 
 // Friendly model name -> Higgsfield job_set_type (credits) + fal fallback id (pence).
 // Higgsfield is tried FIRST whenever the account has credits; fal is the fallback.

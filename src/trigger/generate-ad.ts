@@ -9,7 +9,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { vaultService } from "../lib/vault";
 import { putObject, presignedGet } from "../lib/storage";
-import { renderClip, VIDEO_MODELS } from "../lib/video-router";
+import { renderClip, VIDEO_MODELS, primeHiggsfield } from "../lib/video-router";
 
 const exec = promisify(execFile);
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -228,6 +228,9 @@ export const generateAd = task({
         return norm;
       };
 
+      // Refresh the Higgsfield token once up front so the concurrent scenes below
+      // share it instead of each racing to rotate the single-use refresh token.
+      await primeHiggsfield();
       const scenePaths = await Promise.all(payload.scenes.map((scene, i) => renderScene(scene, i)));
 
       // Concat scenes, lay voiceover over the whole cut.
