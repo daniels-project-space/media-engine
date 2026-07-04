@@ -77,15 +77,36 @@ async function falQueue(
   throw new Error(`fal ${model} timed out`);
 }
 
-async function genImage(apiKey: string, prompt: string): Promise<Buffer> {
+const SAFETY_CLAUSE =
+  " Fully clothed in modest everyday clothing, tasteful family-friendly commercial photography, no suggestive posing.";
+
+async function genImageOnce(apiKey: string, prompt: string): Promise<Buffer> {
   const r = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({ model: "gpt-image-2", prompt, size: "1024x1536", quality: "medium", moderation: "low", n: 1 }),
   });
-  if (!r.ok) throw new Error(`gpt-image-2 HTTP ${r.status}: ${(await r.text()).slice(0, 250)}`);
+  if (!r.ok) {
+    const detail = await r.text();
+    const err = new Error(`gpt-image-2 HTTP ${r.status}: ${detail.slice(0, 250)}`);
+    (err as Error & { safety?: boolean }).safety = detail.includes("safety");
+    throw err;
+  }
   const data = (await r.json()) as { data: { b64_json: string }[] };
   return Buffer.from(data.data[0].b64_json, "base64");
+}
+
+// gpt-image-2's safety filter false-positives on beauty/fitness prompts; one
+// softened retry recovers the fluke instead of failing the whole ad.
+async function genImage(apiKey: string, prompt: string): Promise<Buffer> {
+  try {
+    return await genImageOnce(apiKey, prompt);
+  } catch (err) {
+    if ((err as Error & { safety?: boolean }).safety) {
+      return await genImageOnce(apiKey, prompt + SAFETY_CLAUSE);
+    }
+    throw err;
+  }
 }
 
 // Produces a stitched 9:16 video ad: per-scene image gen -> fal image-to-video,
