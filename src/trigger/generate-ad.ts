@@ -13,6 +13,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { vaultService } from "../lib/vault";
 import { putObject, presignedGet } from "../lib/storage";
 import { renderClip, VIDEO_MODELS, primeHiggsfield } from "../lib/video-router";
+import { higgsGenerateAudio } from "../lib/higgsfield";
 
 const exec = promisify(execFile);
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -46,6 +47,10 @@ type Payload = {
   voiceId?: string;
   caption?: string;
   scenes: Scene[];
+  // Quick UGC mode (default): short hard-cut edit, AI music bed + whoosh SFX, no VO.
+  quick?: boolean;
+  segSeconds?: number; // per-scene trim in quick mode (default 1.4)
+  musicPrompt?: string; // brand-fit music vibe
 };
 
 function today(): string {
@@ -122,6 +127,8 @@ export const generateAd = task({
   run: async (payload: Payload, { ctx }) => {
     const convex = new ConvexHttpClient(CONVEX_URL);
     const streamSlug = payload.streamSlug ?? "client-ads";
+    const quick = payload.quick !== false; // quick UGC is the default
+    const seg = payload.segSeconds ?? 1.4; // per-scene trim in quick mode
 
     const estimate =
       payload.scenes.reduce((sum, s) => sum + MODELS[s.model].pence + IMG_PENCE * (s.kind === "flf" ? 2 : 1), 0) +
@@ -157,9 +164,10 @@ export const generateAd = task({
       const dir = await mkdtemp(path.join(tmpdir(), "ad-"));
 
       // Voiceover first — lipsync scenes need the audio URL as input.
+      // Skipped in quick mode (music + SFX carry the ad instead of narration).
       let voPath: string | null = null;
       let voUrl: string | null = null;
-      if (payload.voScript) {
+      if (payload.voScript && !quick) {
         const el = await vaultService("elevenlabs");
         const elKey = el.ELEVENLABS_API_KEY ?? el.ELEVEN_API_KEY ?? Object.values(el)[0];
         const voice = payload.voiceId ?? "21m00Tcm4TlvDq8ikWAM";
@@ -247,6 +255,8 @@ export const generateAd = task({
         const norm = path.join(dir, `norm-${i}.mp4`);
         await exec(FFMPEG, [
           "-y", "-i", raw,
+          // Quick mode trims each scene to a punchy hard-cut length.
+          ...(quick ? ["-t", String(seg)] : []),
           "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1,format=yuv420p",
           "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-an", norm,
         ]);
@@ -273,7 +283,52 @@ export const generateAd = task({
       await exec(FFMPEG, ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", silent]);
 
       const final = path.join(dir, "final.mp4");
-      if (voPath) {
+      if (quick) {
+        // Quick UGC audio: AI music bed + whoosh SFX on each cut (Higgsfield), no VO.
+        const videoDur = seg * payload.scenes.length;
+        const musicPrompt =
+          payload.musicPrompt ??
+          "upbeat modern commercial music bed, glossy and driving, no vocals, social-ad energy";
+        const [musicUrl, whooshUrl] = await Promise.all([
+          higgsGenerateAudio("sonilo_music", musicPrompt, Math.ceil(videoDur) + 1),
+          higgsGenerateAudio("mirelo_text_to_audio", "fast clean cinematic whoosh transition swoosh, short punchy", 1),
+        ]);
+
+        if (musicUrl) {
+          const musicPath = path.join(dir, "music.mp3");
+          await pipeline(
+            Readable.fromWeb((await fetch(musicUrl)).body as import("node:stream/web").ReadableStream),
+            createWriteStream(musicPath),
+          );
+          const inputs = ["-i", silent, "-i", musicPath];
+          const amix = [`[1:a]volume=0.9,atrim=0:${videoDur.toFixed(2)},afade=t=out:st=${(videoDur - 0.4).toFixed(2)}:d=0.4[music]`];
+          const labels = ["[music]"];
+          if (whooshUrl) {
+            const whooshPath = path.join(dir, "whoosh.mp3");
+            await pipeline(
+              Readable.fromWeb((await fetch(whooshUrl)).body as import("node:stream/web").ReadableStream),
+              createWriteStream(whooshPath),
+            );
+            let idx = 2;
+            for (let k = 1; k < payload.scenes.length; k++) {
+              const t = Math.round(seg * k * 1000);
+              inputs.push("-i", whooshPath);
+              amix.push(`[${idx}:a]adelay=${t}|${t},volume=0.6[w${k}]`);
+              labels.push(`[w${k}]`);
+              idx++;
+            }
+          }
+          const fc = `${amix.join(";")};${labels.join("")}amix=inputs=${labels.length}:normalize=0[a]`;
+          await exec(FFMPEG, [
+            "-y", ...inputs, "-filter_complex", fc,
+            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest",
+            "-movflags", "+faststart", final,
+          ]);
+          await convex.mutation(api.spend.log, { day: today(), service: "higgsfield", model: "audio (music+sfx)", costPence: 0, ref: postId });
+        } else {
+          await exec(FFMPEG, ["-y", "-i", silent, "-c", "copy", "-movflags", "+faststart", final]);
+        }
+      } else if (voPath) {
         // apad makes the VO stream infinite, -shortest then cuts at the VIDEO end —
         // a short voiceover can no longer truncate the cut (the original 3s bug).
         await exec(FFMPEG, [

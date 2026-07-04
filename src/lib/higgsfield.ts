@@ -74,6 +74,33 @@ async function authed(
   return r;
 }
 
+// Generates audio (music via sonilo_music, SFX via mirelo_text_to_audio) and
+// returns the result URL, or null if it fails (caller can proceed silent).
+export async function higgsGenerateAudio(
+  jobSetType: "sonilo_music" | "mirelo_text_to_audio",
+  prompt: string,
+  duration: number,
+): Promise<string | null> {
+  try {
+    const sub = await authed("POST", "/jobs", { job_set_type: jobSetType, params: { prompt, duration } });
+    if (!sub.ok) return null;
+    const ids = (await sub.json()) as string[] | { id?: string };
+    const jobId = Array.isArray(ids) ? ids[0] : ids.id;
+    if (!jobId) return null;
+    for (let i = 0; i < 48; i++) {
+      await new Promise((res) => setTimeout(res, 5000));
+      const p = await authed("GET", `/jobs/${jobId}`);
+      if (!p.ok) continue;
+      const d = (await p.json()) as { status: string; result_url?: string; audio_url?: string };
+      if (d.status === "completed") return d.result_url ?? d.audio_url ?? null;
+      if (d.status === "failed" || d.status === "canceled") return null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export async function higgsBalance(): Promise<number> {
   const r = await authed("GET", "/balance");
   if (!r.ok) throw new Error(`higgs balance HTTP ${r.status}`);
@@ -128,11 +155,19 @@ export async function higgsGenerateVideo(opts: {
   if (!jobId) throw new Error("higgs submit returned no job id");
 
   // ~5min ceiling: HF clips normally finish in under a minute, so a longer wait
-  // means the job is stuck — bail and let the router fall back to fal.
+  // means the job is stuck — bail and let the router fall back to fal. Also bail
+  // fast if auth breaks mid-poll (repeated non-ok) instead of grinding the full 5min.
+  let authFails = 0;
   for (let i = 0; i < 60; i++) {
     await new Promise((res) => setTimeout(res, 5000));
     const p = await authed("GET", `/jobs/${jobId}`);
-    if (!p.ok) continue;
+    if (!p.ok) {
+      if (p.status === 401 || p.status === 403) {
+        if (++authFails >= 3) throw new Error("higgs auth lost mid-poll");
+      }
+      continue;
+    }
+    authFails = 0;
     const d = (await p.json()) as { status: string; result_url?: string; h264_url?: string };
     if (d.status === "completed") {
       const url = d.h264_url ?? d.result_url;
