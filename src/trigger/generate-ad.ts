@@ -29,7 +29,8 @@ const VO_PENCE = 5;
 type Scene = {
   kind?: "i2v" | "flf" | "lipsync";
   model: keyof typeof MODELS;
-  imagePrompt: string; // for flf: the FIRST frame
+  imagePrompt?: string; // for flf: the FIRST frame
+  imageUrl?: string; // client-supplied or pre-generated image — skips generation
   lastImagePrompt?: string; // flf only: the LAST frame
   motion: string; // motion/video prompt (lipsync: ignored)
 };
@@ -91,6 +92,7 @@ async function genImage(apiKey: string, prompt: string): Promise<Buffer> {
 export const generateAd = task({
   id: "generate-ad",
   maxDuration: 1800,
+  machine: "medium-1x", // ffmpeg 1080x1920 x264 OOMs the default small machine
   retry: { maxAttempts: 1 },
   run: async (payload: Payload, { ctx }) => {
     const convex = new ConvexHttpClient(CONVEX_URL);
@@ -158,11 +160,17 @@ export const generateAd = task({
         const model = MODELS[scene.model];
         logger.log(`scene ${i + 1}/${payload.scenes.length} (${scene.model})`);
 
-        const firstImg = await genImage(OPENAI_API_KEY, scene.imagePrompt);
-        const firstKey = `posts/${postId}/scene-${i + 1}-a.png`;
-        await putObject(firstKey, firstImg, "image/png");
-        const firstUrl = await presignedGet(firstKey);
-        await convex.mutation(api.spend.log, { day: today(), service: "openai", model: "gpt-image-2", costPence: IMG_PENCE, ref: postId });
+        let firstUrl: string;
+        if (scene.imageUrl) {
+          firstUrl = scene.imageUrl;
+        } else {
+          if (!scene.imagePrompt) throw new Error(`scene ${i + 1}: needs imagePrompt or imageUrl`);
+          const firstImg = await genImage(OPENAI_API_KEY, scene.imagePrompt);
+          const firstKey = `posts/${postId}/scene-${i + 1}-a.png`;
+          await putObject(firstKey, firstImg, "image/png");
+          firstUrl = await presignedGet(firstKey);
+          await convex.mutation(api.spend.log, { day: today(), service: "openai", model: "gpt-image-2", costPence: IMG_PENCE, ref: postId });
+        }
 
         let body: Record<string, unknown>;
         if (scene.kind === "flf" && scene.lastImagePrompt) {
