@@ -107,10 +107,19 @@ export default defineSchema({
     publishedAt: v.optional(v.number()),
     externalId: v.optional(v.string()),
     error: v.optional(v.string()),
+    // Variant tagging — the data spine for the performance feedback loop.
+    // variantTag is machine-sortable: concept__hookId__variantId__v{n}
+    variantTag: v.optional(v.string()),
+    concept: v.optional(v.string()),
+    hookId: v.optional(v.string()),
+    variantId: v.optional(v.string()),
+    // Best-of-N quality: the winning candidate's vision-QC score (0-100).
+    qcScore: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_status", ["status"])
-    .index("by_stream", ["streamSlug"]),
+    .index("by_stream", ["streamSlug"])
+    .index("by_concept", ["concept"]),
 
   promptTemplates: defineTable({
     name: v.string(),

@@ -135,6 +135,11 @@ export const create = mutation({
     ),
     scheduledAt: v.optional(v.number()),
     externalId: v.optional(v.string()),
+    variantTag: v.optional(v.string()),
+    concept: v.optional(v.string()),
+    hookId: v.optional(v.string()),
+    variantId: v.optional(v.string()),
+    qcScore: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("posts", {
@@ -142,5 +147,13 @@ export const create = mutation({
       status: "planned",
       createdAt: Date.now(),
     });
+  },
+});
+
+// Record the best-of-N winning quality score on a post.
+export const setQc = mutation({
+  args: { id: v.id("posts"), qcScore: v.number() },
+  handler: async (ctx, { id, qcScore }) => {
+    await ctx.db.patch(id, { qcScore });
   },
 });

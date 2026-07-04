@@ -15,6 +15,7 @@ import { putObject, presignedGet } from "../lib/storage";
 import { renderClip, VIDEO_MODELS, primeHiggsfield } from "../lib/video-router";
 import { higgsGenerateAudio } from "../lib/higgsfield";
 import { scoreImage } from "../lib/vision";
+import { buildVariantTag } from "../lib/variant";
 import sharp from "sharp";
 import * as opentype from "opentype.js";
 
@@ -59,6 +60,9 @@ type Payload = {
   quick?: boolean;
   segSeconds?: number; // per-scene trim in quick mode (default 1.4)
   musicPrompt?: string; // brand-fit music vibe
+  bestOf?: number; // candidates per generated scene image (default 2)
+  concept?: string; // campaign/concept for variant tagging (default: title)
+  hook?: string; // hook line for variant tagging
 };
 
 function today(): string {
@@ -96,11 +100,12 @@ async function falQueue(
 const SAFETY_CLAUSE =
   " Fully clothed in modest everyday clothing, tasteful family-friendly commercial photography, no suggestive posing.";
 
-async function genImageOnce(apiKey: string, prompt: string): Promise<Buffer> {
+// Requests n candidate images in a single gpt-image-2 call (cheaper than n calls).
+async function genImageOnce(apiKey: string, prompt: string, n: number): Promise<Buffer[]> {
   const r = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-    body: JSON.stringify({ model: "gpt-image-2", prompt, size: "1024x1536", quality: "medium", moderation: "low", n: 1 }),
+    body: JSON.stringify({ model: "gpt-image-2", prompt, size: "1024x1536", quality: "medium", moderation: "low", n }),
   });
   if (!r.ok) {
     const detail = await r.text();
@@ -109,42 +114,51 @@ async function genImageOnce(apiKey: string, prompt: string): Promise<Buffer> {
     throw err;
   }
   const data = (await r.json()) as { data: { b64_json: string }[] };
-  return Buffer.from(data.data[0].b64_json, "base64");
+  return data.data.map((d) => Buffer.from(d.b64_json, "base64"));
 }
 
 // gpt-image-2's safety filter false-positives on beauty/fitness prompts; one
 // softened retry recovers the fluke instead of failing the whole ad.
-async function genImage(apiKey: string, prompt: string): Promise<Buffer> {
+async function genImageN(apiKey: string, prompt: string, n: number): Promise<Buffer[]> {
   try {
-    return await genImageOnce(apiKey, prompt);
+    return await genImageOnce(apiKey, prompt, n);
   } catch (err) {
     if ((err as Error & { safety?: boolean }).safety) {
-      return await genImageOnce(apiKey, prompt + SAFETY_CLAUSE);
+      return await genImageOnce(apiKey, prompt + SAFETY_CLAUSE, n);
     }
     throw err;
   }
 }
 
-// Quality-gated image gen: generate, vision-QC against the intent, and regenerate
-// (up to 2 retries) if it's off-intent or low quality. Returns the best attempt.
-async function genImageChecked(
+// Best-of-N: generate N candidates, vision-QC each against the intent, and keep the
+// highest scorer. Raises quality AND cuts video spend (weak frames never get animated).
+// One softened regeneration if the best of the first batch is still off-intent.
+async function genImageBestOfN(
   apiKey: string,
   prompt: string,
   intent: string,
+  n: number,
 ): Promise<{ bytes: Buffer; score: number; issues: string }> {
-  let best: { bytes: Buffer; score: number; issues: string } | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const p = attempt === 0 ? prompt : `${prompt}. Clear, literal, single clean subject, no extra people or scenery.`;
-    const bytes = await genImage(apiKey, p);
-    // QC needs a URL — upload a temp data URL is too big; score via a short-lived R2
-    // object would need a round-trip, so we score the base64 data URL directly.
-    const dataUrl = `data:image/png;base64,${bytes.toString("base64")}`;
-    const { score, issues } = await scoreImage(dataUrl, intent);
-    logger.log(`image QC attempt ${attempt + 1}: score ${score} ${issues ? "— " + issues : ""}`);
-    if (!best || score > best.score) best = { bytes, score, issues };
-    if (score >= 60) break;
+  const pick = async (p: string): Promise<{ bytes: Buffer; score: number; issues: string }> => {
+    const candidates = await genImageN(apiKey, p, n);
+    const scored = await Promise.all(
+      candidates.map(async (bytes) => {
+        const { score, issues } = await scoreImage(`data:image/png;base64,${bytes.toString("base64")}`, intent);
+        return { bytes, score, issues };
+      }),
+    );
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0];
+  };
+
+  let best = await pick(prompt);
+  logger.log(`best-of-${n}: winner score ${best.score}${best.issues ? " — " + best.issues : ""}`);
+  if (best.score < 55) {
+    const retry = await pick(`${prompt}. Clear, literal, single clean subject, no extra people or scenery, photorealistic.`);
+    if (retry.score > best.score) best = retry;
+    logger.log(`best-of-${n} retry: final score ${best.score}`);
   }
-  return best!;
+  return best;
 }
 
 // The container has no system fonts, so we embed the font in the card SVG. The
@@ -210,6 +224,14 @@ export const generateAd = task({
     const streamSlug = payload.streamSlug ?? "client-ads";
     const quick = payload.quick !== false; // quick UGC is the default
     const seg = payload.segSeconds ?? 1.4; // per-scene trim in quick mode
+    const bestOf = Math.max(1, Math.min(4, payload.bestOf ?? 2)); // candidates per scene image
+    const tag = buildVariantTag({
+      concept: payload.concept ?? payload.title,
+      hook: payload.hook ?? payload.caption,
+      variantId: ctx.run.id.slice(-8),
+    });
+    let bestScoreSum = 0;
+    let bestScoreCount = 0;
 
     const estimate =
       payload.scenes.reduce((sum, s) => sum + MODELS[s.model].pence + IMG_PENCE * (s.kind === "flf" ? 2 : 1), 0) +
@@ -231,9 +253,14 @@ export const generateAd = task({
         platform: "instagram",
         kind: "reel",
         title: payload.title,
+        hook: payload.hook,
         caption: payload.caption,
         slides: payload.scenes.map((s) => ({ prompt: s.motion, role: s.kind ?? "i2v" })),
         externalId: ctx.run.id,
+        variantTag: tag.variantTag,
+        concept: tag.concept,
+        hookId: tag.hookId,
+        variantId: tag.variantId,
       })) as Id<"posts">);
     await convex.mutation(api.posts.setStatus, { id: postId, status: "generating" });
 
@@ -290,20 +317,24 @@ export const generateAd = task({
           firstBytes = Buffer.from(await (await fetch(scene.imageUrl)).arrayBuffer());
         } else {
           if (!scene.imagePrompt) throw new Error(`scene ${i + 1}: needs imagePrompt or imageUrl`);
-          // Quality gate: regenerate off-intent / low-quality images before spending on video.
-          const checked = await genImageChecked(OPENAI_API_KEY, scene.imagePrompt, intent);
+          // Best-of-N gate: generate N candidates, keep the highest-scoring one, so we
+          // never spend video budget animating a weak or off-intent frame.
+          const checked = await genImageBestOfN(OPENAI_API_KEY, scene.imagePrompt, intent, bestOf);
           firstBytes = checked.bytes;
-          if (checked.score < 40) logger.warn(`scene ${i + 1} image still weak after retries (score ${checked.score}: ${checked.issues})`);
+          bestScoreSum += checked.score;
+          bestScoreCount++;
+          if (checked.score < 40) logger.warn(`scene ${i + 1} still weak (score ${checked.score}: ${checked.issues})`);
           const firstKey = `posts/${postId}/scene-${i + 1}-a.png`;
           await putObject(firstKey, firstBytes, "image/png");
           firstUrl = await presignedGet(firstKey);
-          await convex.mutation(api.spend.log, { day: today(), service: "openai", model: "gpt-image-2", costPence: IMG_PENCE, ref: postId });
+          // N candidates in one call ≈ N× image cost.
+          await convex.mutation(api.spend.log, { day: today(), service: "openai", model: `gpt-image-2 x${bestOf}`, costPence: IMG_PENCE * bestOf, ref: postId });
         }
 
         let videoUrl: string;
         if (scene.kind === "flf" && scene.lastImagePrompt) {
           // First↔last-frame morph stays on fal (its FLF endpoints; HF param shape differs).
-          const lastImg = await genImage(OPENAI_API_KEY, scene.lastImagePrompt);
+          const [lastImg] = await genImageN(OPENAI_API_KEY, scene.lastImagePrompt, 1);
           const lastKey = `posts/${postId}/scene-${i + 1}-b.png`;
           await putObject(lastKey, lastImg, "image/png");
           const lastUrl = await presignedGet(lastKey);
@@ -465,8 +496,12 @@ export const generateAd = task({
         id: postId,
         slides: [{ r2Key, url, prompt: payload.title, role: "video" }],
       });
-      logger.log("ad ready", { postId, url });
-      return { postId, url, estimatePence: estimate };
+      // Record the best-of-N quality: average winning score across generated scenes.
+      if (bestScoreCount > 0) {
+        await convex.mutation(api.posts.setQc, { id: postId, qcScore: Math.round(bestScoreSum / bestScoreCount) });
+      }
+      logger.log("ad ready", { postId, url, variantTag: tag.variantTag });
+      return { postId, url, variantTag: tag.variantTag, estimatePence: estimate };
     } catch (err) {
       await convex.mutation(api.posts.fail, { id: postId, error: err instanceof Error ? err.message : String(err) });
       throw err;

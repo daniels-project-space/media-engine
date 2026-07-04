@@ -80,11 +80,24 @@ export default function Queue() {
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3 text-[10px] tracking-[0.2em] text-ink-faint uppercase mb-1">
+                <div className="flex items-center flex-wrap gap-3 text-[10px] tracking-[0.2em] text-ink-faint uppercase mb-1">
                   <span className="text-scope">{p.platform}</span>
                   <span>{p.kind}</span>
                   <span>{p.streamSlug}</span>
+                  {typeof p.qcScore === "number" && (
+                    <span
+                      title="Best-of-N quality score (vision QC of the winning render)"
+                      className={p.qcScore >= 70 ? "text-signal" : p.qcScore >= 50 ? "text-amber" : "text-onair"}
+                    >
+                      Q{p.qcScore}
+                    </span>
+                  )}
                 </div>
+                {p.variantTag && (
+                  <div className="text-[9px] text-ink-faint font-mono tracking-normal normal-case mb-1 truncate" title="Variant tag — concept·hook·variant·version">
+                    {p.variantTag}
+                  </div>
+                )}
                 <div className="text-sm font-bold mb-1 truncate">{p.title ?? p.hook ?? "untitled"}</div>
                 {p.caption && (
                   <p className="text-ink-dim text-xs leading-relaxed line-clamp-2">{p.caption}</p>

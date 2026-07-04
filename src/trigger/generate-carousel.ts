@@ -4,10 +4,13 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { vaultService } from "../lib/vault";
 import { putObject, presignedGet } from "../lib/storage";
+import { scoreImage } from "../lib/vision";
+import { buildVariantTag } from "../lib/variant";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const DEFAULT_CAP_PENCE = 500;
 const EST_PENCE_PER_IMAGE = 8; // gpt-image-2 medium portrait, conservative estimate
+const DEFAULT_BEST_OF = 2;
 
 const SAFETY_CLAUSE =
   " Fully clothed in modest everyday clothing, tasteful family-friendly lifestyle content, no suggestive posing.";
@@ -25,24 +28,18 @@ type Payload = {
   personaId?: string;
   usePersonaLock?: boolean;
   quality?: "low" | "medium" | "high";
+  bestOf?: number; // candidates per slide, keep the highest-scoring (default 2)
 };
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function generateImage(apiKey: string, prompt: string, quality: string): Promise<Buffer> {
+async function generateImage(apiKey: string, prompt: string, quality: string, n: number): Promise<Buffer[]> {
   const r = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      model: "gpt-image-2",
-      prompt,
-      size: "1024x1536",
-      quality,
-      moderation: "low",
-      n: 1,
-    }),
+    body: JSON.stringify({ model: "gpt-image-2", prompt, size: "1024x1536", quality, moderation: "low", n }),
   });
   if (!r.ok) {
     const detail = await r.text();
@@ -51,7 +48,25 @@ async function generateImage(apiKey: string, prompt: string, quality: string): P
     throw err;
   }
   const data = (await r.json()) as { data: { b64_json: string }[] };
-  return Buffer.from(data.data[0].b64_json, "base64");
+  return data.data.map((d) => Buffer.from(d.b64_json, "base64"));
+}
+
+// Best-of-N: generate N candidates, keep the highest vision-QC score vs intent.
+async function bestSlide(
+  apiKey: string,
+  prompt: string,
+  quality: string,
+  n: number,
+): Promise<{ bytes: Buffer; score: number }> {
+  const candidates = await generateImage(apiKey, prompt, quality, n);
+  const scored = await Promise.all(
+    candidates.map(async (bytes) => {
+      const { score } = await scoreImage(`data:image/png;base64,${bytes.toString("base64")}`, prompt);
+      return { bytes, score };
+    }),
+  );
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0];
 }
 
 export const generateCarousel = task({
@@ -87,6 +102,11 @@ export const generateCarousel = task({
       if (prior) {
         postId = prior._id;
       } else {
+        const tag = buildVariantTag({
+          concept: payload.title ?? payload.streamSlug,
+          hook: payload.hook ?? payload.caption,
+          variantId: ctx.run.id.slice(-8),
+        });
         postId = (await convex.mutation(api.posts.create, {
           streamSlug: payload.streamSlug,
           personaId: payload.personaId as Id<"personas"> | undefined,
@@ -97,6 +117,10 @@ export const generateCarousel = task({
           caption: payload.caption,
           slides: payload.prompts.map((p) => ({ prompt: p })),
           externalId: ctx.run.id,
+          variantTag: tag.variantTag,
+          concept: tag.concept,
+          hookId: tag.hookId,
+          variantId: tag.variantId,
         })) as Id<"posts">;
       }
       prompts = payload.prompts.map((p) => ({ prompt: p }));
@@ -125,38 +149,49 @@ export const generateCarousel = task({
     const { OPENAI_API_KEY } = await vaultService("openai");
     if (!OPENAI_API_KEY) throw new AbortTaskRunError("vault openai/OPENAI_API_KEY missing");
 
+    const bestOf = Math.max(1, Math.min(4, payload.bestOf ?? DEFAULT_BEST_OF));
+    let scoreSum = 0;
+    let scoreCount = 0;
+
     try {
       const slides: { r2Key: string; url: string; prompt: string; role?: string }[] = [];
       for (let i = 0; i < prompts.length; i++) {
         const base = lock + prompts[i].prompt;
-        logger.log(`slide ${i + 1}/${prompts.length}`);
-        let png: Buffer;
+        const quality = payload.quality ?? "medium";
+        logger.log(`slide ${i + 1}/${prompts.length} (best-of-${bestOf})`);
+        let picked: { bytes: Buffer; score: number };
         try {
-          png = await generateImage(OPENAI_API_KEY, base, payload.quality ?? "medium");
+          picked = await bestSlide(OPENAI_API_KEY, base, quality, bestOf);
         } catch (err) {
           // Safety rejections are usually prompt-phrasing flukes — one softened retry.
           if ((err as Error & { safety?: boolean }).safety) {
             logger.warn(`slide ${i + 1} safety-flagged, retrying with softened prompt`);
-            png = await generateImage(OPENAI_API_KEY, base + SAFETY_CLAUSE, payload.quality ?? "medium");
+            picked = await bestSlide(OPENAI_API_KEY, base + SAFETY_CLAUSE, quality, bestOf);
           } else {
             throw err;
           }
         }
+        scoreSum += picked.score;
+        scoreCount++;
+        logger.log(`slide ${i + 1} winner score ${picked.score}`);
         const r2Key = `posts/${postId}/slide-${i + 1}.png`;
-        await putObject(r2Key, png, "image/png");
+        await putObject(r2Key, picked.bytes, "image/png");
         const url = await presignedGet(r2Key);
         slides.push({ r2Key, url, prompt: base, role: prompts[i].role });
 
         await convex.mutation(api.spend.log, {
           day: today(),
           service: "openai",
-          model: "gpt-image-2",
-          costPence: EST_PENCE_PER_IMAGE,
+          model: `gpt-image-2 x${bestOf}`,
+          costPence: EST_PENCE_PER_IMAGE * bestOf,
           ref: postId,
         });
       }
 
       await convex.mutation(api.posts.attachResult, { id: postId, slides });
+      if (scoreCount > 0) {
+        await convex.mutation(api.posts.setQc, { id: postId, qcScore: Math.round(scoreSum / scoreCount) });
+      }
       logger.log("post ready", { postId });
       return { postId, slides: slides.length };
     } catch (err) {
