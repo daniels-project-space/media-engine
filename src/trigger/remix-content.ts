@@ -11,6 +11,7 @@ import path from "node:path";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { vaultService } from "../lib/vault";
+import { aiEnabled } from "../lib/ai-gate";
 import { putObject, presignedGet } from "../lib/storage";
 import { higgsGenerateAudio } from "../lib/higgsfield";
 
@@ -62,12 +63,14 @@ export const remixContent = task({
     const nCaptions = payload.captionVariants ?? 3;
     const isVideo = Boolean(slides[0].r2Key?.endsWith(".mp4"));
 
-    // 1) Caption/hook variants via DeepSeek.
+    // 1) Caption/hook variants via DeepSeek (skipped when AI is paused — falls back
+    //    to the source caption so remix still runs without LLM spend).
     const { OPENROUTER_API_KEY } = await vaultService("openrouter");
+    const aiOn = await aiEnabled();
     let captions: { hook: string; caption: string }[] = [
       { hook: source.hook ?? source.title ?? "", caption: source.caption ?? "" },
     ];
-    if (OPENROUTER_API_KEY) {
+    if (OPENROUTER_API_KEY && aiOn) {
       const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { authorization: `Bearer ${OPENROUTER_API_KEY}`, "content-type": "application/json" },

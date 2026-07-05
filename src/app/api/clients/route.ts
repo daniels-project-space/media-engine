@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { vaultService } from "@/lib/vault";
+import { aiEnabled } from "@/lib/ai-gate";
 import { presignedGet } from "@/lib/storage";
 
 export const maxDuration = 60;
@@ -60,6 +61,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (body.action === "draft-reply") {
+    if (!(await aiEnabled())) return NextResponse.json({ error: "AI drafting paused" }, { status: 200 });
     const { OPENROUTER_API_KEY } = await vaultService("openrouter");
     if (!OPENROUTER_API_KEY) return NextResponse.json({ error: "openrouter key missing" }, { status: 500 });
     const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {

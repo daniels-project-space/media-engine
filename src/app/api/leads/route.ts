@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { vaultService } from "@/lib/vault";
+import { aiEnabled } from "@/lib/ai-gate";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -13,6 +14,8 @@ const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL ?? "https://blissful-sardi
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as { action: "draft"; leadId: string };
   if (body.action !== "draft" || !body.leadId) return NextResponse.json({ error: "bad request" }, { status: 400 });
+
+  if (!(await aiEnabled())) return NextResponse.json({ paused: true, error: "AI drafting paused" });
 
   const convex = new ConvexHttpClient(CONVEX_URL);
   const lead = await convex.query(api.leads.get, { id: body.leadId as Id<"leads"> });

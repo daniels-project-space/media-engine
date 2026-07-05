@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { vaultService } from "../lib/vault";
+import { aiEnabled } from "../lib/ai-gate";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 
@@ -46,6 +47,7 @@ export const planWeek = task({
       .map((t) => `- (${t.category}) ${t.body.slice(0, 220)}`)
       .join("\n");
 
+    if (!(await aiEnabled())) throw new AbortTaskRunError("AI paused — re-enable in Settings to plan content");
     const { OPENROUTER_API_KEY } = await vaultService("openrouter");
     if (!OPENROUTER_API_KEY) throw new AbortTaskRunError("vault openrouter key missing");
 

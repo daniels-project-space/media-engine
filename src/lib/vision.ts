@@ -1,4 +1,5 @@
 import { vaultService } from "./vault";
+import { aiEnabled } from "./ai-gate";
 
 // Quality gate: score a rendered image against what it was supposed to be, so we
 // catch off-intent or low-quality renders (garbled text, wrong subject, artifacts)
@@ -7,6 +8,7 @@ export async function scoreImage(
   imageUrl: string,
   intent: string,
 ): Promise<{ ok: boolean; score: number; issues: string }> {
+  if (!(await aiEnabled())) return { ok: true, score: 100, issues: "AI paused — QC skipped" };
   const { OPENROUTER_API_KEY } = await vaultService("openrouter");
   if (!OPENROUTER_API_KEY) return { ok: true, score: 100, issues: "no QC key — skipped" };
 

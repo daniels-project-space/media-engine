@@ -9,6 +9,15 @@ export const all = query({
   },
 });
 
+// AI (OpenRouter) kill switch — default ON; set false to pause all LLM spend.
+export const aiEnabled = query({
+  args: {},
+  handler: async (ctx) => {
+    const row = await ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", "aiEnabled")).unique();
+    return row ? Boolean(row.value) : true;
+  },
+});
+
 export const set = mutation({
   args: { key: v.string(), value: v.any() },
   handler: async (ctx, { key, value }) => {

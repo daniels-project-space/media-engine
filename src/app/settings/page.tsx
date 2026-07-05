@@ -35,11 +35,29 @@ export default function Settings() {
   }
 
   const adsEnabled = Boolean(settings.adsEnabled ?? false);
+  const aiOn = settings.aiEnabled !== false; // default ON
 
   return (
     <div className="max-w-3xl">
       <h1 className="display font-extrabold text-4xl tracking-tight mb-2 rise">SETTINGS</h1>
-      <p className="text-ink-dim text-xs tracking-wider mb-8 rise">BUDGET · AUTONOMY · ADS · CONNECTED SERVICES</p>
+      <p className="text-ink-dim text-xs tracking-wider mb-8 rise">AI · BUDGET · AUTONOMY · ADS · CONNECTED SERVICES</p>
+
+      <section className={`border p-5 mb-6 rise ${aiOn ? "border-line bg-panel" : "border-onair/50 bg-onair/5"}`}>
+        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">AI / LLM SPEND (OPENROUTER)</h2>
+        <p className="text-ink-faint text-[11px] mb-4">
+          Master kill switch for all OpenRouter LLM calls — script planning, caption variants, vision
+          QC, and lead/client reply drafting. Off = zero LLM credit usage (renders and drafts fall back
+          or pause). Turning it back on resumes normal spend.
+        </p>
+        <button
+          onClick={() => setSetting({ key: "aiEnabled", value: !aiOn })}
+          className={`px-4 py-2 border text-xs tracking-widest transition ${
+            aiOn ? "border-signal text-signal hover:bg-signal hover:text-void" : "border-onair text-onair hover:bg-onair hover:text-void"
+          }`}
+        >
+          {aiOn ? "AI: ON — SPENDING" : "AI: PAUSED — NO LLM SPEND"}
+        </button>
+      </section>
 
       <section className="border border-line bg-panel p-5 mb-6 rise">
         <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">DAILY GENERATION BUDGET</h2>
