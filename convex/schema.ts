@@ -42,6 +42,7 @@ export default defineSchema({
     stage: v.union(v.literal("grow"), v.literal("brand_ready"), v.literal("monetized")),
     niche: v.optional(v.string()),
     streamSlug: v.optional(v.string()),
+    clientId: v.optional(v.id("clients")),
     createdAt: v.number(),
   }).index("by_handle", ["handle"]),
 
@@ -321,6 +322,7 @@ export default defineSchema({
     profile: v.optional(v.any()), // ProductProfile JSON from understand()
     personaId: v.optional(v.id("personas")),
     storeId: v.optional(v.id("stores")), // targeted commerce store (product-aware)
+    clientId: v.optional(v.id("clients")), // the account this campaign is for
     streamSlug: v.optional(v.string()),
     funnelSlug: v.optional(v.string()),
     discountCode: v.optional(v.string()),
@@ -535,6 +537,7 @@ export default defineSchema({
     platform: v.union(v.literal("shopify"), v.literal("woocommerce"), v.literal("manual")),
     domain: v.string(), // e.g. snuffloe.myshopify.com
     name: v.optional(v.string()),
+    clientId: v.optional(v.id("clients")),
     tokenService: v.optional(v.string()), // vault service holding the admin token
     tokenKey: v.optional(v.string()),
     currency: v.optional(v.string()),
@@ -661,4 +664,30 @@ export default defineSchema({
     status: v.union(v.literal("proposed"), v.literal("active"), v.literal("done"), v.literal("declined")),
     createdAt: v.number(),
   }).index("by_status", ["status"]),
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // AGENCY SPINE (added 2026-07-11) — clients/accounts. An account = a brand the
+  // agency runs; every campaign/store/persona hangs off it, and its brandKit is
+  // the ground truth all content is planned against. (Distinct from clientOrders,
+  // which is Fiverr order fulfilment.)
+  // ─────────────────────────────────────────────────────────────────────────
+  clients: defineTable({
+    name: v.string(),
+    slug: v.string(),
+    status: v.union(v.literal("prospect"), v.literal("active"), v.literal("paused"), v.literal("churned")),
+    industry: v.optional(v.string()),
+    website: v.optional(v.string()),
+    contactEmail: v.optional(v.string()),
+    goals: v.optional(v.string()),
+    // brandKit = { oneLiner, voice, tone, audience, valueProps[], differentiators[],
+    //   competitors[], keywords[], colors[], dos[], donts[] } — from onboarding.
+    brandKit: v.optional(v.any()),
+    referenceImageKeys: v.optional(v.array(v.string())),
+    retainerPence: v.optional(v.number()), // monthly retainer, if any
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_slug", ["slug"])
+    .index("by_status", ["status"]),
 });

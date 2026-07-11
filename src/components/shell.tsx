@@ -12,6 +12,7 @@ const NAV_GROUPS: { section: string; items: { href: string; code: string; label:
   {
     section: "Ad Agency",
     items: [
+      { href: "/accounts", code: "AC", label: "Accounts", hint: "clients & brand kits" },
       { href: "/launch", code: "GO", label: "Launch", hint: "brief → full campaign" },
       { href: "/campaigns", code: "CM", label: "Campaigns", hint: "plans & pacing" },
       { href: "/stores", code: "SH", label: "Stores", hint: "shopify products" },

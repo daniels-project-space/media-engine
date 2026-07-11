@@ -53,9 +53,11 @@ export async function runLaunch(campaignId: string): Promise<{ status: string; p
     ]);
     const personas = await cx.query(api.personas.list, {});
     const productContext = campaign.storeId ? await productContextFor(campaign.storeId) : undefined;
+    const client = campaign.clientId ? await cx.query(api.crm.get, { id: campaign.clientId }) : null;
     const plan = await strategise({
       profile,
       intelSummary,
+      brandKit: (client?.brandKit as Record<string, unknown>) ?? undefined,
       productContext,
       mode: campaign.mode,
       budgetPence: campaign.budgetPence,

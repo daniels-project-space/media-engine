@@ -40,6 +40,7 @@ export const create = mutation({
     objective: v.optional(v.string()),
     personaId: v.optional(v.id("personas")),
     storeId: v.optional(v.id("stores")),
+    clientId: v.optional(v.id("clients")),
   },
   handler: async (ctx, a) => {
     const now = Date.now();
@@ -57,6 +58,7 @@ export const create = mutation({
       objective: a.objective,
       personaId: a.personaId,
       storeId: a.storeId,
+      clientId: a.clientId,
       createdAt: now,
       updatedAt: now,
     });
@@ -91,6 +93,7 @@ export const patch = mutation({
     autonomy: v.optional(autonomyV),
     productName: v.optional(v.string()),
     storeId: v.optional(v.id("stores")),
+    clientId: v.optional(v.id("clients")),
     funnelSlug: v.optional(v.string()),
     discountCode: v.optional(v.string()),
     referenceImageKeys: v.optional(v.array(v.string())),
