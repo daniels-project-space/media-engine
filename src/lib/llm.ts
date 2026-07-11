@@ -85,11 +85,28 @@ async function resolveAuth(): Promise<Auth> {
   throw new Error("no Anthropic credential (subscription token or API key) available");
 }
 
-/** Raw text completion on Sonnet. Retries 429/5xx (subscription can be busy). */
+/** Raw text completion. Primary = Claude Sonnet (subscription); if that brain is
+ *  exhausted (429/error), fall back to OpenRouter so an autonomous run isn't
+ *  blocked by subscription contention. Dual-brain resilience. */
 export async function chat(opts: ChatOpts): Promise<string> {
   if (!(await aiEnabled())) {
     throw new Error("AI paused — re-enable in Settings to run the orchestrator");
   }
+  try {
+    return await anthropicChat(opts);
+  } catch (err) {
+    try {
+      const { OPENROUTER_API_KEY } = await vaultService("openrouter");
+      if (OPENROUTER_API_KEY) return await openrouterChat(opts, OPENROUTER_API_KEY);
+    } catch {
+      /* openrouter unavailable/empty — surface the primary error */
+    }
+    throw err;
+  }
+}
+
+// Primary brain: Claude Sonnet via the subscription.
+async function anthropicChat(opts: ChatOpts): Promise<string> {
   const { base, headers } = await resolveAuth();
   const body: Record<string, unknown> = {
     model: opts.model ?? MODEL,
@@ -123,6 +140,23 @@ export async function chat(opts: ChatOpts): Promise<string> {
     await new Promise((res) => setTimeout(res, retryAfter ? retryAfter * 1000 : backoff));
   }
   throw new Error(lastErr || "anthropic: exhausted retries");
+}
+
+// Fallback brain: OpenRouter (deepseek-v4-flash). Only reached if the subscription
+// path fails AND an OpenRouter key is present — so topping up OpenRouter makes the
+// engine run even while the Claude subscription is rate-limited.
+async function openrouterChat(opts: ChatOpts, key: string): Promise<string> {
+  const messages: { role: string; content: string }[] = [];
+  if (opts.system) messages.push({ role: "system", content: opts.system });
+  messages.push({ role: "user", content: opts.user });
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify({ model: "deepseek/deepseek-v4-flash", max_tokens: opts.maxTokens ?? 2400, messages }),
+  });
+  const data = (await r.json()) as { choices?: { message?: { content?: string } }[]; error?: { message?: string } };
+  if (!r.ok) throw new Error(`openrouter ${r.status}: ${data.error?.message ?? "failed"}`);
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 export async function chatJson<T = Record<string, unknown>>(opts: ChatOpts): Promise<T> {
