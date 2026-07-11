@@ -157,3 +157,30 @@ export const setQc = mutation({
     await ctx.db.patch(id, { qcScore });
   },
 });
+
+// Edit a post's copy (title / hook / caption / schedule) from the review UI.
+export const edit = mutation({
+  args: {
+    id: v.id("posts"),
+    title: v.optional(v.string()),
+    hook: v.optional(v.string()),
+    caption: v.optional(v.string()),
+    scheduledAt: v.optional(v.number()),
+  },
+  handler: async (ctx, { id, ...rest }) => {
+    const patch: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(rest)) if (val !== undefined) patch[k] = val;
+    await ctx.db.patch(id, patch);
+  },
+});
+
+// Bulk status change (approve/reject many at once) from the review queue.
+export const bulkSetStatus = mutation({
+  args: { ids: v.array(v.id("posts")), status: postStatus, reason: v.optional(v.string()) },
+  handler: async (ctx, { ids, status, reason }) => {
+    for (const id of ids) {
+      await ctx.db.patch(id, { status, ...(status === "rejected" && reason ? { error: reason } : {}) });
+    }
+    return { updated: ids.length };
+  },
+});

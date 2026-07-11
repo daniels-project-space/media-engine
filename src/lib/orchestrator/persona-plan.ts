@@ -36,6 +36,22 @@ export async function planPersonaWeek(payload: {
 
   if (!(await aiEnabled())) throw new Error("AI paused — re-enable in Settings to plan content");
 
+  // Content de-dup: pull this persona's recent posts so the planner doesn't
+  // repeat concepts/angles over time.
+  let recentTitles: string[] = [];
+  try {
+    const recent = await convex.query(api.posts.forPersona, { personaId: persona._id });
+    recentTitles = recent
+      .map((p) => p.title)
+      .filter((t): t is string => Boolean(t))
+      .slice(-40);
+  } catch {
+    /* no history yet */
+  }
+  const avoid = recentTitles.length
+    ? `\nAlready posted recently — do NOT repeat these concepts or angles: ${recentTitles.join("; ")}.`
+    : "";
+
   const templates = await convex.query(api.prompts.list, {});
   const captionRules = templates.find((t) => t.category === "caption")?.body ?? "";
   const realism = templates.find((t) => t.category === "realism_suffix" && t.name.startsWith("Realism"))?.body ?? "";
@@ -59,7 +75,7 @@ This persona is ${faceless ? "FACELESS — her face must never be shown, keep it
 Plan ${days * perDay} Instagram carousel posts (${perDay}/day for ${days} days, dayOffset 0..${days - 1}).
 Each post: 3-4 slides. ${modelSlideRule} Slides 2-3 role "niche_slide" = supporting lifestyle detail shots matching her niche (hands, objects, food, setups — no faces). Optional last slide role "cta_slide".
 Every slide prompt must be photorealistic-style and end with this realism instruction: "${realism}"
-Vary environments and activities across posts (permutation, no repeats). Hooks: short, curiosity-gap, max 8 words.
+Vary environments and activities across posts (permutation, no repeats). Hooks: short, curiosity-gap, max 8 words.${avoid}
 Caption rules: ${captionRules}
 
 Style examples of good slide prompts:
