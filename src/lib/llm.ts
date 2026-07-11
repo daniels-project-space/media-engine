@@ -99,8 +99,12 @@ export async function chat(opts: ChatOpts): Promise<string> {
   };
   if (opts.system) body.system = opts.system;
 
+  // The subscription is shared with interactive Claude use, so 429s are expected
+  // under contention. Be patient: honor retry-after, otherwise back off harder on
+  // 429 (rate-limit windows are seconds–minutes) so an autonomous run self-heals.
+  const attempts = Number(process.env.ME_LLM_RETRIES ?? 6);
   let lastErr = "";
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const r = await fetch(`${base}/v1/messages`, { method: "POST", headers, body: JSON.stringify(body) });
     if (r.ok) {
       const data = (await r.json()) as {
@@ -112,10 +116,11 @@ export async function chat(opts: ChatOpts): Promise<string> {
     }
     const errText = await r.text();
     lastErr = `anthropic ${r.status}: ${errText.slice(0, 200)}`;
-    // 429 (subscription busy) / 5xx are retryable; back off. 4xx else is fatal.
+    // 429 (subscription busy) / 5xx are retryable; 4xx else is fatal.
     if (r.status !== 429 && r.status < 500) throw new Error(lastErr);
     const retryAfter = Number(r.headers.get("retry-after")) || 0;
-    await new Promise((res) => setTimeout(res, retryAfter ? retryAfter * 1000 : 1500 * (attempt + 1)));
+    const backoff = r.status === 429 ? Math.min(45_000, 8_000 * (attempt + 1)) : 1_500 * (attempt + 1);
+    await new Promise((res) => setTimeout(res, retryAfter ? retryAfter * 1000 : backoff));
   }
   throw new Error(lastErr || "anthropic: exhausted retries");
 }
