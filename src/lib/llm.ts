@@ -85,27 +85,51 @@ async function resolveAuth(): Promise<Auth> {
   throw new Error("no Anthropic credential (subscription token or API key) available");
 }
 
-/** Raw text completion. Primary = Claude Sonnet (subscription); if that brain is
- *  exhausted (429/error), fall back to OpenRouter so an autonomous run isn't
- *  blocked by subscription contention. Dual-brain resilience. */
+/** Raw text completion on Claude Sonnet — the SUBSCRIPTION only. Primary path is
+ *  the Claude CLI (self-managing OAuth, and it isn't blocked when the raw API is
+ *  rate-limited); falls back to the subscription OAuth API for cloud runtimes
+ *  where the CLI isn't installed. No third-party providers. */
 export async function chat(opts: ChatOpts): Promise<string> {
   if (!(await aiEnabled())) {
     throw new Error("AI paused — re-enable in Settings to run the orchestrator");
   }
   try {
-    return await anthropicChat(opts);
-  } catch (err) {
+    return await cliChat(opts);
+  } catch (cliErr) {
     try {
-      const { OPENROUTER_API_KEY } = await vaultService("openrouter");
-      if (OPENROUTER_API_KEY) return await openrouterChat(opts, OPENROUTER_API_KEY);
-    } catch {
-      /* openrouter unavailable/empty — surface the primary error */
+      return await anthropicChat(opts);
+    } catch (apiErr) {
+      throw new Error(
+        `claude subscription unavailable — cli: ${cliErr instanceof Error ? cliErr.message : cliErr}; api: ${apiErr instanceof Error ? apiErr.message : apiErr}`,
+      );
     }
-    throw err;
   }
 }
 
-// Primary brain: Claude Sonnet via the subscription.
+// Primary: Claude subscription via the Claude CLI. Reads the prompt on stdin,
+// disables MCP/project config for a lean, fast completion. The CLI self-refreshes
+// the OAuth token, so nothing expires; no key management on the VPS.
+async function cliChat(opts: ChatOpts): Promise<string> {
+  const { execFile } = await import("node:child_process");
+  const bin = process.env.CLAUDE_CLI ?? "claude";
+  const prompt = (opts.system ? opts.system + "\n\n" : "") + opts.user;
+  return await new Promise<string>((resolve, reject) => {
+    const child = execFile(
+      bin,
+      ["-p", "--model", opts.model ?? MODEL, "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}'],
+      { cwd: "/tmp", timeout: 170_000, maxBuffer: 24 * 1024 * 1024, env: process.env },
+      (err, stdout, stderr) => {
+        if (err) return reject(new Error(`claude cli: ${(stderr || err.message || "").slice(0, 200)}`));
+        const out = (stdout || "").trim();
+        if (!out) return reject(new Error("claude cli: empty output"));
+        resolve(out);
+      },
+    );
+    child.stdin?.end(prompt);
+  });
+}
+
+// Fallback: Claude subscription via the OAuth API (for cloud runtimes without the CLI).
 async function anthropicChat(opts: ChatOpts): Promise<string> {
   const { base, headers } = await resolveAuth();
   const body: Record<string, unknown> = {
@@ -140,23 +164,6 @@ async function anthropicChat(opts: ChatOpts): Promise<string> {
     await new Promise((res) => setTimeout(res, retryAfter ? retryAfter * 1000 : backoff));
   }
   throw new Error(lastErr || "anthropic: exhausted retries");
-}
-
-// Fallback brain: OpenRouter (deepseek-v4-flash). Only reached if the subscription
-// path fails AND an OpenRouter key is present — so topping up OpenRouter makes the
-// engine run even while the Claude subscription is rate-limited.
-async function openrouterChat(opts: ChatOpts, key: string): Promise<string> {
-  const messages: { role: string; content: string }[] = [];
-  if (opts.system) messages.push({ role: "system", content: opts.system });
-  messages.push({ role: "user", content: opts.user });
-  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-    body: JSON.stringify({ model: "deepseek/deepseek-v4-flash", max_tokens: opts.maxTokens ?? 2400, messages }),
-  });
-  const data = (await r.json()) as { choices?: { message?: { content?: string } }[]; error?: { message?: string } };
-  if (!r.ok) throw new Error(`openrouter ${r.status}: ${data.error?.message ?? "failed"}`);
-  return data.choices?.[0]?.message?.content ?? "";
 }
 
 export async function chatJson<T = Record<string, unknown>>(opts: ChatOpts): Promise<T> {
