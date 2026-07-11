@@ -280,4 +280,247 @@ export default defineSchema({
     ref: v.optional(v.string()),
     ts: v.number(),
   }).index("by_day", ["day"]),
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // AD-AGENCY SPINE (added 2026-07-11) — orchestration, funnels, intel, registry.
+  // Everything below is reasoning/infra: no asset is rendered by these tables.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // A campaign = one product/app being marketed. The core object Jarvis creates
+  // from a natural-language brief. `plan` holds the generated strategy JSON.
+  campaigns: defineTable({
+    name: v.string(),
+    brief: v.string(), // the raw natural-language ask
+    productUrl: v.optional(v.string()),
+    productName: v.optional(v.string()),
+    category: v.union(
+      v.literal("app_launch"),
+      v.literal("ecommerce"),
+      v.literal("fiverr_service"),
+      v.literal("personal_brand"),
+      v.literal("saas"),
+      v.literal("content"),
+      v.literal("other"),
+    ),
+    mode: v.union(v.literal("free"), v.literal("paid")),
+    budgetPence: v.number(), // hard cap for paid channels; 0 in free mode
+    spentPence: v.number(),
+    autonomy: v.union(v.literal("manual"), v.literal("assist"), v.literal("auto")),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("researching"),
+      v.literal("planned"),
+      v.literal("awaiting_approval"),
+      v.literal("live"),
+      v.literal("paused"),
+      v.literal("done"),
+      v.literal("failed"),
+    ),
+    objective: v.optional(v.string()), // installs | signups | sales | awareness
+    plan: v.optional(v.any()), // CampaignPlan JSON from the strategist
+    profile: v.optional(v.any()), // ProductProfile JSON from understand()
+    personaId: v.optional(v.id("personas")),
+    streamSlug: v.optional(v.string()),
+    funnelSlug: v.optional(v.string()),
+    discountCode: v.optional(v.string()),
+    referenceImageKeys: v.optional(v.array(v.string())), // R2 keys pulled from the product URL
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_status", ["status"]),
+
+  // The action DAG for a campaign — one row per concrete step the engine will run.
+  campaignSteps: defineTable({
+    campaignId: v.id("campaigns"),
+    order: v.number(),
+    kind: v.union(
+      v.literal("research"),
+      v.literal("understand"),
+      v.literal("strategy"),
+      v.literal("build_funnel"),
+      v.literal("create_discount"),
+      v.literal("schedule_posts"),
+      v.literal("cold_email"),
+      v.literal("influencer_brief"),
+      v.literal("community_post"),
+      v.literal("analytics_check"),
+      v.literal("adjust"),
+    ),
+    channel: v.optional(v.string()), // instagram | x | facebook | reddit | email | ...
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("done"),
+      v.literal("failed"),
+      v.literal("skipped"),
+      v.literal("blocked"), // needs a missing key or human approval
+    ),
+    paid: v.boolean(), // true = counts against paid budget
+    estCostPence: v.optional(v.number()),
+    costPence: v.optional(v.number()),
+    scheduledAt: v.optional(v.number()),
+    payload: v.optional(v.any()),
+    result: v.optional(v.any()),
+    dryRun: v.optional(v.boolean()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_campaign", ["campaignId"])
+    .index("by_status", ["status"]),
+
+  // DB-driven landing pages / funnels. `/f/[slug]` renders straight from a row —
+  // no page is generated as an asset; the agent writes structured copy + refs.
+  funnels: defineTable({
+    slug: v.string(),
+    campaignId: v.optional(v.id("campaigns")),
+    productName: v.string(),
+    headline: v.string(),
+    subhead: v.optional(v.string()),
+    valueProps: v.array(v.object({ header: v.string(), body: v.string() })),
+    ctaText: v.string(),
+    ctaUrl: v.string(),
+    discountCode: v.optional(v.string()),
+    discountBlurb: v.optional(v.string()),
+    heroImageKey: v.optional(v.string()), // R2 key (pulled reference still, not rendered)
+    referenceImageKeys: v.optional(v.array(v.string())),
+    sections: v.optional(v.any()), // extra structured blocks (faq, proof, etc.)
+    theme: v.optional(v.string()),
+    captureEmail: v.optional(v.boolean()),
+    published: v.boolean(),
+    views: v.number(),
+    conversions: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_slug", ["slug"])
+    .index("by_campaign", ["campaignId"]),
+
+  // Discount / coupon codes — provider-backed (Stripe promotion_codes) or manual.
+  discountCodes: defineTable({
+    code: v.string(),
+    campaignId: v.optional(v.id("campaigns")),
+    provider: v.union(v.literal("stripe"), v.literal("shopify"), v.literal("manual")),
+    kind: v.union(v.literal("percent"), v.literal("amount")),
+    percentOff: v.optional(v.number()),
+    amountOffPence: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    externalId: v.optional(v.string()), // provider id
+    maxRedemptions: v.optional(v.number()),
+    redemptions: v.number(),
+    expiresAt: v.optional(v.number()),
+    status: v.union(v.literal("active"), v.literal("expired"), v.literal("disabled")),
+    createdAt: v.number(),
+  })
+    .index("by_code", ["code"])
+    .index("by_campaign", ["campaignId"]),
+
+  // Influencer CRM — sourced targets and outreach state per campaign.
+  influencers: defineTable({
+    handle: v.string(),
+    platform: v.string(),
+    niche: v.optional(v.string()),
+    followers: v.optional(v.number()),
+    engagementRate: v.optional(v.number()),
+    email: v.optional(v.string()),
+    campaignId: v.optional(v.id("campaigns")),
+    contactStatus: v.union(
+      v.literal("sourced"),
+      v.literal("contacted"),
+      v.literal("negotiating"),
+      v.literal("agreed"),
+      v.literal("delivered"),
+      v.literal("declined"),
+    ),
+    briefKey: v.optional(v.string()), // R2 key of the brief/asset pack handed over
+    rateNote: v.optional(v.string()),
+    source: v.optional(v.string()),
+    meta: v.optional(v.any()),
+    createdAt: v.number(),
+  })
+    .index("by_niche", ["niche"])
+    .index("by_campaign", ["campaignId"])
+    .index("by_status", ["contactStatus"]),
+
+  // Model / LoRA registry — view + add trained looks; personas reference these.
+  models: defineTable({
+    name: v.string(),
+    kind: v.union(v.literal("lora"), v.literal("checkpoint"), v.literal("base")),
+    provider: v.union(
+      v.literal("fal"),
+      v.literal("higgsfield"),
+      v.literal("replicate"),
+      v.literal("local"),
+      v.literal("other"),
+    ),
+    url: v.optional(v.string()),
+    trigger: v.optional(v.string()), // trigger word
+    baseModel: v.optional(v.string()),
+    personaId: v.optional(v.id("personas")),
+    previewKeys: v.optional(v.array(v.string())), // R2 keys of existing sample stills
+    tags: v.optional(v.array(v.string())),
+    notes: v.optional(v.string()),
+    status: v.union(v.literal("active"), v.literal("archived"), v.literal("training")),
+    createdAt: v.number(),
+  })
+    .index("by_kind", ["kind"])
+    .index("by_persona", ["personaId"]),
+
+  // Marketing playbooks — the reusable "how to market X, what to say, what works".
+  playbooks: defineTable({
+    slug: v.string(),
+    category: v.union(
+      v.literal("cold_email"),
+      v.literal("fiverr_niche"),
+      v.literal("branding"),
+      v.literal("ig_influencer_funnel"),
+      v.literal("app_launch"),
+      v.literal("community"),
+      v.literal("seo"),
+    ),
+    title: v.string(),
+    channel: v.optional(v.string()),
+    description: v.string(),
+    structure: v.any(), // funnel stages / cadence / sequence
+    templates: v.array(v.object({ label: v.string(), body: v.string() })),
+    bestPractices: v.array(v.string()),
+    kpis: v.array(v.string()),
+    defaultBudgetSplit: v.optional(v.any()),
+    createdAt: v.number(),
+  }).index("by_category", ["category"]),
+
+  // Market/SEO intel gathered per campaign.
+  intelReports: defineTable({
+    campaignId: v.optional(v.id("campaigns")),
+    kind: v.union(
+      v.literal("seo"),
+      v.literal("competitor"),
+      v.literal("positioning"),
+      v.literal("trend"),
+      v.literal("audience"),
+    ),
+    query: v.optional(v.string()),
+    data: v.any(),
+    source: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_campaign", ["campaignId"]),
+
+  // Real engagement snapshots — replaces the deterministic fake like counts.
+  engagement: defineTable({
+    postId: v.optional(v.id("posts")),
+    campaignId: v.optional(v.id("campaigns")),
+    platform: v.string(),
+    externalId: v.optional(v.string()),
+    impressions: v.optional(v.number()),
+    reach: v.optional(v.number()),
+    likes: v.optional(v.number()),
+    comments: v.optional(v.number()),
+    shares: v.optional(v.number()),
+    saves: v.optional(v.number()),
+    clicks: v.optional(v.number()),
+    followersDelta: v.optional(v.number()),
+    raw: v.optional(v.any()),
+    ts: v.number(),
+  })
+    .index("by_post", ["postId"])
+    .index("by_campaign", ["campaignId"])
+    .index("by_platform", ["platform"]),
 });

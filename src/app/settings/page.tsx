@@ -42,6 +42,49 @@ export default function Settings() {
       <h1 className="display font-extrabold text-4xl tracking-tight mb-2 rise">SETTINGS</h1>
       <p className="text-ink-dim text-xs tracking-wider mb-8 rise">AI · BUDGET · AUTONOMY · ADS · CONNECTED SERVICES</p>
 
+      {(() => {
+        const liveMode = Boolean(settings.liveMode);
+        const provider = (settings.socialProvider as string) ?? "ayrshare";
+        return (
+          <section className={`border p-5 mb-6 rise ${liveMode ? "border-onair/50 bg-onair/5" : "border-line bg-panel"}`}>
+            <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">AD AGENCY — LIVE MODE</h2>
+            <p className="text-ink-faint text-[11px] mb-4">
+              Master switch for the campaign engine&apos;s OUTWARD actions (posting, emailing, minting discounts,
+              influencer sends). OFF = every send is SIMULATED (dry-run) and logged — safe to plan and preview.
+              ON = real calls fire, but only where the matching API key is in the vault. Per-campaign free/paid mode
+              and budget caps still apply on top of this.
+            </p>
+            <button
+              onClick={() => setSetting({ key: "liveMode", value: !liveMode })}
+              className={`px-4 py-2 border text-xs tracking-widest transition ${
+                liveMode ? "border-onair text-onair hover:bg-onair hover:text-void" : "border-signal text-signal hover:bg-signal hover:text-void"
+              }`}
+            >
+              {liveMode ? "LIVE — REAL SENDS FIRE" : "DRY-RUN — SENDS SIMULATED"}
+            </button>
+            <div className="mt-4">
+              <div className="text-[10px] tracking-[0.25em] text-ink-faint uppercase mb-2">Social provider</div>
+              <div className="flex gap-2">
+                {["ayrshare", "postiz", "graph"].map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setSetting({ key: "socialProvider", value: p })}
+                    className={`px-3 py-1.5 border text-[10px] tracking-widest ${
+                      provider === p ? "border-signal text-signal" : "border-line-2 text-ink-faint hover:text-ink"
+                    }`}
+                  >
+                    {p.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-ink-faint mt-2">
+                ayrshare = hosted (1 key) · postiz = self-host (POSTIZ_URL + key) · graph = native Instagram only
+              </p>
+            </div>
+          </section>
+        );
+      })()}
+
       <section className={`border p-5 mb-6 rise ${aiOn ? "border-line bg-panel" : "border-onair/50 bg-onair/5"}`}>
         <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">AI / LLM SPEND (OPENROUTER)</h2>
         <p className="text-ink-faint text-[11px] mb-4">

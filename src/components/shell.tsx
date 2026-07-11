@@ -10,6 +10,14 @@ const NAV_GROUPS: { section: string; items: { href: string; code: string; label:
     items: [{ href: "/", code: "MC", label: "Dashboard", hint: "streams & spend" }],
   },
   {
+    section: "Ad Agency",
+    items: [
+      { href: "/launch", code: "GO", label: "Launch", hint: "brief → full campaign" },
+      { href: "/campaigns", code: "CM", label: "Campaigns", hint: "plans & pacing" },
+      { href: "/models", code: "ML", label: "Models & LoRAs", hint: "visual registry" },
+    ],
+  },
+  {
     section: "Instagram Girls",
     items: [
       { href: "/personas", code: "IG", label: "Personas", hint: "AI models & feeds" },
@@ -63,7 +71,7 @@ function Timecode() {
 export default function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   // Public pages (link-in-bio, service landing pages) render without engine chrome.
-  if (path.startsWith("/p/") || path.startsWith("/services")) return <>{children}</>;
+  if (path.startsWith("/p/") || path.startsWith("/services") || path.startsWith("/f/")) return <>{children}</>;
   return (
     <div className="flex min-h-screen">
       <aside className="w-16 md:w-56 shrink-0 border-r border-line bg-panel/60 flex flex-col">
