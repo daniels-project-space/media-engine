@@ -3,6 +3,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { publish } from "../integrations/social";
 import { coldSequence } from "../integrations/email";
+import { discover } from "../integrations/influence";
 import type { CampaignPlan, ContentItem } from "./types";
 
 const CONVEX_URL =
@@ -40,7 +41,7 @@ export async function tickCampaigns(limit = 20): Promise<{ processed: number; lo
     await cx.mutation(api.campaigns.setStepStatus, { id: step._id, status: "running" });
     const plan = (campaign.plan ?? {}) as CampaignPlan;
     try {
-      const res = await executeStep(step, plan);
+      const res = await executeStep(step, plan, cx, campaign._id);
       const costPence = res.dryRun ? 0 : step.estCostPence ?? 0;
       await cx.mutation(api.campaigns.setStepStatus, {
         id: step._id,
@@ -75,7 +76,12 @@ export async function tickCampaigns(limit = 20): Promise<{ processed: number; lo
 
 type StepDoc = { _id: Id<"campaignSteps">; order: number; kind: string; channel?: string; paid: boolean; estCostPence?: number; payload?: unknown };
 
-async function executeStep(step: StepDoc, plan: CampaignPlan): Promise<{ ok: boolean; dryRun: boolean; detail: string; result?: unknown }> {
+async function executeStep(
+  step: StepDoc,
+  plan: CampaignPlan,
+  cx: ConvexHttpClient,
+  campaignId: Id<"campaigns">,
+): Promise<{ ok: boolean; dryRun: boolean; detail: string; result?: unknown }> {
   switch (step.kind) {
     case "build_funnel":
     case "create_discount":
@@ -117,13 +123,32 @@ async function executeStep(step: StepDoc, plan: CampaignPlan): Promise<{ ok: boo
       return { ok: r.ok, dryRun: r.dryRun, detail: r.detail, result: r.data };
     }
 
-    case "influencer_brief":
+    case "influencer_brief": {
+      const niche = plan.influencerBrief?.targetNiche ?? step.channel ?? "";
+      const found = await discover(niche, "instagram", { limit: 15 });
+      let sourced = 0;
+      for (const c of found.data.slice(0, 15)) {
+        await cx.mutation(api.influencers.add, {
+          handle: c.handle,
+          platform: c.platform,
+          niche,
+          followers: c.followers,
+          engagementRate: c.engagementRate,
+          email: c.email,
+          campaignId,
+          source: found.source,
+        });
+        sourced++;
+      }
       return {
         ok: true,
-        dryRun: true,
-        detail: `brief ready: ${plan.influencerBrief?.ask ?? "n/a"} (discovery needs a Modash key to auto-source targets)`,
-        result: plan.influencerBrief,
+        dryRun: !found.configured,
+        detail: found.configured
+          ? `sourced ${sourced} creator(s) in "${niche}"; brief: ${plan.influencerBrief?.ask ?? "n/a"}`
+          : `brief ready: ${plan.influencerBrief?.ask ?? "n/a"} (${found.note})`,
+        result: { sourced, brief: plan.influencerBrief },
       };
+    }
 
     case "analytics_check":
       return { ok: true, dryRun: true, detail: "engagement pull scheduled (live platform insights ingest when a token is linked)" };
