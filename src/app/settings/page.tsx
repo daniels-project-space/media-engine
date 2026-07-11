@@ -86,11 +86,11 @@ export default function Settings() {
       })()}
 
       <section className={`border p-5 mb-6 rise ${aiOn ? "border-line bg-panel" : "border-onair/50 bg-onair/5"}`}>
-        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">AI / LLM SPEND (OPENROUTER)</h2>
+        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">AI / LLM (CLAUDE SUBSCRIPTION)</h2>
         <p className="text-ink-faint text-[11px] mb-4">
-          Master kill switch for all OpenRouter LLM calls — script planning, caption variants, vision
-          QC, and lead/client reply drafting. Off = zero LLM credit usage (renders and drafts fall back
-          or pause). Turning it back on resumes normal spend.
+          Master kill switch for all Claude LLM calls (via your subscription) — script planning, caption
+          variants, vision QC, and lead/client reply drafting. Off = no LLM calls (renders and drafts fall
+          back or pause). Turning it back on resumes normal operation.
         </p>
         <button
           onClick={() => setSetting({ key: "aiEnabled", value: !aiOn })}

@@ -2,7 +2,7 @@ import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { vaultService } from "../lib/vault";
+import { chat } from "../lib/llm";
 import { aiEnabled } from "../lib/ai-gate";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -40,30 +40,17 @@ export const planAdScript = task({
     const n = Math.max(2, Math.min(5, payload.clipCount ?? 3));
     const secs = Math.max(4, Math.min(12, payload.secondsPerShot ?? 5));
     if (!(await aiEnabled())) throw new AbortTaskRunError("AI paused — re-enable in Settings to generate scripts");
-    const { OPENROUTER_API_KEY } = await vaultService("openrouter");
-    if (!OPENROUTER_API_KEY) throw new AbortTaskRunError("openrouter key missing");
 
     const sys = `You are a senior UGC ad director. Turn a product brief into a ${n}-shot vertical (9:16) ad script.
 Structure the shots as an arc: shot 1 = HOOK that stops the scroll in the first 3 seconds; middle shot(s) = DEMO showing the product in use / its benefit; last shot = PAYOFF + clear CTA.
 Rules: native, authentic, "shot on iPhone" realism — NOT polished corporate. Keep the product accurate and central. onText = a SHORT punchy on-screen caption (max 6 words), like a real UGC creator would add.
 Return STRICT JSON only: {"hook": string, "caption": string, "shots": [{"imagePrompt": string, "motion": string, "onText": string}]}. Exactly ${n} shots. imagePrompt = what the frame shows (composition, subject, setting, lighting). motion = camera/subject movement for the video.`;
 
-    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { authorization: `Bearer ${OPENROUTER_API_KEY}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "deepseek/deepseek-v4-flash",
-        max_tokens: 1200,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: sys },
-          { role: "user", content: `Brand/buyer: ${project.buyer}\nBrief: ${project.brief}${payload.productImageUrl ? "\n(A real product photo is provided — the demo shot will use it.)" : ""}` },
-        ],
-      }),
+    const content = await chat({
+      system: sys,
+      user: `Brand/buyer: ${project.buyer}\nBrief: ${project.brief}${payload.productImageUrl ? "\n(A real product photo is provided — the demo shot will use it.)" : ""}`,
+      maxTokens: 1200,
     });
-    if (!r.ok) throw new Error(`openrouter HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
-    const d = (await r.json()) as { choices: { message: { content: string } }[] };
-    const content = d.choices[0].message.content ?? "";
     // DeepSeek sometimes wraps JSON in ```fences``` or a preamble — extract the object.
     let parsed: { hook?: string; caption?: string; shots?: { imagePrompt: string; motion: string; onText?: string }[] };
     const jsonStr = (content.match(/\{[\s\S]*\}/) ?? [content])[0];

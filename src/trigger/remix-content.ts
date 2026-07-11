@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { vaultService } from "../lib/vault";
+import { chat } from "../lib/llm";
 import { aiEnabled } from "../lib/ai-gate";
 import { putObject, presignedGet } from "../lib/storage";
 import { higgsGenerateAudio } from "../lib/higgsfield";
@@ -65,37 +65,22 @@ export const remixContent = task({
 
     // 1) Caption/hook variants via DeepSeek (skipped when AI is paused — falls back
     //    to the source caption so remix still runs without LLM spend).
-    const { OPENROUTER_API_KEY } = await vaultService("openrouter");
     const aiOn = await aiEnabled();
     let captions: { hook: string; caption: string }[] = [
       { hook: source.hook ?? source.title ?? "", caption: source.caption ?? "" },
     ];
-    if (OPENROUTER_API_KEY && aiOn) {
-      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { authorization: `Bearer ${OPENROUTER_API_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          model: "deepseek/deepseek-v4-flash",
-          max_tokens: 1500,
-          messages: [
-            { role: "system", content: "Reply ONLY with a JSON array. No markdown." },
-            {
-              role: "user",
-              content: `Rewrite this ad into ${nCaptions} distinct scroll-stopping variants, each with a different angle/hook. Keep the product accurate. NO hashtags, keyword-rich caption, first line is a hook, end with a question CTA.\nOriginal: ${source.caption ?? source.title}\nJSON: [{"hook": "...", "caption": "..."}]`,
-            },
-          ],
-        }),
-      });
-      if (r.ok) {
-        try {
-          const d = (await r.json()) as { choices: { message: { content: string } }[] };
-          let t = d.choices[0].message.content.trim();
-          t = t.slice(t.indexOf("["), t.lastIndexOf("]") + 1);
-          const parsed = JSON.parse(t) as { hook: string; caption: string }[];
-          if (parsed.length) captions = parsed.slice(0, nCaptions);
-        } catch {
-          logger.warn("caption remix parse failed — using original");
-        }
+    if (aiOn) {
+      try {
+        const t = await chat({
+          system: "Reply ONLY with a JSON array. No markdown.",
+          user: `Rewrite this ad into ${nCaptions} distinct scroll-stopping variants, each with a different angle/hook. Keep the product accurate. NO hashtags, keyword-rich caption, first line is a hook, end with a question CTA.\nOriginal: ${source.caption ?? source.title}\nJSON: [{"hook": "...", "caption": "..."}]`,
+          maxTokens: 1500,
+        });
+        const slice = t.slice(t.indexOf("["), t.lastIndexOf("]") + 1);
+        const parsed = JSON.parse(slice) as { hook: string; caption: string }[];
+        if (parsed.length) captions = parsed.slice(0, nCaptions);
+      } catch {
+        logger.warn("caption remix failed — using original");
       }
     }
 

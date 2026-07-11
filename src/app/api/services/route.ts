@@ -5,7 +5,7 @@ export const maxDuration = 30;
 
 const CHECKS: { service: string; key?: string; label: string; role: string }[] = [
   { service: "openai", key: "OPENAI_API_KEY", label: "OpenAI GPT Image 2", role: "Image generation" },
-  { service: "openrouter", key: "OPENROUTER_API_KEY", label: "OpenRouter DeepSeek", role: "Planning & captions" },
+  { service: "anthropic", key: "ANTHROPIC_AUTH_TOKEN", label: "Claude subscription (CLI)", role: "Planning, captions & QC" },
   { service: "fal", label: "fal.ai", role: "Video + persona LoRAs" },
   { service: "elevenlabs", label: "ElevenLabs", role: "Voiceover (shorts)" },
   { service: "resend", label: "Resend", role: "Email sending" },
