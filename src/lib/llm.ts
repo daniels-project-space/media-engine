@@ -53,6 +53,15 @@ async function localSubscriptionToken(): Promise<string | undefined> {
   }
 }
 
+/** Raw Anthropic creds (for the Mastra AI-SDK provider to reuse the same auth). */
+export async function anthropicCreds(): Promise<{ base: string; token?: string; apiKey?: string }> {
+  const v = await tryVault("anthropic");
+  const base = (v.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/$/, "");
+  const token = v.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_AUTH_TOKEN ?? (await localSubscriptionToken());
+  const apiKey = v.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  return { base, token, apiKey };
+}
+
 type Auth = { base: string; headers: Record<string, string> };
 
 async function resolveAuth(): Promise<Auth> {

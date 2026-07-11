@@ -320,6 +320,7 @@ export default defineSchema({
     plan: v.optional(v.any()), // CampaignPlan JSON from the strategist
     profile: v.optional(v.any()), // ProductProfile JSON from understand()
     personaId: v.optional(v.id("personas")),
+    storeId: v.optional(v.id("stores")), // targeted commerce store (product-aware)
     streamSlug: v.optional(v.string()),
     funnelSlug: v.optional(v.string()),
     discountCode: v.optional(v.string()),
@@ -523,4 +524,141 @@ export default defineSchema({
     .index("by_post", ["postId"])
     .index("by_campaign", ["campaignId"])
     .index("by_platform", ["platform"]),
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // COMMERCE + ASSET-REUSE GRAPH (added 2026-07-11) — product-aware planning,
+  // asset lineage, cross-marketing. Infra/reasoning only, no rendering.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // A connected commerce store (Shopify). Products sync into `products`.
+  stores: defineTable({
+    platform: v.union(v.literal("shopify"), v.literal("woocommerce"), v.literal("manual")),
+    domain: v.string(), // e.g. snuffloe.myshopify.com
+    name: v.optional(v.string()),
+    tokenService: v.optional(v.string()), // vault service holding the admin token
+    tokenKey: v.optional(v.string()),
+    currency: v.optional(v.string()),
+    meta: v.optional(v.any()),
+    lastSyncedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_domain", ["domain"]),
+
+  // A product pulled from a store. `channelPlan` is the product-aware suggestion
+  // (which channels/formats fit this product) computed at sync time.
+  products: defineTable({
+    storeId: v.id("stores"),
+    externalId: v.string(),
+    title: v.string(),
+    handle: v.optional(v.string()),
+    productType: v.optional(v.string()),
+    tags: v.optional(v.array(v.string())),
+    pricePence: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    imageUrls: v.optional(v.array(v.string())),
+    imageKeys: v.optional(v.array(v.string())), // mirrored to R2
+    collections: v.optional(v.array(v.string())),
+    status: v.optional(v.string()),
+    channelPlan: v.optional(v.any()), // { channels:[], formats:[], angle, aovBand }
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_store", ["storeId"])
+    .index("by_handle", ["handle"]),
+
+  // Canonical asset registry — every marketing image/video the engine knows
+  // about, so it can be reused, handed to influencers, or repurposed. The node
+  // in the reuse graph; edges live in `assetDerivations`, placements in `placements`.
+  assets: defineTable({
+    r2Key: v.optional(v.string()),
+    url: v.optional(v.string()),
+    kind: v.union(v.literal("image"), v.literal("video"), v.literal("clip"), v.literal("logo"), v.literal("screenshot")),
+    source: v.union(v.literal("generated"), v.literal("pulled"), v.literal("uploaded"), v.literal("derived")),
+    sourcePostId: v.optional(v.id("posts")),
+    campaignId: v.optional(v.id("campaigns")),
+    personaId: v.optional(v.id("personas")),
+    productId: v.optional(v.id("products")),
+    modelId: v.optional(v.id("models")),
+    tags: v.optional(v.array(v.string())),
+    // Rights so we know what we may reuse where.
+    rights: v.optional(v.union(v.literal("owned"), v.literal("licensed"), v.literal("creator"), v.literal("stock"))),
+    license: v.optional(v.any()), // { scope, platforms:[], expiresAt }
+    aspect: v.optional(v.string()), // "1:1" | "9:16" | "16:9" | ...
+    width: v.optional(v.number()),
+    height: v.optional(v.number()),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_campaign", ["campaignId"])
+    .index("by_persona", ["personaId"])
+    .index("by_kind", ["kind"]),
+
+  // DERIVED_FROM edges — one asset repurposed into another (reframe, recaption,
+  // cameo insert, remix). Supports the "reuse a marketing image with a cameo and
+  // upload to TikTok" flow: original → derived variant → placement.
+  assetDerivations: defineTable({
+    parentAssetId: v.id("assets"),
+    childAssetId: v.id("assets"),
+    op: v.union(
+      v.literal("reframe"),
+      v.literal("recaption"),
+      v.literal("cameo_insert"),
+      v.literal("repurpose"),
+      v.literal("remix"),
+      v.literal("crop"),
+    ),
+    params: v.optional(v.any()),
+    createdAt: v.number(),
+  })
+    .index("by_parent", ["parentAssetId"])
+    .index("by_child", ["childAssetId"]),
+
+  // Where an asset was (or will be) posted — 1 asset → many placements across
+  // platforms/brands, each with its own tracking + discount code.
+  placements: defineTable({
+    assetId: v.id("assets"),
+    campaignId: v.optional(v.id("campaigns")),
+    platform: v.string(), // tiktok | instagram | youtube | x | ...
+    channel: v.optional(v.string()),
+    persona: v.optional(v.string()),
+    influencerId: v.optional(v.id("influencers")),
+    trackingCode: v.optional(v.string()),
+    discountCode: v.optional(v.string()),
+    status: v.union(
+      v.literal("planned"),
+      v.literal("handed_off"),
+      v.literal("scheduled"),
+      v.literal("posted"),
+      v.literal("failed"),
+    ),
+    externalId: v.optional(v.string()),
+    postId: v.optional(v.id("posts")),
+    scheduledAt: v.optional(v.number()),
+    postedAt: v.optional(v.number()),
+    result: v.optional(v.any()),
+    createdAt: v.number(),
+  })
+    .index("by_asset", ["assetId"])
+    .index("by_campaign", ["campaignId"])
+    .index("by_status", ["status"]),
+
+  // Cross-marketing agreements across the portfolio (bundles, shoutout swaps,
+  // referrals, shared retargeting, UGC syndication).
+  crossPromotions: defineTable({
+    kind: v.union(
+      v.literal("bundle"),
+      v.literal("shoutout_swap"),
+      v.literal("referral"),
+      v.literal("retarget"),
+      v.literal("syndication"),
+    ),
+    campaignIds: v.optional(v.array(v.id("campaigns"))),
+    productIds: v.optional(v.array(v.id("products"))),
+    personaIds: v.optional(v.array(v.id("personas"))),
+    terms: v.optional(v.any()),
+    sharedAudienceKey: v.optional(v.string()),
+    referralCode: v.optional(v.string()),
+    rationale: v.optional(v.string()),
+    status: v.union(v.literal("proposed"), v.literal("active"), v.literal("done"), v.literal("declined")),
+    createdAt: v.number(),
+  }).index("by_status", ["status"]),
 });

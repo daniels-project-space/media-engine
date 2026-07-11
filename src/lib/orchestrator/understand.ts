@@ -1,4 +1,4 @@
-import { chatJson, MODELS } from "../llm";
+import { agentJson } from "../../mastra/brain";
 import { pullBrand } from "../integrations/assets";
 import type { ProductProfile } from "./types";
 
@@ -43,12 +43,10 @@ export async function understand(input: { brief: string; productUrl?: string }):
     ].join("\n");
   }
 
-  const profile = await chatJson<ProductProfile>({
-    model: MODELS.plan,
+  const profile = await agentJson<ProductProfile>("product_analyst", {
     system:
       "You are a senior brand strategist at an AI ad agency. Given a marketing brief and pulled brand material, produce a precise, honest positioning profile. Return ONLY a JSON object.",
     user: `BRIEF FROM CLIENT:\n${input.brief}\n\nPULLED BRAND MATERIAL:\n${brandBlock}\n\nReturn a JSON object with EXACTLY these keys:\n{\n  "productName": string,\n  "oneLiner": string,\n  "category": one of "app_launch"|"ecommerce"|"fiverr_service"|"personal_brand"|"saas"|"content"|"other",\n  "audience": string (ideal customer profile),\n  "painPoints": string[],\n  "valueProps": string[],\n  "differentiators": string[],\n  "tone": string,\n  "keywords": string[] (5-10 SEO seed terms),\n  "competitors": string[] (best guesses),\n  "suggestedChannels": string[] (subset of instagram, tiktok, x, facebook, reddit, linkedin, youtube, email, seo),\n  "notes": string\n}\nBe specific to THIS product; do not be generic.`,
-    temperature: 0.4,
     maxTokens: 1600,
   });
 

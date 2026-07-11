@@ -14,7 +14,9 @@ const NAV_GROUPS: { section: string; items: { href: string; code: string; label:
     items: [
       { href: "/launch", code: "GO", label: "Launch", hint: "brief → full campaign" },
       { href: "/campaigns", code: "CM", label: "Campaigns", hint: "plans & pacing" },
+      { href: "/stores", code: "SH", label: "Stores", hint: "shopify products" },
       { href: "/models", code: "ML", label: "Models & LoRAs", hint: "visual registry" },
+      { href: "/capabilities", code: "CP", label: "Capabilities", hint: "what it can do" },
     ],
   },
   {

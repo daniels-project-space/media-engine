@@ -3,6 +3,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { understand } from "./understand";
 import { strategise } from "./strategy";
+import { productContextFor } from "./store";
 import { keywords, serp } from "../integrations/seo";
 import { supportedPlatforms } from "../integrations/social";
 import { createDiscount } from "../integrations/discounts";
@@ -51,9 +52,11 @@ export async function runLaunch(campaignId: string): Promise<{ status: string; p
       supportedPlatforms(),
     ]);
     const personas = await cx.query(api.personas.list, {});
+    const productContext = campaign.storeId ? await productContextFor(campaign.storeId) : undefined;
     const plan = await strategise({
       profile,
       intelSummary,
+      productContext,
       mode: campaign.mode,
       budgetPence: campaign.budgetPence,
       autonomy: campaign.autonomy,
@@ -84,6 +87,18 @@ export async function runLaunch(campaignId: string): Promise<{ status: string; p
       captureEmail: true,
       published: false,
     });
+
+    // Register pulled reference stills into the asset-reuse graph so they can be
+    // handed to influencers or repurposed (cameo → TikTok) later.
+    for (const key of (profile.referenceImageKeys ?? []).slice(0, 6)) {
+      await cx.mutation(api.assets.register, {
+        r2Key: key,
+        kind: "image",
+        source: "pulled",
+        campaignId: id,
+        personaId: campaign.personaId ?? undefined,
+      });
+    }
 
     // 5) Discount (gated — dry-run mints nothing but records the code for preview).
     if (plan.discount?.code) {
