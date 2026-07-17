@@ -1,5 +1,5 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
-import { ffmpeg, additionalFiles } from "@trigger.dev/build/extensions/core";
+import { ffmpeg, additionalFiles, syncEnvVars } from "@trigger.dev/build/extensions/core";
 
 export default defineConfig({
   // Hardcoded on purpose: env-fallback once deployed music-house tasks to a phantom project.
@@ -14,6 +14,12 @@ export default defineConfig({
   dirs: ["./src/trigger"],
   build: {
     // Bundle the brand font so ffmpeg drawtext works in the fontless container.
-    extensions: [ffmpeg({ version: "7" }), additionalFiles({ files: ["./assets/brand.ttf"] })],
+    extensions: [
+      ffmpeg({ version: "7" }),
+      additionalFiles({ files: ["./assets/brand.ttf"] }),
+      syncEnvVars(() => process.env.VAULT_ACCESS_TOKEN
+        ? { VAULT_ACCESS_TOKEN: process.env.VAULT_ACCESS_TOKEN }
+        : undefined),
+    ],
   },
 });

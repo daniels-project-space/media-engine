@@ -1,12 +1,14 @@
 const VAULT_URL = "https://fantastic-roadrunner-485.convex.cloud";
 
 export async function vaultService(service: string): Promise<Record<string, string>> {
+  const vaultToken = process.env.VAULT_ACCESS_TOKEN;
+  if (!vaultToken) throw new Error("VAULT_ACCESS_TOKEN is not configured");
   const r = await fetch(`${VAULT_URL}/api/query`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       path: "secrets:listByService",
-      args: { service },
+      args: { service, vaultToken },
       format: "json",
     }),
     cache: "no-store",
@@ -28,10 +30,12 @@ export async function vaultKey(service: string, keyName: string): Promise<string
 // Upsert a single secret: delete any existing rows for this service/key, then insert.
 // Used for rotating credentials (e.g. Higgsfield access/refresh tokens).
 export async function vaultSet(service: string, keyName: string, value: string): Promise<void> {
+  const vaultToken = process.env.VAULT_ACCESS_TOKEN;
+  if (!vaultToken) throw new Error("VAULT_ACCESS_TOKEN is not configured");
   const listRes = await fetch(`${VAULT_URL}/api/query`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path: "secrets:listByService", args: { service }, format: "json" }),
+    body: JSON.stringify({ path: "secrets:listByService", args: { service, vaultToken }, format: "json" }),
   });
   const { value: rows } = (await listRes.json()) as { value: { _id: string; keyName: string }[] };
   for (const row of rows ?? []) {
@@ -39,7 +43,7 @@ export async function vaultSet(service: string, keyName: string, value: string):
       await fetch(`${VAULT_URL}/api/mutation`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: "secrets:deleteOne", args: { id: row._id }, format: "json" }),
+        body: JSON.stringify({ path: "secrets:deleteOne", args: { id: row._id, vaultToken }, format: "json" }),
       });
     }
   }
@@ -48,7 +52,7 @@ export async function vaultSet(service: string, keyName: string, value: string):
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       path: "secrets:bulkInsert",
-      args: { items: [{ service, keyName, value, scopes: ["media-engine"], aliases: [], sourceFiles: [] }] },
+      args: { vaultToken, items: [{ service, keyName, value, scopes: ["media-engine"], aliases: [], sourceFiles: [] }] },
       format: "json",
     }),
   });
