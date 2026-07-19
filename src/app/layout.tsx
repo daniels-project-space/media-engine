@@ -3,6 +3,7 @@ import { Bricolage_Grotesque, Martian_Mono } from "next/font/google";
 import "./globals.css";
 import Providers from "./providers";
 import Shell from "@/components/shell";
+import JarvisEmbed from "@/components/jarvis-embed";
 
 const bricolage = Bricolage_Grotesque({
   subsets: ["latin"],
@@ -29,6 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Providers>
           <Shell>{children}</Shell>
         </Providers>
+        <JarvisEmbed />
       </body>
     </html>
   );
