@@ -63,6 +63,22 @@ Trigger's deployed revision and Vercel aliases remain controller-only provider
 state and must be disabled/replaced by deploying this branch; no credential was
 read or used to attempt that operation.
 
+## Continuation verification
+
+At 2026-07-22T15:46:14Z, repeat read-only requests still showed that production
+is the old build: `/api/health` contained `brain.apiToken: true`, while
+`/api/capabilities` reported `provider: "anthropic (Claude subscription)"`.
+Neither value exists in this branch's corresponding route output, so this is
+deployment-version evidence, not a credential inspection. No dispatch-capable
+endpoint was requested.
+
+On the supplied branch at `54298a5`, `npx tsc --noEmit` and
+`NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run build`
+passed. A source scan for an OpenAI host, image-generation endpoint/model,
+`vaultService("openai")`, and OpenAI SDK import returned no matches; `npm ls
+openai @ai-sdk/openai @ai-sdk/anthropic @mastra/core --depth=0` returned an
+empty dependency tree. `git diff --check` also passed.
+
 ## API reachability map
 
 - Read-only: `GET /api/health`, `/api/capabilities`, `/api/campaign`,
