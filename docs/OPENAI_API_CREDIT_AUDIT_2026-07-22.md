@@ -126,3 +126,34 @@ After deployment, the authorized controller must use its provider/vault audit
 capability to remove the unused central-vault `openai` service and verify the
 Trigger production schedule/task revision. No credential value is needed for
 that verification.
+
+## Session 4 live-alias recheck
+
+At 2026-07-22T15:53:48Z, read-only `GET` requests to the canonical hostname
+again returned HTTP 200 from Vercel. `/api/health` still contained
+`brain: { cli: false, apiToken: true, ready: true }`; `/api/capabilities`
+still reported `model: "claude-sonnet-5"` and
+`provider: "anthropic (Claude subscription)"`. The current source cannot
+produce any of those fields: its health route reports
+`brain.runtime: "Trigger Codex CLI"`, and its capability manifest reports
+`provider: "Codex CLI (ChatGPT subscription)"`.
+
+This proves the canonical production alias has not yet moved to the contained
+revision. The check sent no request body and did not request an image route,
+legacy dispatch route, Trigger endpoint, vault, or OpenAI endpoint. A source
+inventory also found no committed Vercel alias/rewrite configuration and only
+three generated-image dispatch references: the guarded scheduler call and the
+two `generate-ad` calls in `/api/studio`; the scheduler is fail-closed and all
+studio calls reject missing/generated frames before dispatch. Controller
+deployment plus Trigger revision/schedule verification remains the sole live
+containment action.
+
+On this checkpoint, `npx tsc --noEmit` and
+`NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run build`
+passed. The exact source scan for an OpenAI host, images-generation endpoint,
+`gpt-image-*` model, `vaultService("openai")`, or direct OpenAI SDK import had
+no matches; `npm ls openai @ai-sdk/openai @ai-sdk/anthropic @mastra/core
+--depth=0` returned an empty tree, and `git diff --check` passed. `npm run lint`
+still exits 1 on the pre-existing `react-hooks/set-state-in-effect` findings in
+`src/app/settings/page.tsx:28` and `src/app/stores/page.tsx:22`; it reports no
+OpenAI-containment finding.
