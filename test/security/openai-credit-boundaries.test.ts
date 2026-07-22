@@ -5,6 +5,7 @@ import { access, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { checkChatGptCodexAuth, codexChildEnv, decodeChatGptAuthBundle, withChatGptCodexHome, type CodexCommandRunner } from "../../src/lib/llm";
 import { VAULT_SERVICES, vaultServiceName } from "../../src/lib/vault";
+import { requireAuthenticatedAiEnable } from "../../convex/settings-access";
 import { abortGeneratedCarousel } from "../../src/trigger/generate-carousel";
 import { runScheduleTick } from "../../src/trigger/schedule-tick";
 import { runCampaignTick } from "../../src/trigger/campaign-tick";
@@ -142,6 +143,23 @@ test("vault rejects OpenAI before DNS or fetch", async () => {
   assert.equal(probe.value, "rejected");
   assert.deepEqual(probe.fetches, []);
   assert.deepEqual(probe.dnsLookups, []);
+});
+
+test("unauthenticated callers cannot enable the AI kill switch", () => {
+  assert.throws(
+    () => requireAuthenticatedAiEnable("aiEnabled", true, false),
+    /Authentication is required to enable AI generation/,
+  );
+  assert.doesNotThrow(() => requireAuthenticatedAiEnable("aiEnabled", false, false));
+  assert.doesNotThrow(() => requireAuthenticatedAiEnable("aiEnabled", true, true));
+});
+
+test("the public settings mutation applies the kill-switch identity check", async () => {
+  const settingsSource = await readFile(path.join(root, "convex/settings.ts"), "utf8");
+  assert.match(
+    settingsSource,
+    /requireAuthenticatedAiEnable\(key, value, \(await ctx\.auth\.getUserIdentity\(\)\) !== null\)/,
+  );
 });
 
 test("Codex child environment removes every API, vault, and access token", () => {

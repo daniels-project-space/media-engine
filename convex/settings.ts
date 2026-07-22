@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { requireAuthenticatedAiEnable } from "./settings-access";
 
 export const all = query({
   args: {},
@@ -22,6 +23,13 @@ export const aiEnabled = query({
 export const set = mutation({
   args: { key: v.string(), value: v.any() },
   handler: async (ctx, { key, value }) => {
+    // Public Convex mutations are callable without passing through the Next
+    // UI. The exact boolean `true` is the only setting value that permits
+    // generation, so require an authenticated owner session before writing it.
+    // A caller may always force the switch off; that retains an emergency
+    // stop even if the identity provider is unavailable.
+    requireAuthenticatedAiEnable(key, value, (await ctx.auth.getUserIdentity()) !== null);
+
     const existing = await ctx.db
       .query("settings")
       .withIndex("by_key", (q) => q.eq("key", key))
