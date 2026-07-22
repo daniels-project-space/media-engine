@@ -16,11 +16,10 @@ const MAX_PUBLISHES_PER_TICK = 3;
 // 2. Ready posts on ACTIVE + fully-automatic streams -> auto-approve.
 // 3. Approved posts due on ACTIVE streams with a LINKED account -> publish.
 // Approval-gated streams stop at "ready" and wait for Daniel in the queue.
-export const scheduleTick = schedules.task({
-  id: "schedule-tick",
-  maxDuration: 300,
-  run: async () => {
-    if (!(await aiEnabled())) {
+export async function runScheduleTick(
+  isAiEnabled: () => Promise<boolean> = aiEnabled,
+) {
+    if (!(await isAiEnabled())) {
       throw new AbortTaskRunError("AI generation is paused");
     }
     const convex = new ConvexHttpClient(CONVEX_URL);
@@ -70,5 +69,10 @@ export const scheduleTick = schedules.task({
 
     logger.log("tick", { generated, approved, published });
     return { generated, approved, published };
-  },
+}
+
+export const scheduleTick = schedules.task({
+  id: "schedule-tick",
+  maxDuration: 300,
+  run: () => runScheduleTick(),
 });

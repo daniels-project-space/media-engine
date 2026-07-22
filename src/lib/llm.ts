@@ -20,6 +20,22 @@ export type ChatOpts = {
 const run = promisify(execFile);
 const CODEX_STATUS_TIMEOUT_MS = 10_000;
 
+export type CodexCommandRunner = (
+  cli: string,
+  args: string[],
+  options: {
+    cwd: string;
+    timeout: number;
+    maxBuffer: number;
+    env: NodeJS.ProcessEnv;
+  },
+) => Promise<{ stdout: string }>;
+
+const runCodexCommand: CodexCommandRunner = async (cli, args, options) => {
+  const { stdout } = await run(cli, args, options);
+  return { stdout: String(stdout) };
+};
+
 /**
  * `codex login status` is intentionally the authentication authority here.
  * A zero exit only means that *some* credentials exist, while this workload
@@ -62,9 +78,39 @@ export function codexChildEnv(parent: NodeJS.ProcessEnv = process.env): NodeJS.P
   };
 }
 
-async function requireChatGptLogin(cli: string): Promise<void> {
+/**
+ * A non-generating probe for the worker image. It only reads the local Codex
+ * login state and CLI version; it never sends a model prompt or API request.
+ */
+export async function checkChatGptCodexAuth(
+  cli: string = process.env.CODEX_CLI ?? "codex",
+  command: CodexCommandRunner = runCodexCommand,
+): Promise<{ revision: string }> {
+  await requireChatGptLogin(cli, command);
   try {
-    const { stdout } = await run(cli, ["login", "status"], {
+    const options = {
+      cwd: "/tmp",
+      timeout: CODEX_STATUS_TIMEOUT_MS,
+      maxBuffer: 64 * 1024,
+      env: codexChildEnv(),
+    };
+    const version = await command(cli, ["--version"], options);
+    const revision = version.stdout.trim();
+    if (!revision) throw new Error("empty Codex CLI revision");
+    return { revision };
+  } catch {
+    // Do not reveal saved-profile details. All unsuccessful checks have the
+    // same fail-closed result below.
+  }
+  throw new Error("Codex CLI requires a ChatGPT subscription login; API-key and access-token authentication are disabled");
+}
+
+async function requireChatGptLogin(
+  cli: string,
+  command: CodexCommandRunner = runCodexCommand,
+): Promise<void> {
+  try {
+    const { stdout } = await command(cli, ["login", "status"], {
       cwd: "/tmp",
       timeout: CODEX_STATUS_TIMEOUT_MS,
       maxBuffer: 64 * 1024,
