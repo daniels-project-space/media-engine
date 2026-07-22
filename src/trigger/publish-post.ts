@@ -2,7 +2,7 @@ import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { vaultService } from "../lib/vault";
+import { accountTokenVaultService, vaultService } from "../lib/vault";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const IG_BASE = "https://graph.instagram.com/v23.0";
@@ -53,7 +53,7 @@ export const publishPost = task({
           `account ${account.handle} not linked — connect it in Settings (needs ${post.platform} token in vault)`,
         );
       }
-      const secrets = await vaultService(account.tokenService ?? "media-engine-accounts");
+      const secrets = await vaultService(accountTokenVaultService(account.tokenService));
       const token = secrets[account.tokenKey];
       const igUserId = (account.meta as { igUserId?: string } | undefined)?.igUserId;
       if (!token || !igUserId) throw new Error(`token or igUserId missing for ${account.handle}`);

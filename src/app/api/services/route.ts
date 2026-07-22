@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { vaultService } from "@/lib/vault";
+import { vaultService, type VaultService } from "@/lib/vault";
 
 export const maxDuration = 30;
 
-const CHECKS: { service: string; key?: string; label: string; role: string }[] = [
+const CHECKS: { service: VaultService; key?: string; label: string; role: string }[] = [
   { service: "fal", label: "fal.ai", role: "Video + persona LoRAs" },
   { service: "elevenlabs", label: "ElevenLabs", role: "Voiceover (shorts)" },
   { service: "resend", label: "Resend", role: "Email sending" },

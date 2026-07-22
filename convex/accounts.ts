@@ -14,7 +14,9 @@ export const update = mutation({
     status: v.optional(
       v.union(v.literal("unlinked"), v.literal("warming"), v.literal("active"), v.literal("banned")),
     ),
-    tokenService: v.optional(v.string()),
+    // Account records feed a vault lookup in Trigger. Restrict this persisted
+    // value so an edit can never select another Project Hub service.
+    tokenService: v.optional(v.literal("media-engine-accounts")),
     tokenKey: v.optional(v.string()),
     meta: v.optional(v.any()),
     handle: v.optional(v.string()),

@@ -285,3 +285,42 @@ again returned HTTP 200 from Vercel: health reported `brain.runtime: "Trigger Co
 provider as `Codex CLI (ChatGPT subscription)`. No provider task, vault,
 credential, image, or dispatch route was invoked. The controller-only Trigger
 revision/schedule and central-vault deletion checks above remain outstanding.
+
+## Session 6 vault capability narrowing
+
+The central-vault wrapper is now a Media Engine capability boundary rather than
+a generic `listByService` client. `src/lib/vault.ts` accepts only the 16
+explicit service names consumed by current Media Engine callers; `openai` is
+not in that set and an unrecognised name throws before any vault request is
+made. The generic vault writer was also reduced to the two Higgsfield token
+rotation fields used by `src/lib/higgsfield.ts`.
+
+The only formerly data-selected vault lookup was the social-account
+`tokenService` field in `schedule-tick` and `publish-post`. It now accepts only
+the dedicated `media-engine-accounts` bucket (or its legacy missing default),
+and the Convex account mutation/schema enforce the same value. At
+2026-07-22T16:23Z, a read-only live Convex inventory showed all four accounts
+as unlinked, with no token key and no configured token service; the restriction
+therefore preserves the active configuration while preventing a persisted edit
+from selecting `openai` or any other cross-project vault service.
+
+Focused runtime guard cases accepted permitted `fal`, `trigger`, and
+`media-engine-accounts` names and rejected `openai`, `anthropic`,
+`project-hub`, and an empty name; the account resolver likewise rejected
+`openai`. `npx tsc --noEmit` passed and the production
+`NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run build`
+completed successfully. A source scan found no OpenAI host, image-generation
+endpoint, image model, or `vaultService("openai")`; the sole remaining
+`OPENAI_API_KEY` text explicitly blanks that environment variable in the
+Codex-child allowlist. `npm ls openai @ai-sdk/openai @ai-sdk/anthropic
+@mastra/core --depth=0` returned an empty tree and `git diff --check` passed.
+
+At the same time, bodyless public GETs to the canonical Vercel alias returned
+HTTP 200 with `brain.runtime: "Trigger Codex CLI"`, provider/model `Codex CLI
+(ChatGPT subscription)`, `aiEnabled: false`, and `liveMode: false`. No
+provider task, image route, vault query, or credential was invoked by this
+check. Provider-side least privilege remains a controller task: replace the
+currently inherited broad `VAULT_ACCESS_TOKEN` with the vault's supported
+Media-Engine-only capability (without exposing its value), delete the unused
+`openai` service, and retain name/status-only receipts. This source boundary
+continues to reject `openai` even before that rotation occurs.

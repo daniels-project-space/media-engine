@@ -1,7 +1,7 @@
 import { schedules, logger, tasks, AbortTaskRunError } from "@trigger.dev/sdk/v3";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
-import { vaultService } from "../lib/vault";
+import { accountTokenVaultService, vaultService } from "../lib/vault";
 import { aiEnabled } from "../lib/ai-gate";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -62,7 +62,7 @@ export const scheduleTick = schedules.task({
         (a) => a.platform === p.platform && (!p.personaId || a.personaId === p.personaId),
       );
       if (!account?.tokenKey) continue; // account not linked yet — leave post in approved
-      const secrets = await vaultService(account.tokenService ?? "media-engine-accounts");
+      const secrets = await vaultService(accountTokenVaultService(account.tokenService));
       if (!secrets[account.tokenKey]) continue;
       await tasks.trigger("publish-post", { postId: p._id });
       published++;

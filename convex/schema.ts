@@ -63,7 +63,9 @@ export default defineSchema({
       v.literal("active"),
       v.literal("banned"),
     ),
-    tokenService: v.optional(v.string()),
+    // Only the dedicated Media Engine account-token bucket is valid. This
+    // field is later used by a Trigger vault lookup.
+    tokenService: v.optional(v.literal("media-engine-accounts")),
     tokenKey: v.optional(v.string()),
     meta: v.optional(v.any()),
     notes: v.optional(v.string()),

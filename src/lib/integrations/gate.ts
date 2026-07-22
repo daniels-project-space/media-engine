@@ -1,4 +1,5 @@
 import { ConvexHttpClient } from "convex/browser";
+import type { VaultService } from "../vault";
 import { api } from "../../../convex/_generated/api";
 
 const CONVEX_URL =
@@ -45,7 +46,7 @@ export async function isLive(): Promise<boolean> {
 
 /** Read a service's secrets from the vault, returning {} instead of throwing. */
 export async function vaultTry(
-  service: string,
+  service: VaultService,
 ): Promise<Record<string, string>> {
   try {
     const { vaultService } = await import("../vault");
