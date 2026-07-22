@@ -291,8 +291,35 @@ test("non-billable Codex auth probe accepts ChatGPT only and records its exact r
   const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
   const command: CodexCommandRunner = async (_cli, args, options) => {
     calls.push({ args, env: options.env });
-    if (args.join(" ") === "login status") return { stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 0 };
-    if (args.join(" ") === "--version") return { stdout: "codex-cli 0.145.0\n", stderr: "", exitCode: 0 };
+    if (args.join(" ") === "login status") {
+      return {
+        stdout: "",
+        stderr: [
+          "warning: config key renamed",
+          "warning: use codex config migrate",
+          "warning: profile cache is deprecated",
+          "warning: diagnostic 4",
+          "warning: diagnostic 5",
+          "warning: diagnostic 6",
+          "Logged in using ChatGPT",
+        ].join("\n"),
+        exitCode: 0,
+      };
+    }
+    if (args.join(" ") === "--version") {
+      return {
+        stdout: "codex-cli 0.145.0\n",
+        stderr: [
+          "warning: config key renamed",
+          "warning: use codex config migrate",
+          "warning: profile cache is deprecated",
+          "warning: diagnostic 4",
+          "warning: diagnostic 5",
+          "warning: diagnostic 6",
+        ].join("\n"),
+        exitCode: 0,
+      };
+    }
     throw new Error(`unexpected command ${args.join(" ")}`);
   };
 
@@ -305,10 +332,14 @@ test("non-billable Codex auth probe accepts ChatGPT only and records its exact r
 
   const invalidStatusReceipts: CodexCommandRunner[] = [
     async () => ({ stdout: "Logged in using an API key\n", stderr: "", exitCode: 0 }),
-    async () => ({ stdout: "Logged in using ChatGPT\n", stderr: "warning: legacy config\n", exitCode: 0 }),
+    async () => ({ stdout: "", stderr: "warning: legacy config\n", exitCode: 0 }),
+    async () => ({ stdout: "Logged in using ChatGPT\n", stderr: "Logged in using ChatGPT\n", exitCode: 0 }),
+    async () => ({ stdout: "Logged in using ChatGPT\n", stderr: "Not logged in\n", exitCode: 0 }),
+    async () => ({ stdout: "Logged in using ChatGPT\n", stderr: "Logged in using an access token\n", exitCode: 0 }),
     async () => ({ stdout: "Usage: codex login status\n", stderr: "", exitCode: 0 }),
     async () => ({ stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 1 }),
     async () => ({ stdout: " Logged in using ChatGPT\n", stderr: "", exitCode: 0 }),
+    async () => ({ stdout: "warning: Logged in using ChatGPT\n", stderr: "", exitCode: 0 }),
   ];
   for (const commandWithBadReceipt of invalidStatusReceipts) {
     await assert.rejects(checkChatGptCodexAuth("codex", commandWithBadReceipt, chatGptBundle), /requires a ChatGPT subscription login/);
@@ -317,7 +348,13 @@ test("non-billable Codex auth probe accepts ChatGPT only and records its exact r
   const invalidVersionReceipts: CodexCommandRunner[] = [
     async (_cli, args) => args.join(" ") === "login status"
       ? { stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 0 }
-      : { stdout: "codex-cli 0.145.0\n", stderr: "warning: legacy config\n", exitCode: 0 },
+      : { stdout: "codex-cli 0.145.1\n", stderr: "", exitCode: 0 },
+    async (_cli, args) => args.join(" ") === "login status"
+      ? { stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 0 }
+      : { stdout: "codex-cli 0.145.0\n", stderr: "codex-cli 0.145.0\n", exitCode: 0 },
+    async (_cli, args) => args.join(" ") === "login status"
+      ? { stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 0 }
+      : { stdout: "warning: codex-cli 0.145.0\n", stderr: "", exitCode: 0 },
     async (_cli, args) => args.join(" ") === "login status"
       ? { stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 0 }
       : { stdout: "codex-cli 0.145.0\n", stderr: "", exitCode: 1 },

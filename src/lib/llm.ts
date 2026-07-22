@@ -23,6 +23,15 @@ export type ChatOpts = {
 const run = promisify(execFile);
 const CODEX_STATUS_TIMEOUT_MS = 10_000;
 const CODEX_AUTH_ERROR = "Codex CLI requires a ChatGPT subscription login; API-key and access-token authentication are disabled";
+const PINNED_CODEX_CLI_REVISION = "codex-cli 0.145.0";
+const CHATGPT_LOGIN_STATUS = "Logged in using ChatGPT";
+const CONTRADICTORY_LOGIN_STATUSES = new Set([
+  "Not logged in",
+  "Logged in using API key",
+  "Logged in using an API key",
+  "Logged in using access token",
+  "Logged in using an access token",
+]);
 
 type CodexTokens = {
   access_token: string;
@@ -59,7 +68,7 @@ export type CodexCommandRunner = (
 const runCodexCommand: CodexCommandRunner = async (cli, args, options) => {
   // `execFile` rejects non-zero exits, but exposes both captured streams on
   // the error object. Return them as a receipt either way; callers accept only
-  // the exact clean status line on exit 0 and never log its diagnostics.
+  // one exact status line on exit 0 and never log diagnostics.
   try {
     const { stdout, stderr } = await run(cli, args, options);
     return { stdout: String(stdout), stderr: String(stderr), exitCode: 0 };
@@ -80,12 +89,23 @@ const runCodexCommand: CodexCommandRunner = async (cli, args, options) => {
  * and access-token modes.
  */
 export function isChatGptLoginStatus(stdout: string, stderr = "", exitCode = 0): boolean {
-  // Codex's successful subscription status is exactly one stdout line and no
-  // stderr. Do not normalize it: help text, warnings, diagnostics, or a
-  // status that merely mentions ChatGPT must leave generation paused.
+  if (exitCode !== 0) return false;
+  const lines = receiptLines(stdout, stderr);
+  // Real Codex can emit non-status warnings to either stream. Accept its
+  // exact subscription status once, but never normalize, search within, or
+  // log diagnostics. A second status or an exact incompatible auth status is
+  // ambiguous and leaves generation paused.
+  return lines.filter((line) => line === CHATGPT_LOGIN_STATUS).length === 1
+    && !lines.some((line) => CONTRADICTORY_LOGIN_STATUSES.has(line));
+}
+
+function receiptLines(stdout: string, stderr: string): string[] {
+  return [stdout, stderr].flatMap((stream) => stream.split(/\r?\n/));
+}
+
+function isPinnedCodexRevision(stdout: string, stderr: string, exitCode: number): boolean {
   return exitCode === 0
-    && stderr === ""
-    && /^(?:Logged in using ChatGPT)(?:\r?\n)?$/.test(stdout);
+    && receiptLines(stdout, stderr).filter((line) => line === PINNED_CODEX_CLI_REVISION).length === 1;
 }
 
 /**
@@ -217,10 +237,10 @@ export async function checkChatGptCodexAuth(
         maxBuffer: 64 * 1024,
         env,
       });
-      if (version.exitCode !== 0 || version.stderr !== "") throw new Error("invalid Codex CLI revision receipt");
-      const revision = version.stdout.trim();
-      if (!revision) throw new Error("empty Codex CLI revision");
-      return { revision };
+      if (!isPinnedCodexRevision(version.stdout, version.stderr, version.exitCode)) {
+        throw new Error("invalid Codex CLI revision receipt");
+      }
+      return { revision: PINNED_CODEX_CLI_REVISION };
     } catch {
       // Do not reveal saved-profile details. All unsuccessful checks have the
       // same fail-closed result below.
