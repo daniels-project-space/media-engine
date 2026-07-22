@@ -79,6 +79,26 @@ passed. A source scan for an OpenAI host, image-generation endpoint/model,
 openai @ai-sdk/openai @ai-sdk/anthropic @mastra/core --depth=0` returned an
 empty dependency tree. `git diff --check` also passed.
 
+## Final live recheck and controller action
+
+At 2026-07-22T15:49:33Z, read-only `GET`
+`https://media-engine-seven.vercel.app/api/health` again returned
+`brain: { cli: false, apiToken: true, ready: true }`. At 15:49:37Z,
+read-only `GET /api/capabilities` again returned
+`provider: "anthropic (Claude subscription)"`. Both responses were HTTP 200
+from Vercel and neither matches this branch (`Trigger Codex CLI` / `Codex CLI
+(ChatGPT subscription)`). These requests did not send a body or invoke a
+mutating route, Trigger task, vault, or provider API.
+
+Therefore source containment is verified but **live containment is not yet
+complete**: the canonical production alias is still routed to a prior Vercel
+deployment. This checkout has no committed alias configuration or provider
+authority to replace that deployment. The delivery controller must deploy this
+branch (which also synchronizes Trigger's removed `schedule-tick` cron), then
+repeat only these two read-only checks and verify Trigger's production task
+revision before removing the unused central-vault `openai` service. Do not
+invoke the legacy image routes or any task to perform that verification.
+
 ## API reachability map
 
 - Read-only: `GET /api/health`, `/api/capabilities`, `/api/campaign`,
