@@ -50,7 +50,7 @@ export default function Capabilities() {
         ))}
       </div>
 
-      <Panel title={`AGENTS — ${m.agents.length} (Mastra)`}>
+      <Panel title={`AGENTS — ${m.agents.length} (Codex CLI)`}>
         <div className="grid md:grid-cols-2 gap-3">
           {m.agents.map((a) => (
             <div key={a.id} className="border border-line-2 p-3">

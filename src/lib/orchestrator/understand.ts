@@ -1,4 +1,4 @@
-import { agentJson } from "../../mastra/brain";
+import { agentJson } from "../brain";
 import { pullBrand } from "../integrations/assets";
 import type { ProductProfile } from "./types";
 

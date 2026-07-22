@@ -2,8 +2,8 @@ import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
 import { planPersonaWeek } from "../lib/orchestrator/persona-plan";
 
 // Plans a run of Instagram carousels for one persona (base model shot + niche
-// slides + optional CTA), scheduled as `planned` posts. Runs on the subscription
-// brain (Claude Sonnet) via the shared persona-plan pipeline.
+// slides + optional CTA), scheduled as `planned` posts. Runs on the
+// subscription-authenticated Codex CLI via the shared persona-plan pipeline.
 export const planWeek = task({
   id: "plan-week",
   maxDuration: 600,

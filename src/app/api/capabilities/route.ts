@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { capabilityManifest } from "@/mastra";
+import { capabilityManifest } from "@/lib/capabilities";
 
 export const maxDuration = 20;
 

@@ -4,8 +4,6 @@ import { vaultService } from "@/lib/vault";
 export const maxDuration = 30;
 
 const CHECKS: { service: string; key?: string; label: string; role: string }[] = [
-  { service: "openai", key: "OPENAI_API_KEY", label: "OpenAI GPT Image 2", role: "Image generation" },
-  { service: "anthropic", key: "ANTHROPIC_AUTH_TOKEN", label: "Claude subscription (CLI)", role: "Planning, captions & QC" },
   { service: "fal", label: "fal.ai", role: "Video + persona LoRAs" },
   { service: "elevenlabs", label: "ElevenLabs", role: "Voiceover (shorts)" },
   { service: "resend", label: "Resend", role: "Email sending" },
@@ -27,5 +25,10 @@ export async function GET() {
       }
     }),
   );
-  return NextResponse.json({ services: results });
+  return NextResponse.json({
+    services: [
+      { service: "image-workflows", label: "Image workflows", role: "Paused — approved source images required", present: false, state: "paused" },
+      ...results,
+    ],
+  });
 }

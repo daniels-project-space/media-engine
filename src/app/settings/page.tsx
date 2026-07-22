@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { useEffect, useState } from "react";
 
-type ServiceStatus = { service: string; label: string; role: string; present: boolean };
+type ServiceStatus = { service: string; label: string; role: string; present: boolean; state?: "paused" };
 
 export default function Settings() {
   const settings = useQuery(api.settings.all);
@@ -86,11 +86,11 @@ export default function Settings() {
       })()}
 
       <section className={`border p-5 mb-6 rise ${aiOn ? "border-line bg-panel" : "border-onair/50 bg-onair/5"}`}>
-        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">AI / LLM (CLAUDE SUBSCRIPTION)</h2>
+        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">AI / LLM (CODEX CLI SUBSCRIPTION)</h2>
         <p className="text-ink-faint text-[11px] mb-4">
-          Master kill switch for all Claude LLM calls (via your subscription) — script planning, caption
-          variants, vision QC, and lead/client reply drafting. Off = no LLM calls (renders and drafts fall
-          back or pause). Turning it back on resumes normal operation.
+          Master kill switch for subscription-authenticated Codex CLI reasoning — script planning, caption
+          variants, and drafting. Image generation is permanently paused until an approved equal-quality
+          provider is configured; use approved source images for video renders.
         </p>
         <button
           onClick={() => setSetting({ key: "aiEnabled", value: !aiOn })}
@@ -225,11 +225,11 @@ export default function Settings() {
                 </div>
                 <span
                   className={`flex items-center gap-1.5 text-[10px] tracking-widest ${
-                    s.present ? "text-signal" : "text-onair"
+                    s.state === "paused" ? "text-amber" : s.present ? "text-signal" : "text-onair"
                   }`}
                 >
-                  <span className={`size-1.5 rounded-full ${s.present ? "bg-signal" : "bg-onair"}`} />
-                  {s.present ? "CONNECTED" : "MISSING"}
+                  <span className={`size-1.5 rounded-full ${s.state === "paused" ? "bg-amber" : s.present ? "bg-signal" : "bg-onair"}`} />
+                  {s.state === "paused" ? "PAUSED" : s.present ? "CONNECTED" : "MISSING"}
                 </span>
               </div>
             ))}

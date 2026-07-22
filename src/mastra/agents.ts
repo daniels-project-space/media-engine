@@ -1,5 +1,5 @@
 // Agent roster for the ad-agency engine. Config only (provider-agnostic) so the
-// capability manifest can list agents without loading Mastra. Each references
+// capability manifest can list agents without loading a provider SDK. Each references
 // tools from TOOL_DEFS by id.
 
 export type AgentDef = {

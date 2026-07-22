@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { vaultService } from "@/lib/vault";
 import { aiEnabled } from "@/lib/ai-gate";
+import { IMAGE_WORKFLOW_PAUSED_REASON } from "@/lib/image-workflow";
 
 export const maxDuration = 30;
 
@@ -21,16 +22,16 @@ export async function POST(req: NextRequest) {
     tag?: string;
   };
 
-  if ((body.action === "generate" || body.action === "plan") && !(await aiEnabled())) {
+  if (body.action === "generate") {
+    return NextResponse.json({ error: IMAGE_WORKFLOW_PAUSED_REASON }, { status: 503 });
+  }
+  if (body.action === "plan" && !(await aiEnabled())) {
     return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
   }
 
   let taskId: string;
   let payload: Record<string, unknown>;
-  if (body.action === "generate" && body.postId) {
-    taskId = "generate-carousel";
-    payload = { postId: body.postId };
-  } else if (body.action === "plan" && body.personaId) {
+  if (body.action === "plan" && body.personaId) {
     taskId = "plan-week";
     payload = { personaId: body.personaId, days: body.days, postsPerDay: body.postsPerDay };
   } else if (body.action === "publish" && body.postId) {

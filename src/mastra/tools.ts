@@ -13,9 +13,8 @@ import { discover } from "../lib/integrations/influence";
 import { repurposeAsset } from "../lib/integrations/repurpose";
 
 // The engine's TOOL CATALOGUE. Each tool is a thin wrapper over an adapter or
-// Convex; Convex stays the source of truth. These are registered with Mastra
-// agents AND power the capability manifest (so the interface/Jarvis can discover
-// what the engine can do). Shape is Mastra `createTool`-compatible.
+// Convex; Convex stays the source of truth. These definitions power the
+// capability manifest so the interface/Jarvis can discover the engine.
 
 const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL ?? "https://blissful-sardine-231.convex.cloud";
 const cx = () => new ConvexHttpClient(CONVEX_URL);

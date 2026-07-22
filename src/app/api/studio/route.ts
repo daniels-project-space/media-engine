@@ -5,6 +5,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { aiEnabled } from "@/lib/ai-gate";
+import { IMAGE_WORKFLOW_PAUSED_REASON, needsGeneratedImage } from "@/lib/image-workflow";
 
 export const maxDuration = 60;
 
@@ -66,6 +67,9 @@ export async function POST(req: NextRequest) {
 
     const shots = (project.shots ?? []) as Shot[];
     if (shots.length === 0) return NextResponse.json({ error: "no script yet" }, { status: 400 });
+    if (body.action === "render-draft" && shots.some(needsGeneratedImage)) {
+      return NextResponse.json({ error: IMAGE_WORKFLOW_PAUSED_REASON }, { status: 503 });
+    }
 
     if (body.action === "render-draft") {
       const scenes = shots.map((s) => ({
@@ -119,6 +123,9 @@ export async function POST(req: NextRequest) {
           };
         }),
       );
+      if (scenes.some(needsGeneratedImage)) {
+        return NextResponse.json({ error: IMAGE_WORKFLOW_PAUSED_REASON }, { status: 503 });
+      }
       const runId = await triggerTask("generate-ad", {
         title: `${project.title} — final 4K`,
         concept: `studio-${project._id}-final`,

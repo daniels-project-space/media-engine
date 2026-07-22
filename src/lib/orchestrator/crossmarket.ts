@@ -1,7 +1,7 @@
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { agentJson } from "../../mastra/brain";
+import { agentJson } from "../brain";
 
 const CONVEX_URL =
   process.env.NEXT_PUBLIC_CONVEX_URL ?? "https://blissful-sardine-231.convex.cloud";

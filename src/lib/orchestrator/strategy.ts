@@ -1,4 +1,4 @@
-import { agentJson } from "../../mastra/brain";
+import { agentJson } from "../brain";
 import type { ProductProfile, CampaignPlan } from "./types";
 
 // The strategist. Turns a ProductProfile + market intel + budget/mode into a

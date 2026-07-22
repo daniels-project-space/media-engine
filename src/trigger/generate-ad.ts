@@ -17,6 +17,7 @@ import { higgsGenerateAudio } from "../lib/higgsfield";
 import { scoreImage } from "../lib/vision";
 import { buildVariantTag } from "../lib/variant";
 import { aiEnabled } from "../lib/ai-gate";
+import { IMAGE_WORKFLOW_PAUSED_REASON, needsGeneratedImage } from "../lib/image-workflow";
 import sharp from "sharp";
 import * as opentype from "opentype.js";
 
@@ -35,15 +36,14 @@ const MODELS: Record<string, { id: string; pence: number }> = {
   "veo-flf": { id: "fal-ai/veo3.1/first-last-frame-to-video", pence: 90 },
   lipsync: { id: "fal-ai/kling-video/ai-avatar/v2/standard", pence: 50 },
 };
-const IMG_PENCE = 8;
 const VO_PENCE = 5;
 
 type Scene = {
   kind?: "i2v" | "flf" | "lipsync" | "card";
   model: keyof typeof MODELS;
-  imagePrompt?: string; // for flf: the FIRST frame
-  imageUrl?: string; // client-supplied or pre-generated image — skips generation
-  lastImagePrompt?: string; // flf only: the LAST frame
+  imagePrompt?: string; // legacy generated-frame requests are paused
+  imageUrl?: string; // approved existing image required for every non-card scene
+  lastImagePrompt?: string; // legacy generated end-frame requests are paused
   motion: string; // motion/video prompt (lipsync: ignored)
   // card kind: deterministic ffmpeg text card (sharp brand text — never AI-generated).
   cardTitle?: string;
@@ -66,7 +66,7 @@ type Payload = {
   quick?: boolean;
   segSeconds?: number; // per-scene trim in quick mode (default 1.4)
   musicPrompt?: string; // brand-fit music vibe
-  bestOf?: number; // candidates per generated scene image (default 2)
+  bestOf?: number; // retained for payload compatibility; approved assets need no candidates
   concept?: string; // campaign/concept for variant tagging (default: title)
   hook?: string; // hook line for variant tagging
 };
@@ -101,70 +101,6 @@ async function falQueue(
     if (sd.status === "FAILED" || sd.status === "ERROR") throw new Error(`fal ${model} failed: ${JSON.stringify(sd).slice(0, 200)}`);
   }
   throw new Error(`fal ${model} timed out`);
-}
-
-const SAFETY_CLAUSE =
-  " Fully clothed in modest everyday clothing, tasteful family-friendly commercial photography, no suggestive posing.";
-
-// Requests n candidate images in a single gpt-image-2 call (cheaper than n calls).
-async function genImageOnce(apiKey: string, prompt: string, n: number): Promise<Buffer[]> {
-  const r = await fetch("https://api.openai.com/v1/images/generations", {
-    method: "POST",
-    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-    body: JSON.stringify({ model: "gpt-image-2", prompt, size: "1024x1536", quality: "medium", moderation: "low", n }),
-  });
-  if (!r.ok) {
-    const detail = await r.text();
-    const err = new Error(`gpt-image-2 HTTP ${r.status}: ${detail.slice(0, 250)}`);
-    (err as Error & { safety?: boolean }).safety = detail.includes("safety");
-    throw err;
-  }
-  const data = (await r.json()) as { data: { b64_json: string }[] };
-  return data.data.map((d) => Buffer.from(d.b64_json, "base64"));
-}
-
-// gpt-image-2's safety filter false-positives on beauty/fitness prompts; one
-// softened retry recovers the fluke instead of failing the whole ad.
-async function genImageN(apiKey: string, prompt: string, n: number): Promise<Buffer[]> {
-  try {
-    return await genImageOnce(apiKey, prompt, n);
-  } catch (err) {
-    if ((err as Error & { safety?: boolean }).safety) {
-      return await genImageOnce(apiKey, prompt + SAFETY_CLAUSE, n);
-    }
-    throw err;
-  }
-}
-
-// Best-of-N: generate N candidates, vision-QC each against the intent, and keep the
-// highest scorer. Raises quality AND cuts video spend (weak frames never get animated).
-// One softened regeneration if the best of the first batch is still off-intent.
-async function genImageBestOfN(
-  apiKey: string,
-  prompt: string,
-  intent: string,
-  n: number,
-): Promise<{ bytes: Buffer; score: number; issues: string }> {
-  const pick = async (p: string): Promise<{ bytes: Buffer; score: number; issues: string }> => {
-    const candidates = await genImageN(apiKey, p, n);
-    const scored = await Promise.all(
-      candidates.map(async (bytes) => {
-        const { score, issues } = await scoreImage(`data:image/png;base64,${bytes.toString("base64")}`, intent);
-        return { bytes, score, issues };
-      }),
-    );
-    scored.sort((a, b) => b.score - a.score);
-    return scored[0];
-  };
-
-  let best = await pick(prompt);
-  logger.log(`best-of-${n}: winner score ${best.score}${best.issues ? " — " + best.issues : ""}`);
-  if (best.score < 55) {
-    const retry = await pick(`${prompt}. Clear, literal, single clean subject, no extra people or scenery, photorealistic.`);
-    if (retry.score > best.score) best = retry;
-    logger.log(`best-of-${n} retry: final score ${best.score}`);
-  }
-  return best;
 }
 
 // The container has no system fonts, so we embed the font in the card SVG. The
@@ -218,7 +154,7 @@ async function makeCard(
   ]);
 }
 
-// Produces a stitched 9:16 video ad: per-scene image gen -> fal image-to-video,
+// Produces a stitched 9:16 video ad from approved source images -> image-to-video,
 // optional ElevenLabs voiceover, ffmpeg normalize+concat+mix -> R2 -> ready post.
 export const generateAd = task({
   id: "generate-ad",
@@ -226,9 +162,10 @@ export const generateAd = task({
   machine: "large-1x", // 4 concurrent 1080x1920 x264 encodes need the RAM headroom
   retry: { maxAttempts: 1 },
   run: async (payload: Payload, { ctx }) => {
-    // This task obtains an OpenAI image key for generated-frame scenes. Pause the
-    // entire render rather than silently substituting a lower-quality route.
+    // No equal-quality replacement for generated image frames is configured.
+    // Existing approved source assets and deterministic cards continue to work.
     if (!(await aiEnabled())) throw new AbortTaskRunError("AI generation is paused");
+    if (payload.scenes.some(needsGeneratedImage)) throw new AbortTaskRunError(IMAGE_WORKFLOW_PAUSED_REASON);
     const convex = new ConvexHttpClient(CONVEX_URL);
     const streamSlug = payload.streamSlug ?? "client-ads";
     const quick = payload.quick !== false; // quick UGC is the default
@@ -239,18 +176,15 @@ export const generateAd = task({
     const sceneOffset = (idx: number): number =>
       payload.scenes.slice(0, idx).reduce((sum, s) => sum + sceneDur(s), 0);
     const totalDur = payload.scenes.reduce((sum, s) => sum + sceneDur(s), 0);
-    const bestOf = Math.max(1, Math.min(4, payload.bestOf ?? 2)); // candidates per scene image
     const tag = buildVariantTag({
       concept: payload.concept ?? payload.title,
       hook: payload.hook ?? payload.caption,
       variantId: ctx.run.id.slice(-8),
     });
-    let bestScoreSum = 0;
-    let bestScoreCount = 0;
 
     const estimate =
       payload.scenes.reduce(
-        (sum, s) => sum + (s.kind === "card" ? 0 : (MODELS[s.model]?.pence ?? 30) + IMG_PENCE * (s.kind === "flf" ? 2 : 1)),
+        (sum, s) => sum + (s.kind === "card" ? 0 : (MODELS[s.model]?.pence ?? 30)),
         0,
       ) + (payload.voScript ? VO_PENCE : 0);
     const settings = await convex.query(api.settings.all, {});
@@ -284,9 +218,8 @@ export const generateAd = task({
       })) as Id<"posts">);
     await convex.mutation(api.posts.setStatus, { id: postId, status: "generating" });
 
-    const { OPENAI_API_KEY } = await vaultService("openai");
     const { FAL_KEY } = await vaultService("fal");
-    if (!OPENAI_API_KEY || !FAL_KEY) throw new AbortTaskRunError("openai or fal key missing");
+    if (!FAL_KEY) throw new AbortTaskRunError("fal key missing");
 
     try {
       const dir = await mkdtemp(path.join(tmpdir(), "ad-"));
@@ -335,39 +268,10 @@ export const generateAd = task({
         if (scene.imageUrl) {
           firstUrl = scene.imageUrl;
           firstBytes = Buffer.from(await (await fetch(scene.imageUrl)).arrayBuffer());
-        } else {
-          if (!scene.imagePrompt) throw new Error(`scene ${i + 1}: needs imagePrompt or imageUrl`);
-          // Best-of-N gate: generate N candidates, keep the highest-scoring one, so we
-          // never spend video budget animating a weak or off-intent frame.
-          const checked = await genImageBestOfN(OPENAI_API_KEY, scene.imagePrompt, intent, bestOf);
-          firstBytes = checked.bytes;
-          bestScoreSum += checked.score;
-          bestScoreCount++;
-          if (checked.score < 40) logger.warn(`scene ${i + 1} still weak (score ${checked.score}: ${checked.issues})`);
-          const firstKey = `posts/${postId}/scene-${i + 1}-a.png`;
-          await putObject(firstKey, firstBytes, "image/png");
-          firstUrl = await presignedGet(firstKey);
-          // N candidates in one call ≈ N× image cost.
-          await convex.mutation(api.spend.log, { day: today(), service: "openai", model: `gpt-image-2 x${bestOf}`, costPence: IMG_PENCE * bestOf, ref: postId });
-        }
+        } else throw new AbortTaskRunError(IMAGE_WORKFLOW_PAUSED_REASON);
 
         let videoUrl: string;
-        if (scene.kind === "flf" && scene.lastImagePrompt) {
-          // First↔last-frame morph stays on fal (its FLF endpoints; HF param shape differs).
-          const [lastImg] = await genImageN(OPENAI_API_KEY, scene.lastImagePrompt, 1);
-          const lastKey = `posts/${postId}/scene-${i + 1}-b.png`;
-          await putObject(lastKey, lastImg, "image/png");
-          const lastUrl = await presignedGet(lastKey);
-          await convex.mutation(api.spend.log, { day: today(), service: "openai", model: "gpt-image-2", costPence: IMG_PENCE, ref: postId });
-          try {
-            videoUrl = await falQueue(FAL_KEY, model.id, { prompt: scene.motion, first_frame_url: firstUrl, last_frame_url: lastUrl });
-          } catch (err) {
-            if (String(err).includes("422")) {
-              videoUrl = await falQueue(FAL_KEY, model.id, { prompt: scene.motion, image_url: firstUrl, end_image_url: lastUrl });
-            } else throw err;
-          }
-          await convex.mutation(api.spend.log, { day: today(), service: "fal", model: model.id, costPence: model.pence, ref: postId });
-        } else if (scene.kind === "lipsync") {
+        if (scene.kind === "lipsync") {
           if (!voUrl) throw new Error("lipsync scene requires voScript");
           videoUrl = await falQueue(FAL_KEY, model.id, { image_url: firstUrl, audio_url: voUrl });
           await convex.mutation(api.spend.log, { day: today(), service: "fal", model: model.id, costPence: model.pence, ref: postId });
@@ -516,10 +420,6 @@ export const generateAd = task({
         id: postId,
         slides: [{ r2Key, url, prompt: payload.title, role: "video" }],
       });
-      // Record the best-of-N quality: average winning score across generated scenes.
-      if (bestScoreCount > 0) {
-        await convex.mutation(api.posts.setQc, { id: postId, qcScore: Math.round(bestScoreSum / bestScoreCount) });
-      }
       logger.log("ad ready", { postId, url, variantTag: tag.variantTag });
       return { postId, url, variantTag: tag.variantTag, estimatePence: estimate };
     } catch (err) {
