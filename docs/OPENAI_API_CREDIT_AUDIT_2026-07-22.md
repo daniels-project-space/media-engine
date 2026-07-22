@@ -356,3 +356,51 @@ inherited vault capability with a Media-Engine-only capability, and delete then
 re-read the unused central-vault `openai` service. This scoped checkout cannot
 perform or observe those mutations without provider authority; no credential
 was read, copied, retained, or exercised here.
+
+## Session 8 negative probes and historical-spend reconciliation
+
+At `2026-07-22T16:34:53Z` and `16:34:54Z`, bodyless public GETs to the
+canonical Vercel alias again returned HTTP 200 with `server: Vercel` and the
+contained response shapes: health reported `brain.runtime: "Trigger Codex
+CLI"`, `aiEnabled: false`, and `liveMode: false`; capabilities reported model
+and provider `Codex CLI (ChatGPT subscription)`. The old API-token, Claude,
+and Anthropic fields were absent.
+
+Two bounded negative probes followed, with no authentication material and no
+provider invocation: `POST /api/trigger` with only `{"action":"generate"}`
+returned HTTP 503 and the explicit image-workflow-paused response before any
+vault or Trigger call. `POST /api/clients` with the same body returned HTTP 503
+while the false AI gate was active; its source performs no task, vault, storage,
+or provider operation on that branch. These probes did not create a task run,
+image, post, spend row, or any external side effect.
+
+The two cited historical ledger dates reconcile exactly through the public
+read-only `spend:forDay` Convex query:
+
+| UTC day | OpenAI pence | Other services pence | Daily total | Events |
+| --- | ---: | ---: | ---: | ---: |
+| 2026-07-03 | 16 | fal: 40 | 56 | 3 |
+| 2026-07-04 | 392 | elevenlabs: 85; fal: 818; higgsfield: 0 | 1,295 | 125 |
+| **combined** | **408** | **943** | **1,351** | **128** |
+
+Thus `16p + 392p = 408p` is a historical OpenAI subtotal, not a new charge or
+a current caller. The aggregate query exposes only totals, service buckets,
+and event counts; it did not read any credential or mutate the ledger.
+
+The source-side repair edges are closed: the canonical deployment serves the
+contained revision, image routes reject before dispatch, `schedule-tick` has no
+declarative cron and fails closed, `generate-carousel` aborts before I/O, and
+the vault capability allowlist excludes `openai`. The remaining provider-side
+repair edges are explicitly controller-owned: (1) retain a name/status-only
+receipt that Trigger production has synchronized the no-cron `schedule-tick`
+revision, (2) replace the inherited vault token with a Media-Engine-only
+capability without exposing its value, and (3) delete and re-read the unused
+central-vault service named `openai`. They must not be substituted with a task
+or provider test invocation.
+
+After a clean lockfile install restored this checkout's missing local toolchain,
+`npx tsc --noEmit` and the production `NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run build` both passed to completion. The runtime-source scan again found no OpenAI host, image endpoint/model,
+`vaultService("openai")`, or direct SDK import; the direct dependency audit was
+empty and `git diff --check` passed. `npm run lint` remains independently
+blocked by the two pre-existing `react-hooks/set-state-in-effect` errors in
+`src/app/settings/page.tsx:28` and `src/app/stores/page.tsx:22` (plus warnings).
