@@ -443,3 +443,33 @@ no active usable key and billing showing pay-as-you-go/auto-recharge disabled,
 and (5) ChatGPT/Codex billing showing automatic top-up disabled. Values must
 remain redacted; a non-billable task probe is not a substitute for these
 receipts.
+
+## Session 10 deployed-revision discrepancy — do not use task probes
+
+At 2026-07-22T19:40Z, the canonical production alias returned HTTP 200 for
+the read-only health endpoint, with `aiEnabled: false`, `liveMode: false`, and
+the brain identified as `Trigger Codex CLI`. Its read-only capabilities
+document still names `Codex CLI (ChatGPT subscription)` as both model and
+provider. These reads expose no credential values.
+
+The deployed application nevertheless did **not** match this checkout's
+fail-closed route source: unauthenticated `POST /api/tick` returned HTTP 202
+and a Trigger run identifier, while `POST /api/crossmarket` returned HTTP 200.
+Current source returns HTTP 503 before any vault, Trigger, Convex, or CLI work
+when `aiEnabled()` is false for both routes. No further mutating endpoint or
+task probe was made after observing the discrepancy. The controller must
+inspect and, if still pending, cancel the returned tick run using its Trigger
+capability; it must then deploy the contained revision before treating any
+provider or billing receipt as evidence of the current source.
+
+This checkout has no Media-scoped vault token or provider-management
+capability. Its runner environment also contains ambient `OPENAI_API_KEY` and
+`CODEX_API_KEY` variable names; their values were neither read nor emitted,
+and `codexChildEnv()` explicitly blanks both before every Codex process. This
+is not evidence about Vercel or Trigger environment scopes. The required
+name/status-only controller audit remains: remove OpenAI aliases from every
+Vercel and Trigger scope, replace the vault capability with a Media-only
+token, delete then re-read `openai`, retire the legacy Supabase function, and
+retain OpenAI Platform plus ChatGPT/Codex billing receipts showing no usable
+key or automatic recharge. Until those receipts and the contained deployment
+exist, the provider-account definition of done is not met.
