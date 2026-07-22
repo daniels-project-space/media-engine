@@ -4,9 +4,10 @@
 
 - Repository: `daniels-project-space/media-engine`.
 - Canonical supplied branch: `jarvis/goal-make-daniel-s-entire-live-clou-rn8b1y61`.
-- Audited head: `6de88578bc4ec91956087ddac5e096cff1b0be77`
-  (`security: remove API image and provider paths`), whose remote branch head
-  matched during this audit.
+- Original containment head: `6de88578bc4ec91956087ddac5e096cff1b0be77`
+  (`security: remove API image and provider paths`). The latest source-verified
+  head before this evidence-only checkpoint was `853432b security: scope media vault capabilities`, and it matched
+  `origin/jarvis/goal-make-daniel-s-entire-live-clou-rn8b1y61` exactly.
 - This audit neither read, printed, exercised, nor changed a credential. It did
   not call an OpenAI endpoint or trigger any job.
 
@@ -324,3 +325,34 @@ currently inherited broad `VAULT_ACCESS_TOKEN` with the vault's supported
 Media-Engine-only capability (without exposing its value), delete the unused
 `openai` service, and retain name/status-only receipts. This source boundary
 continues to reject `openai` even before that rotation occurs.
+
+## Session 7 exact-head and live recheck
+
+At 2026-07-22T16:28Z, the supplied branch and its origin both resolved to
+`853432b security: scope media vault capabilities`; the worktree was clean.
+Bodyless, read-only GETs to the canonical Vercel alias returned HTTP 200 with
+`server: Vercel` and matched paths `/api/health` and `/api/capabilities`.
+Health reported `brain.runtime: "Trigger Codex CLI"`, `aiEnabled: false`, and
+`liveMode: false`; capabilities reported model and provider `Codex CLI (ChatGPT
+subscription)`. The legacy `apiToken`, Claude, and Anthropic response fields
+were absent. The health inventory reports 29 retained posts, but no read or
+request was made to a mutation, image, Trigger, vault, or provider endpoint.
+
+The checkout was restored from its lockfile and `npx tsc --noEmit` passed.
+The production build compiled and completed its TypeScript phase; the runner's
+per-command limit interrupted the static-page tail before a final exit receipt,
+so this session does not overstate it as a completed build. A runtime-source
+scan found no OpenAI host, image-generation endpoint/model,
+`vaultService("openai")`, or direct OpenAI import, and `npm ls openai
+@ai-sdk/openai @ai-sdk/anthropic @mastra/core --depth=0` returned an empty
+tree. `git diff --check` passed. Lint still fails only on the existing
+`react-hooks/set-state-in-effect` errors in `src/app/settings/page.tsx:28` and
+`src/app/stores/page.tsx:22`.
+
+The remaining live work is authenticated provider state, not a source alias:
+the delivery controller must retain name/status-only receipts that the deployed
+Trigger `schedule-tick` revision has no declarative schedule, replace the
+inherited vault capability with a Media-Engine-only capability, and delete then
+re-read the unused central-vault `openai` service. This scoped checkout cannot
+perform or observe those mutations without provider authority; no credential
+was read, copied, retained, or exercised here.
