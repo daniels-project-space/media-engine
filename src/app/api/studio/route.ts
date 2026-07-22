@@ -48,12 +48,14 @@ export async function POST(req: NextRequest) {
     clipCount?: number;
     secondsPerShot?: number;
   };
+  // Do this before the project lookup as well as before Trigger dispatch. A
+  // disabled billing path must not require DNS, Convex, vault, or a provider.
+  if (!(await aiEnabled())) return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
   const convex = new ConvexHttpClient(CONVEX_URL);
   const project = await convex.query(api.studio.get, { id: body.projectId as Id<"adProjects"> });
   if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
 
   try {
-    if (!(await aiEnabled())) return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
     if (body.action === "plan") {
       const productImageUrl = body.productImageKey ? await presignedGet(body.productImageKey, 60 * 60 * 24) : undefined;
       const runId = await triggerTask("plan-ad-script", {

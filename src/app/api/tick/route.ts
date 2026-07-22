@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { vaultService } from "@/lib/vault";
+import { aiEnabled } from "@/lib/ai-gate";
 
 export const maxDuration = 300;
 
 // Autonomy heartbeat — enqueue durable work. The Vercel route never starts a
 // local model process; subscription Codex CLI work belongs in Trigger.
 export async function POST() {
+  if (!(await aiEnabled())) return NextResponse.json({ ok: false, error: "AI generation is paused" }, { status: 503 });
   try {
     const trigger = await vaultService("trigger");
     const key = trigger.TRIGGER_SECRET_KEY_MEDIA_ENGINE;

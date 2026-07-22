@@ -7,6 +7,10 @@ const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL ?? "https://blissful-sardi
 // setting, malformed value, or Convex read failure must never permit a provider
 // request that could consume credits.
 export async function aiEnabled(): Promise<boolean> {
+  // This local, fail-closed override is used by the deployed safety switch and
+  // lets a disabled route return before it contacts Convex, vault, Trigger, or
+  // any provider. It never enables work; it can only keep billing paused.
+  if (process.env.MEDIA_ENGINE_BILLING_DISABLED === "1") return false;
   try {
     return (await new ConvexHttpClient(CONVEX_URL).query(api.settings.aiEnabled, {})) === true;
   } catch {

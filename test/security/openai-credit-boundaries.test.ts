@@ -7,8 +7,13 @@ import { checkChatGptCodexAuth, codexChildEnv, decodeChatGptAuthBundle, withChat
 import { vaultServiceName } from "../../src/lib/vault";
 import { abortGeneratedCarousel } from "../../src/trigger/generate-carousel";
 import { runScheduleTick } from "../../src/trigger/schedule-tick";
+import { runCampaignTick } from "../../src/trigger/campaign-tick";
 import { runCodexAuthCheck } from "../../src/trigger/codex-auth-check";
 import { POST as triggerPost } from "../../src/app/api/trigger/route";
+import { POST as studioPost } from "../../src/app/api/studio/route";
+import { POST as campaignPost } from "../../src/app/api/campaign/route";
+import { POST as tickPost } from "../../src/app/api/tick/route";
+import { POST as repurposePost } from "../../src/app/api/repurpose/route";
 import triggerConfig, { CODEX_CLI_ARTIFACT_PACKAGE } from "../../trigger.config";
 
 const root = path.resolve(import.meta.dirname, "../..");
@@ -50,6 +55,17 @@ async function denyNetwork<T>(action: () => Promise<T>): Promise<{ value: T; fet
     globalThis.fetch = originalFetch;
     dns.lookup = originalLookup;
     dns.promises.lookup = originalPromiseLookup;
+  }
+}
+
+async function withBillingDisabled<T>(action: () => Promise<T>): Promise<T> {
+  const previous = process.env.MEDIA_ENGINE_BILLING_DISABLED;
+  process.env.MEDIA_ENGINE_BILLING_DISABLED = "1";
+  try {
+    return await action();
+  } finally {
+    if (previous === undefined) delete process.env.MEDIA_ENGINE_BILLING_DISABLED;
+    else process.env.MEDIA_ENGINE_BILLING_DISABLED = previous;
   }
 }
 
@@ -191,6 +207,17 @@ test("paused image task and scheduler fail before any network or dispatch", asyn
 
   const scheduleSource = await readFile(path.join(root, "src/trigger/schedule-tick.ts"), "utf8");
   assert.doesNotMatch(scheduleSource, /\bcron\s*:/);
+
+  const campaignScheduler = await denyNetwork(async () => {
+    await assert.rejects(
+      runCampaignTick(async () => false, async () => ({ processed: 0, log: [] })),
+      /AI generation is paused/,
+    );
+    return "paused";
+  });
+  assert.equal(campaignScheduler.value, "paused");
+  assert.deepEqual(campaignScheduler.fetches, []);
+  assert.deepEqual(campaignScheduler.dnsLookups, []);
 });
 
 test("direct image route returns 503 before vault or Trigger dispatch", async () => {
@@ -208,12 +235,44 @@ test("direct image route returns 503 before vault or Trigger dispatch", async ()
   assert.deepEqual(probe.dnsLookups, []);
 });
 
+test("disabled billed routes fail before Convex, vault, Trigger, or providers", async () => {
+  const probe = await denyNetwork(() => withBillingDisabled(async () => {
+    const responses = await Promise.all([
+      triggerPost(new Request("https://media-engine.invalid/api/trigger", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "short", imageUrl: "https://example.invalid/source.png", streamSlug: "test", title: "test" }),
+      }) as never),
+      studioPost(new Request("https://media-engine.invalid/api/studio", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "plan", projectId: "ignored" }),
+      }) as never),
+      campaignPost(new Request("https://media-engine.invalid/api/campaign", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ brief: "a valid campaign brief" }),
+      }) as never),
+      tickPost(),
+      repurposePost(new Request("https://media-engine.invalid/api/repurpose", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ assetId: "ignored", platform: "instagram", mode: "reframe" }),
+      }) as never),
+    ]);
+    return Promise.all(responses.map(async (response) => ({ status: response.status, body: await response.json() as { error?: string } })));
+  }));
+  assert.equal(probe.value.length, 5);
+  for (const response of probe.value) {
+    assert.equal(response.status, 503);
+    assert.match(response.body.error ?? "", /AI generation is paused/);
+  }
+  assert.deepEqual(probe.fetches, []);
+  assert.deepEqual(probe.dnsLookups, []);
+});
+
 test("non-billable Codex auth probe accepts ChatGPT only and records its exact revision", async () => {
   const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
   const command: CodexCommandRunner = async (_cli, args, options) => {
     calls.push({ args, env: options.env });
-    if (args.join(" ") === "login status") return { stdout: "Logged in using ChatGPT\n" };
-    if (args.join(" ") === "--version") return { stdout: "codex-cli 0.145.0\n" };
+    if (args.join(" ") === "login status") return { stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 0 };
+    if (args.join(" ") === "--version") return { stdout: "codex-cli 0.145.0\n", stderr: "", exitCode: 0 };
     throw new Error(`unexpected command ${args.join(" ")}`);
   };
 
@@ -224,8 +283,16 @@ test("non-billable Codex auth probe accepts ChatGPT only and records its exact r
   assert.deepEqual(probe.fetches, []);
   assert.deepEqual(probe.dnsLookups, []);
 
-  const apiKeyOnly: CodexCommandRunner = async () => ({ stdout: "Logged in using an API key\n" });
-  await assert.rejects(checkChatGptCodexAuth("codex", apiKeyOnly, chatGptBundle), /requires a ChatGPT subscription login/);
+  const invalidStatusReceipts: CodexCommandRunner[] = [
+    async () => ({ stdout: "Logged in using an API key\n", stderr: "", exitCode: 0 }),
+    async () => ({ stdout: "Logged in using ChatGPT\n", stderr: "warning: legacy config\n", exitCode: 0 }),
+    async () => ({ stdout: "Usage: codex login status\n", stderr: "", exitCode: 0 }),
+    async () => ({ stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 1 }),
+    async () => ({ stdout: " Logged in using ChatGPT\n", stderr: "", exitCode: 0 }),
+  ];
+  for (const commandWithBadReceipt of invalidStatusReceipts) {
+    await assert.rejects(checkChatGptCodexAuth("codex", commandWithBadReceipt, chatGptBundle), /requires a ChatGPT subscription login/);
+  }
 
   assert.equal(CODEX_CLI_ARTIFACT_PACKAGE, "@openai/codex@0.145.0");
   const extension = triggerConfig.build?.extensions?.find((candidate) => candidate.name === "additionalPackages");

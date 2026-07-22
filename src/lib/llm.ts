@@ -54,11 +54,23 @@ export type CodexCommandRunner = (
     maxBuffer: number;
     env: NodeJS.ProcessEnv;
   },
-) => Promise<{ stdout: string }>;
+) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 
 const runCodexCommand: CodexCommandRunner = async (cli, args, options) => {
-  const { stdout } = await run(cli, args, options);
-  return { stdout: String(stdout) };
+  // `execFile` rejects non-zero exits, but exposes both captured streams on
+  // the error object. Return them as a receipt either way; callers accept only
+  // the exact clean status line on exit 0 and never log its diagnostics.
+  try {
+    const { stdout, stderr } = await run(cli, args, options);
+    return { stdout: String(stdout), stderr: String(stderr), exitCode: 0 };
+  } catch (error) {
+    const result = error as { stdout?: unknown; stderr?: unknown; code?: unknown };
+    return {
+      stdout: String(result.stdout ?? ""),
+      stderr: String(result.stderr ?? ""),
+      exitCode: typeof result.code === "number" ? result.code : 1,
+    };
+  }
 };
 
 /**
@@ -67,11 +79,13 @@ const runCodexCommand: CodexCommandRunner = async (cli, args, options) => {
  * accepts only the ChatGPT subscription login and must reject saved API-key
  * and access-token modes.
  */
-export function isChatGptLoginStatus(status: string): boolean {
-  // Codex's successful subscription status is exactly this stdout line. Do
-  // not match a help message, error, diagnostic, or a status that merely
-  // mentions ChatGPT: all of those must leave generation paused.
-  return status.trim() === "Logged in using ChatGPT";
+export function isChatGptLoginStatus(stdout: string, stderr = "", exitCode = 0): boolean {
+  // Codex's successful subscription status is exactly one stdout line and no
+  // stderr. Do not normalize it: help text, warnings, diagnostics, or a
+  // status that merely mentions ChatGPT must leave generation paused.
+  return exitCode === 0
+    && stderr === ""
+    && /^(?:Logged in using ChatGPT)(?:\r?\n)?$/.test(stdout);
 }
 
 /**
@@ -203,6 +217,7 @@ export async function checkChatGptCodexAuth(
         maxBuffer: 64 * 1024,
         env,
       });
+      if (version.exitCode !== 0 || version.stderr !== "") throw new Error("invalid Codex CLI revision receipt");
       const revision = version.stdout.trim();
       if (!revision) throw new Error("empty Codex CLI revision");
       return { revision };
@@ -220,13 +235,13 @@ async function requireChatGptLogin(
   command: CodexCommandRunner = runCodexCommand,
 ): Promise<void> {
   try {
-    const { stdout } = await command(cli, ["login", "status"], {
+    const { stdout, stderr, exitCode } = await command(cli, ["login", "status"], {
       cwd: "/tmp",
       timeout: CODEX_STATUS_TIMEOUT_MS,
       maxBuffer: 64 * 1024,
       env,
     });
-    if (isChatGptLoginStatus(stdout)) return;
+    if (isChatGptLoginStatus(stdout, stderr, exitCode)) return;
   } catch {
     // Do not reveal saved-profile details. All unsuccessful checks have the
     // same fail-closed result below.

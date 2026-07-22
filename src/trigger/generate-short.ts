@@ -4,6 +4,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { putObject, presignedGet } from "../lib/storage";
 import { renderClip } from "../lib/video-router";
+import { aiEnabled } from "../lib/ai-gate";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const EST_PENCE_PER_CLIP = 40;
@@ -29,6 +30,7 @@ export const generateShort = task({
   id: "generate-short",
   maxDuration: 900,
   run: async (payload: Payload, { ctx }) => {
+    if (!(await aiEnabled())) throw new AbortTaskRunError("AI generation is paused");
     const convex = new ConvexHttpClient(CONVEX_URL);
 
     const settings = await convex.query(api.settings.all, {});

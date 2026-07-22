@@ -2,6 +2,7 @@ import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import { vaultService } from "../lib/vault";
+import { aiEnabled } from "../lib/ai-gate";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const BATCH = 50;
@@ -20,6 +21,7 @@ export const sendCampaign = task({
   id: "send-campaign",
   maxDuration: 600,
   run: async (payload: Payload) => {
+    if (!(await aiEnabled())) throw new AbortTaskRunError("AI generation is paused");
     const convex = new ConvexHttpClient(CONVEX_URL);
     const settings = await convex.query(api.settings.all, {});
     const from = payload.from ?? String(settings.emailFrom ?? "Media Engine <onboarding@resend.dev>");

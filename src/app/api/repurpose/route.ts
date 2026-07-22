@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { repurposeAsset, type RepurposeMode } from "@/lib/integrations/repurpose";
+import { aiEnabled } from "@/lib/ai-gate";
 
 export const maxDuration = 60;
 
@@ -18,6 +19,7 @@ export async function POST(req: NextRequest) {
   if (!b.assetId || !b.platform || !b.mode) {
     return NextResponse.json({ error: "assetId, platform and mode are required" }, { status: 400 });
   }
+  if (!(await aiEnabled())) return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
   const res = await repurposeAsset({
     assetId: b.assetId,
     platform: b.platform,

@@ -53,6 +53,7 @@ export const remixContent = task({
   maxDuration: 1800,
   machine: "large-1x",
   run: async (payload: Payload) => {
+    if (!(await aiEnabled())) throw new AbortTaskRunError("AI generation is paused");
     const convex = new ConvexHttpClient(CONVEX_URL);
     const source = await convex.query(api.posts.get, { id: payload.sourcePostId as Id<"posts"> });
     if (!source) throw new AbortTaskRunError("source post not found");
@@ -63,25 +64,22 @@ export const remixContent = task({
     const nCaptions = payload.captionVariants ?? 3;
     const isVideo = Boolean(slides[0].r2Key?.endsWith(".mp4"));
 
-    // 1) Caption/hook variants via DeepSeek (skipped when AI is paused — falls back
-    //    to the source caption so remix still runs without LLM spend).
-    const aiOn = await aiEnabled();
+    // 1) Caption/hook variants through the subscription-authenticated Codex
+    // CLI. Disabled runs return above, before any Convex or provider request.
     let captions: { hook: string; caption: string }[] = [
       { hook: source.hook ?? source.title ?? "", caption: source.caption ?? "" },
     ];
-    if (aiOn) {
-      try {
-        const t = await chat({
-          system: "Reply ONLY with a JSON array. No markdown.",
-          user: `Rewrite this ad into ${nCaptions} distinct scroll-stopping variants, each with a different angle/hook. Keep the product accurate. NO hashtags, keyword-rich caption, first line is a hook, end with a question CTA.\nOriginal: ${source.caption ?? source.title}\nJSON: [{"hook": "...", "caption": "..."}]`,
-          maxTokens: 1500,
-        });
-        const slice = t.slice(t.indexOf("["), t.lastIndexOf("]") + 1);
-        const parsed = JSON.parse(slice) as { hook: string; caption: string }[];
-        if (parsed.length) captions = parsed.slice(0, nCaptions);
-      } catch {
-        logger.warn("caption remix failed — using original");
-      }
+    try {
+      const t = await chat({
+        system: "Reply ONLY with a JSON array. No markdown.",
+        user: `Rewrite this ad into ${nCaptions} distinct scroll-stopping variants, each with a different angle/hook. Keep the product accurate. NO hashtags, keyword-rich caption, first line is a hook, end with a question CTA.\nOriginal: ${source.caption ?? source.title}\nJSON: [{"hook": "...", "caption": "..."}]`,
+        maxTokens: 1500,
+      });
+      const slice = t.slice(t.indexOf("["), t.lastIndexOf("]") + 1);
+      const parsed = JSON.parse(slice) as { hook: string; caption: string }[];
+      if (parsed.length) captions = parsed.slice(0, nCaptions);
+    } catch {
+      logger.warn("caption remix failed — using original");
     }
 
     // 2) For video sources: download once, reframe into each format. For image
@@ -101,7 +99,6 @@ export const remixContent = task({
     }
 
     const created: string[] = [];
-    let idx = 0;
     for (const fmt of formats) {
       const F = FORMATS[fmt];
       let outKey: string;
@@ -128,7 +125,6 @@ export const remixContent = task({
 
       // Cross each format with each caption variant.
       for (const cap of captions) {
-        idx++;
         const platform = fmt === "wide" ? "youtube" : "instagram";
         const kind = isVideo ? (fmt === "reel" ? "reel" : "image") : "image";
         const postId = (await convex.mutation(api.posts.create, {

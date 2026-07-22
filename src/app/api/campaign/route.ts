@@ -4,6 +4,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { vaultService } from "@/lib/vault";
 import { runLaunch } from "@/lib/orchestrator/run";
+import { aiEnabled } from "@/lib/ai-gate";
 
 export const maxDuration = 120;
 
@@ -43,6 +44,9 @@ export async function POST(req: NextRequest) {
   if (!body.brief || body.brief.trim().length < 4) {
     return NextResponse.json({ error: "brief is required" }, { status: 400 });
   }
+  // Launch can invoke Codex and research integrations inline if Trigger is
+  // unavailable, so fail before creating a campaign or resolving a vault key.
+  if (!(await aiEnabled())) return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
   const cx = new ConvexHttpClient(CONVEX_URL);
   const name = body.name ?? body.brief.slice(0, 60);
   const campaignId = await cx.mutation(api.campaigns.create, {

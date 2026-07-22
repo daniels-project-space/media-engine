@@ -32,6 +32,7 @@ export const planAdScript = task({
   id: "plan-ad-script",
   maxDuration: 120,
   run: async (payload: Payload, {}) => {
+    if (!(await aiEnabled())) throw new AbortTaskRunError("AI paused — re-enable in Settings to generate scripts");
     const convex = new ConvexHttpClient(CONVEX_URL);
     const project = await convex.query(api.studio.get, { id: payload.projectId as Id<"adProjects"> });
     if (!project) throw new AbortTaskRunError(`project ${payload.projectId} not found`);
@@ -39,8 +40,6 @@ export const planAdScript = task({
 
     const n = Math.max(2, Math.min(5, payload.clipCount ?? 3));
     const secs = Math.max(4, Math.min(12, payload.secondsPerShot ?? 5));
-    if (!(await aiEnabled())) throw new AbortTaskRunError("AI paused — re-enable in Settings to generate scripts");
-
     const sys = `You are a senior UGC ad director. Turn a product brief into a ${n}-shot vertical (9:16) ad script.
 Structure the shots as an arc: shot 1 = HOOK that stops the scroll in the first 3 seconds; middle shot(s) = DEMO showing the product in use / its benefit; last shot = PAYOFF + clear CTA.
 Rules: native, authentic, "shot on iPhone" realism — NOT polished corporate. Keep the product accurate and central. onText = a SHORT punchy on-screen caption (max 6 words), like a real UGC creator would add.

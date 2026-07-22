@@ -25,7 +25,9 @@ export async function POST(req: NextRequest) {
   if (body.action === "generate") {
     return NextResponse.json({ error: IMAGE_WORKFLOW_PAUSED_REASON }, { status: 503 });
   }
-  if (body.action === "plan" && !(await aiEnabled())) {
+  // Every action below can dispatch Codex work or a billable media task. Check
+  // before resolving the Trigger vault secret or making the dispatch request.
+  if (body.action !== "publish" && !(await aiEnabled())) {
     return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
   }
 
