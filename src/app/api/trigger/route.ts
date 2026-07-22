@@ -21,16 +21,12 @@ export async function POST(req: NextRequest) {
     tag?: string;
   };
 
-  const trigger = await vaultService("trigger");
-  const key = trigger.TRIGGER_SECRET_KEY_MEDIA_ENGINE;
-  if (!key) return NextResponse.json({ error: "trigger key missing in vault" }, { status: 500 });
-
-  let taskId: string;
-  let payload: Record<string, unknown>;
   if ((body.action === "generate" || body.action === "plan") && !(await aiEnabled())) {
     return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
   }
 
+  let taskId: string;
+  let payload: Record<string, unknown>;
   if (body.action === "generate" && body.postId) {
     taskId = "generate-carousel";
     payload = { postId: body.postId };
@@ -57,6 +53,10 @@ export async function POST(req: NextRequest) {
   } else {
     return NextResponse.json({ error: "bad request" }, { status: 400 });
   }
+
+  const trigger = await vaultService("trigger");
+  const key = trigger.TRIGGER_SECRET_KEY_MEDIA_ENGINE;
+  if (!key) return NextResponse.json({ error: "trigger key missing in vault" }, { status: 500 });
 
   const r = await fetch(`https://api.trigger.dev/api/v1/tasks/${taskId}/trigger`, {
     method: "POST",
