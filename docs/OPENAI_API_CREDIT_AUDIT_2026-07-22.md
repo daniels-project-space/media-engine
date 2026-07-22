@@ -186,3 +186,38 @@ credentials. The delivery controller must atomically promote this branch to the
 canonical alias, sync the Trigger revision (removing `schedule-tick`'s cron),
 then repeat only the two safe GET checks before deleting the now-unused central
 vault `openai` service. Do not validate by invoking any legacy route or task.
+
+## Session 4 canonical-alias closure confirmation
+
+At `2026-07-22T16:02:42Z`, bodyless read-only GETs to the same canonical Vercel
+hostname returned HTTP 200 with `server: Vercel` and `x-matched-path` set to
+`/api/health` and `/api/capabilities`. This time the response shapes match the
+contained source: health reported `brain: { runtime: "Trigger Codex CLI",
+ready: false }`, `aiEnabled: false`, and `liveMode: false`; capabilities reported
+both `model` and `provider` as `Codex CLI (ChatGPT subscription)`. The former
+`apiToken` / Anthropic / Claude fields were absent.
+
+This is direct public evidence that the canonical alias has been promoted away
+from the prior OpenAI-capable deployment, without invoking an image route,
+legacy dispatch route, Trigger task, vault, or provider API. The source route
+handlers behind that alias have no OpenAI SDK, HTTP endpoint, vault service
+lookup, or inherited API-key path. The alias-closure concern is therefore
+resolved.
+
+Two provider-side checks remain controller-only and must not be substituted with
+a task invocation: verify that Trigger production has synchronized the contained
+`schedule-tick` revision (which has no declarative cron and fails closed before
+any vault read), then delete the unused central-vault `openai` service by name.
+Neither provider state can be read or changed from this scoped checkout without
+the delivery controller's authority.
+
+Current local verification at this checkpoint: `npx tsc --noEmit` passed, and
+`NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run build`
+completed successfully. A runtime-source scan (excluding audit prose and lock
+metadata) for the OpenAI host, `/v1/images/generations`, `gpt-image-*`,
+`vaultService("openai")`, and direct OpenAI SDK imports produced no matches.
+`npm ls openai @ai-sdk/openai @ai-sdk/anthropic @mastra/core --depth=0` reported
+an empty tree and `git diff --check` passed. `npm run lint` still fails only on
+the existing `react-hooks/set-state-in-effect` errors at
+`src/app/settings/page.tsx:28` and `src/app/stores/page.tsx:22` (plus warnings);
+it reports no containment error.
