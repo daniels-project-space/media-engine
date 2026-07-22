@@ -1,41 +1,48 @@
-# Media Engine v2 — Full Media Service on Mastra
+# Media Engine v2 — Media Service
 
-_2026-07-11. Builds on `AD_ENGINE_MASTER_PLAN.md`. Reasoning/infra only — no assets rendered._
+_Updated 2026-07-22. This document describes the checked-in runtime, not a
+deployment claim. See `OPENAI_API_CREDIT_AUDIT_2026-07-22.md` for the current
+production cutover status._
 
-## What this pass added
+## Product-aware media operations
 
-### 1. Product-aware context (Shopify)
-- `src/lib/integrations/shopify.ts` — Admin GraphQL (`2026-01`, `X-Shopify-Access-Token`): `getProducts()` (real catalogue), `createDiscount()` (`discountCodeBasicCreate`, gated). Creds in vault service **`shopify`** (`SHOPIFY_STORE_DOMAIN`, `SHOPIFY_ADMIN_TOKEN`, `SHOPIFY_API_VERSION`) — **not yet added** (only `cj` exists).
-- `src/lib/product-channels.ts` — deterministic **product→channel mapping**: price→AOV band (impulse/considered/premium) + category detection → ranked channels + creative formats + angle. Store rollup = dominant channels across the catalogue.
-- Convex `stores` + `products` (each product stores its `channelPlan`). `campaigns.storeId` links a campaign to a store.
-- `src/lib/orchestrator/store.ts` — `syncStore()` pulls the catalogue + computes channel plans; `productContextFor()` builds the strategist's product block. `run.ts` passes it so **a store-targeted campaign plans for the real products on the channels each one fits.**
-- `POST /api/store` connect+sync; `GET` lists stores. `/stores` UI page. Trigger `sync-store`.
+- Shopify catalogue sync and deterministic product-to-channel mapping live in
+  `src/lib/integrations/shopify.ts`, `src/lib/product-channels.ts`, and the
+  `sync-store` task.
+- Agent and tool metadata in `src/mastra/` is provider-neutral configuration
+  used by the capability manifest. There is no Mastra SDK runtime or provider
+  client in the dependency manifest.
+- The asset-reuse graph records existing assets, derivations, and placements.
+  Reframing and influencer handoffs preserve that lineage and still use their
+  normal safety gates.
 
-### 2. Everything on Mastra
-- `src/mastra/` — `tools.ts` (12 tools wrapping adapters+Convex), `agents.ts` (5 agents: strategist, product_analyst, distribution, asset_librarian, cross_marketer), `index.ts` (`getMastra()` lazy instance + `capabilityManifest()`), `brain.ts` (`agentJson`/`agentText`).
-- Model = **Claude Sonnet via the subscription**: `createAnthropic({ baseURL, fetch: authedFetch })` where `authedFetch` injects `Authorization: Bearer <token>` + `anthropic-beta: oauth-2025-04-20`, deletes `x-api-key`, and re-resolves the token per request (rotation-safe). Reuses `llm.ts` `anthropicCreds()`.
-- Defensive (mirrors youtube-studio-ai): Mastra loads via **dynamic import**, latches **disabled** on any failure, and `agentJson` falls back to the proven `llm.ts`. `understand.ts` → `product_analyst`, `strategy.ts` → `strategist` — the brain runs on Mastra with a safety net.
+## Reasoning and generation boundaries
 
-### 3. Capability manifest (interface knows what it can do)
-- `capabilityManifest()` (built from config, always works even if Mastra fails) → `GET /api/capabilities` → `/capabilities` UI. Lists agents+tools+workflows+channels+capability areas. **This is the surface Jarvis introspects before launching work.**
+- Reasoning uses the subscription-authenticated Codex CLI only. `src/lib/llm.ts`
+  executes `codex exec` in a read-only sandbox with a curated child environment
+  that blanks API-key and vault-token variables. It has no HTTP provider
+  fallback and never reads the vault.
+- Image generation is explicitly paused. `generate-carousel` aborts before any
+  vault, network, storage, or spend operation. Image-backed paths require an
+  approved `imageUrl`; otherwise they return a visible paused error.
+- Existing approved-image video rendering, deterministic cards, asset reuse,
+  and normal product/research workflows remain separate. They retain their
+  existing `aiEnabled`, budget, and live/dry-run gates.
 
-### 4. Asset-reuse graph + repurposing
-- Convex `assets` (nodes), `assetDerivations` (DERIVED_FROM edges: reframe/recaption/cameo_insert/repurpose), `placements` (asset → platform/brand + tracking/discount code). `assets.lineage` returns the full chain.
-- `src/lib/integrations/repurpose.ts` — `repurposeAsset({assetId, platform, mode})`:
-  - `influencer` → brief pack (hooks, caption, asset URL, code, do/don'ts) + `handed_off` placement.
-  - `cameo` / `reframe` → registers a **derived** asset (plan; pixels rendered later by the gated pipeline — Higgsfield Soul-ID / fal face-swap for cameo, ffmpeg/AutoFlip for reframe) + lineage edge + gated post to TikTok/Reels.
-  - LLM drafts platform-native hook/caption; **FTC/AI disclosure applied**.
-- `POST /api/repurpose`, Trigger `repurpose-asset`. `run.ts` auto-registers pulled reference stills into the graph on launch.
+## Control plane and status surfaces
 
-### 5. Cross-marketing
-- Convex `crossPromotions` (bundle/shoutout_swap/referral/retarget/syndication). `src/lib/orchestrator/crossmarket.ts` `findCrossPromos()` — `cross_marketer` agent proposes moves across the portfolio, avoiding cannibalization. `POST /api/crossmarket` runs it; `GET` lists.
+- `GET /api/capabilities` returns the provider-neutral agent/tool manifest.
+- `GET /api/health` reports control state without attempting a model call.
+- `settings.aiEnabled` is fail-closed: only a literal boolean `true` permits
+  provider-backed generation; an absent, malformed, or unreadable setting is
+  paused.
+- `schedule-tick` has no declarative cron and aborts before any work while AI is
+  disabled. `campaign-tick` remains separately scheduled and governs only
+  campaign-step orchestration.
 
-### 6. Gaps closed / flagged
-- **FTC/AI disclosure gate** (`src/lib/integrations/disclosure.ts`) — hard, deterministic; applied in the repurpose/placement path.
-- Documented gaps (from research) still open: competitor ad-spy, synthetic focus groups, dynamic pricing, LTV-based prioritization, trend-jacking, dual attribution (MTA+MMM), GEO/AIO for AI search. Repurposing **renders** (cameo/reframe pixels) remain gated to Higgsfield/fal per the no-render rule.
+## Going live
 
-## To go live
-- Add vault `shopify` (domain + admin token) → connect on `/stores`.
-- Subscription contention/429 (shared with interactive Claude) still applies to the Mastra brain; `llm.ts` fallback also hits the subscription.
-- Live posting/discounts need the per-channel keys + `liveMode` on (see master plan §7).
-- TikTok/Reels posting: via the social provider (Ayrshare/Postiz) or the platform Content Posting APIs (need app review).
+- A deployment must include the current branch before the source controls above
+  are live. Do not infer deployed code or provider state from this document.
+- Any live posting, discounts, email, or video work remains subject to its own
+  key-presence, budget, `liveMode`, and human-approval controls.
