@@ -38,6 +38,31 @@
 
 The only committed cross-project external browser asset is the JARVIS embed script at `jarvis-orcin-six.vercel.app`; it is not an API proxy or credential path in this application.
 
+## Follow-up route and alias check
+
+At 2026-07-22T15:41Z, a new read-only request to the canonical production
+`/api/health` and `/api/capabilities` endpoints still returned the pre-cutover
+`apiToken`/`anthropic (Claude subscription)` response shape. No mutating route,
+Trigger task endpoint, Vercel alias, or provider endpoint was invoked for this
+check. The public deployment therefore remains an old build and is still the
+only observed live OpenAI-key exposure risk for this repository.
+
+The current source prevents the old aliases from dispatching work:
+
+- `POST /api/trigger` with `action: "generate"` returns 503 before its first
+  vault lookup; it cannot call Trigger's `generate-carousel` endpoint.
+- `POST /api/clients` with `action: "generate"` returns 503 before any vault,
+  storage, or Trigger call.
+- In current source, a direct Trigger invocation of `generate-carousel` reaches
+  only its explicit `AbortTaskRunError`; the task has no payload processing, vault
+  access, provider HTTP request, storage write, Convex mutation, or spend write.
+
+There is no committed Vercel alias, rewrite, redirect, `vercel.json`, `.vercel`
+metadata, Supabase function, or Supabase SDK to disable from this checkout.
+Trigger's deployed revision and Vercel aliases remain controller-only provider
+state and must be disabled/replaced by deploying this branch; no credential was
+read or used to attempt that operation.
+
 ## API reachability map
 
 - Read-only: `GET /api/health`, `/api/capabilities`, `/api/campaign`,
