@@ -4,7 +4,7 @@ import test from "node:test";
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { checkChatGptCodexAuth, codexChildEnv, decodeChatGptAuthBundle, withChatGptCodexHome, type CodexCommandRunner } from "../../src/lib/llm";
-import { vaultServiceName } from "../../src/lib/vault";
+import { VAULT_SERVICES, vaultServiceName } from "../../src/lib/vault";
 import { abortGeneratedCarousel } from "../../src/trigger/generate-carousel";
 import { runScheduleTick } from "../../src/trigger/schedule-tick";
 import { runCampaignTick } from "../../src/trigger/campaign-tick";
@@ -92,15 +92,44 @@ test("SDK and runtime source contain no OpenAI client, host, or model path", asy
     assert.equal(dependencies[forbidden], undefined, `${forbidden} must not be installed`);
   }
 
-  const source = await Promise.all((await allSourceFiles(path.join(root, "src"))).map((file) => readFile(file, "utf8")));
+  const executableFiles = [
+    ...(await allSourceFiles(path.join(root, "src"))),
+    ...(await allSourceFiles(path.join(root, "convex"))),
+    path.join(root, "next.config.ts"),
+    path.join(root, "trigger.config.ts"),
+  ];
+  const source = await Promise.all(executableFiles.map((file) => readFile(file, "utf8")));
   const runtime = source.join("\n");
   assert.doesNotMatch(runtime, /https:\/\/(?:api\.)?openai\.com/i);
   assert.doesNotMatch(runtime, /from\s+["'](?:openai|@ai-sdk\/openai|@ai-sdk\/anthropic|@mastra\/core)["']/i);
 });
 
+test("runtime has no legacy Supabase client, function, environment, or project alias", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  const dependencies = { ...packageJson.dependencies, ...packageJson.devDependencies };
+  for (const forbidden of ["supabase", "@supabase/supabase-js", "@supabase/ssr"]) {
+    assert.equal(dependencies[forbidden], undefined, `${forbidden} must not be installed`);
+  }
+
+  // Keep this limited to executable TypeScript. The audit documentation may
+  // name Supabase while recording the controller-side retirement receipt.
+  const source = await Promise.all((await allSourceFiles(path.join(root, "src"))).map((file) => readFile(file, "utf8")));
+  const runtime = source.join("\n");
+  assert.doesNotMatch(
+    runtime,
+    /(?:@supabase\/|\bsupabase(?:\.co|\.com)?\b|SUPABASE_(?:URL|ANON_KEY|SERVICE_ROLE(?:_KEY)?|ACCESS_TOKEN)|\/functions\/v1\/)/i,
+  );
+});
+
 test("vault rejects OpenAI before DNS or fetch", async () => {
   const probe = await denyNetwork(async () => {
+    assert.ok(VAULT_SERVICES.every((service) => !/(?:openai|open-ai|oa[i1])/.test(service)), "no OpenAI service alias may be allowlisted");
     assert.throws(() => vaultServiceName("openai"), /not permitted/);
+    assert.throws(() => vaultServiceName("open-ai"), /not permitted/);
+    assert.throws(() => vaultServiceName("openai-platform"), /not permitted/);
     assert.throws(() => vaultServiceName("anthropic"), /not permitted/);
     return "rejected";
   });

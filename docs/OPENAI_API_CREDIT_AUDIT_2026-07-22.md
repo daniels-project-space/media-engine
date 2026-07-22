@@ -405,3 +405,41 @@ After a clean lockfile install restored this checkout's missing local toolchain,
 empty and `git diff --check` passed. `npm run lint` remains independently
 blocked by the two pre-existing `react-hooks/set-state-in-effect` errors in
 `src/app/settings/page.tsx:28` and `src/app/stores/page.tsx:22` (plus warnings).
+
+## Session 9 legacy Supabase and provider-account closure boundary
+
+At 2026-07-22T18:34Z, a read-only GET to the canonical production alias
+`https://media-engine-seven.vercel.app/api/health` returned HTTP 200 with
+`server: Vercel`, `brain.runtime: "Trigger Codex CLI"`, `aiEnabled: false`,
+and `liveMode: false`. The companion `/api/capabilities` response named only
+`Codex CLI (ChatGPT subscription)` as its model and provider. These public
+reads do not expose, inspect, or exercise credentials.
+
+The complete tracked executable surface (`src`, `convex`, `next.config.ts`,
+and `trigger.config.ts`) has no Supabase client/import, URL, edge-function
+path, environment alias, deployment manifest, or SDK dependency. A permanent
+security regression now fails if any of `@supabase/*`, `supabase`, a
+`SUPABASE_*` credential alias, a Supabase project host, or `/functions/v1/`
+returns to executable code. It also checks the vault allowlist has no
+OpenAI-derived service alias and verifies representative `openai`,
+`open-ai`, and `openai-platform` names reject before DNS or fetch.
+
+No account capability was attached to this checkout for the Supabase project,
+Vercel alias inventory, central vault, Trigger, OpenAI Platform, or the
+ChatGPT/Codex billing controls. Accordingly this session cannot claim a
+provider receipt that a legacy Supabase function was disabled, that every
+deployed runtime/vault alias contains no usable OpenAI key, that OpenAI
+Platform pay-as-you-go is disabled, or that Codex automatic top-up is off.
+No credential was read, printed, copied, or attempted.
+
+The exact remaining controller/account gate is a Daniel-authorized,
+name/status-only provider audit with authority to disable the identified
+legacy Supabase function/copy and revoke any OpenAI Platform keys. It must
+retain receipts for: (1) all Vercel production/preview aliases and their
+environment-key names, (2) all Media-Engine vault service/key aliases after
+deleting and re-reading `openai`, (3) Supabase project/function state showing
+the legacy function is unreachable, (4) OpenAI Platform key metadata showing
+no active usable key and billing showing pay-as-you-go/auto-recharge disabled,
+and (5) ChatGPT/Codex billing showing automatic top-up disabled. Values must
+remain redacted; a non-billable task probe is not a substitute for these
+receipts.
