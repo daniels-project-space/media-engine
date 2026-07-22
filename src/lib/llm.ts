@@ -27,15 +27,16 @@ const CODEX_STATUS_TIMEOUT_MS = 10_000;
  * and access-token modes.
  */
 export function isChatGptLoginStatus(status: string): boolean {
-  const normalized = status.toLowerCase();
-  return normalized.includes("chatgpt")
-    && !/\bapi[ -]?key\b|\baccess token\b/.test(normalized);
+  // Codex's successful subscription status is exactly this stdout line. Do
+  // not match a help message, error, diagnostic, or a status that merely
+  // mentions ChatGPT: all of those must leave generation paused.
+  return status.trim() === "Logged in using ChatGPT";
 }
 
 /**
  * Give the specialist only its persisted ChatGPT CLI login and basic process
  * settings. In particular, it cannot inherit this application's vault access
- * token or any OpenAI/Anthropic API-key variables.
+ * token, Codex API/access token, or any OpenAI/Anthropic API-key variables.
  */
 export function codexChildEnv(parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const home = parent.HOME ?? "/tmp";
@@ -52,6 +53,7 @@ export function codexChildEnv(parent: NodeJS.ProcessEnv = process.env): NodeJS.P
     CODEX_HOME: parent.CODEX_HOME ?? `${home}/.codex`,
     OPENAI_API_KEY: "",
     CODEX_API_KEY: "",
+    CODEX_ACCESS_TOKEN: "",
     OPENAI_BASE_URL: "",
     ANTHROPIC_API_KEY: "",
     ANTHROPIC_AUTH_TOKEN: "",
@@ -62,13 +64,13 @@ export function codexChildEnv(parent: NodeJS.ProcessEnv = process.env): NodeJS.P
 
 async function requireChatGptLogin(cli: string): Promise<void> {
   try {
-    const { stdout, stderr } = await run(cli, ["login", "status"], {
+    const { stdout } = await run(cli, ["login", "status"], {
       cwd: "/tmp",
       timeout: CODEX_STATUS_TIMEOUT_MS,
       maxBuffer: 64 * 1024,
       env: codexChildEnv(),
     });
-    if (isChatGptLoginStatus(`${stdout}\n${stderr}`)) return;
+    if (isChatGptLoginStatus(stdout)) return;
   } catch {
     // Do not reveal saved-profile details. All unsuccessful checks have the
     // same fail-closed result below.
@@ -91,6 +93,9 @@ export async function chat(opts: ChatOpts): Promise<string> {
     const cli = process.env.CODEX_CLI ?? "codex";
     await requireChatGptLogin(cli);
     const { stdout } = await run(cli, [
+      // This is defense in depth for the status gate above. The CLI itself
+      // rejects any non-ChatGPT saved credential before it can run a prompt.
+      "--config", 'forced_login_method="chatgpt"',
       "exec",
       "--ephemeral",
       "--ignore-user-config",

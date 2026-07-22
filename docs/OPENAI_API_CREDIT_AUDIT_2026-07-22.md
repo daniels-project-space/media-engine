@@ -257,21 +257,25 @@ revision has no declarative schedule, then delete the `openai` vault service.
 
 `src/lib/llm.ts` now treats `codex login status` as an authentication gate, not
 merely an availability check. It runs the command with the same allowlisted
-child environment used for reasoning, accepts output only when it identifies
-the active mode as `ChatGPT`, and fails closed for API-key, access-token,
-unknown, missing, or unreadable status. The subsequent `codex exec` invocation
-is ephemeral and passes `--ignore-user-config --ignore-rules`, so it can use
-the persisted ChatGPT login in `CODEX_HOME` but cannot load an alternate model
-provider, MCP configuration, hook, or other user configuration.
+child environment and accepts only its exact successful stdout line, `Logged in
+using ChatGPT`; help text, diagnostics, API-key, access-token, unknown,
+missing, and unreadable statuses fail closed. The subsequent `codex exec`
+invocation passes the CLI's `forced_login_method="chatgpt"` restriction as
+defense in depth, is ephemeral, and passes `--ignore-user-config
+--ignore-rules`, so it can use the persisted ChatGPT login in `CODEX_HOME` but
+cannot load an alternate model provider, MCP configuration, hook, or other user
+configuration.
 
 The child environment remains a fresh allowlist and explicitly blanks OpenAI,
-Anthropic, base-URL, and vault-token variables. No fallback is attempted after
-an authentication failure; the caller gets the explicit unavailable error.
+Codex API/access-token, Anthropic, base-URL, and vault-token variables. No
+fallback is attempted after an authentication failure; the caller gets the
+explicit unavailable error.
 
 Local verification at this checkpoint: `npx tsc --noEmit`, the production
 `NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run build`,
-and `git diff --check` passed. Focused parser cases accepted only a ChatGPT
-status and rejected API-key, access-token, and ambiguous logged-in status.
+and `git diff --check` passed. Focused parser cases accepted only the exact
+ChatGPT authenticated status and rejected API-key, access-token, ambiguous,
+help, and arbitrary ChatGPT-containing status text.
 `npm run lint` continues to fail solely on the existing
 `react-hooks/set-state-in-effect` errors in Settings and Stores.
 
