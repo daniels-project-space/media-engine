@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test from "node:test";
-import { readFile, readdir } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { checkChatGptCodexAuth, codexChildEnv, type CodexCommandRunner } from "../../src/lib/llm";
+import { checkChatGptCodexAuth, codexChildEnv, decodeChatGptAuthBundle, withChatGptCodexHome, type CodexCommandRunner } from "../../src/lib/llm";
 import { vaultServiceName } from "../../src/lib/vault";
 import { abortGeneratedCarousel } from "../../src/trigger/generate-carousel";
 import { runScheduleTick } from "../../src/trigger/schedule-tick";
@@ -14,6 +14,15 @@ import triggerConfig, { CODEX_CLI_ARTIFACT_PACKAGE } from "../../trigger.config"
 const root = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
 const dns = require("node:dns") as typeof import("node:dns");
+const chatGptBundle = Buffer.from(JSON.stringify({
+  auth_mode: "chatgpt",
+  tokens: {
+    access_token: "access-token",
+    refresh_token: "refresh-token",
+    id_token: "id-token",
+    account_id: "account-id",
+  },
+}), "utf8").toString("base64");
 
 async function denyNetwork<T>(action: () => Promise<T>): Promise<{ value: T; fetches: string[]; dnsLookups: string[] }> {
   const fetches: string[] = [];
@@ -82,7 +91,7 @@ test("vault rejects OpenAI before DNS or fetch", async () => {
 });
 
 test("Codex child environment removes every API, vault, and access token", () => {
-  const child = codexChildEnv({
+  const child = codexChildEnv("/ephemeral-codex", {
     HOME: "/worker",
     OPENAI_API_KEY: "must-not-inherit",
     OPENAI_BASE_URL: "https://api.openai.com",
@@ -95,11 +104,72 @@ test("Codex child environment removes every API, vault, and access token", () =>
   } as unknown as NodeJS.ProcessEnv);
   for (const key of [
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
-    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "VAULT_ACCESS_TOKEN",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "VAULT_ACCESS_TOKEN", "CODEX_AUTH_JSON_B64",
   ]) {
     assert.equal(child[key], "", `${key} must be blanked`);
   }
-  assert.equal(child.HOME, "/worker");
+  assert.equal(child.HOME, "/ephemeral-codex");
+  assert.equal(child.CODEX_HOME, "/ephemeral-codex");
+  assert.deepEqual(Object.keys(child).sort(), [
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY", "CODEX_AUTH_JSON_B64", "CODEX_HOME",
+    "HOME", "LANG", "LC_ALL", "NODE_ENV", "NO_COLOR", "OPENAI_API_KEY", "OPENAI_BASE_URL", "PATH", "TMPDIR", "VAULT_ACCESS_TOKEN",
+  ].sort());
+});
+
+test("Codex auth bundle is ChatGPT-only, uses locked ephemeral files, and cleans up", async () => {
+  let home = "";
+  const observed = await withChatGptCodexHome(chatGptBundle, async (candidate) => {
+    home = candidate;
+    const [directory, auth, config] = await Promise.all([
+      stat(candidate),
+      stat(path.join(candidate, "auth.json")),
+      stat(path.join(candidate, "config.toml")),
+    ]);
+    const authJson = JSON.parse(await readFile(path.join(candidate, "auth.json"), "utf8")) as Record<string, unknown>;
+    return {
+      directoryMode: directory.mode & 0o777,
+      authMode: auth.mode & 0o777,
+      configMode: config.mode & 0o777,
+      authJson,
+      config: await readFile(path.join(candidate, "config.toml"), "utf8"),
+    };
+  });
+  assert.equal(observed.directoryMode, 0o700);
+  assert.equal(observed.authMode, 0o600);
+  assert.equal(observed.configMode, 0o600);
+  assert.deepEqual(observed.authJson, {
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      id_token: "id-token",
+      account_id: "account-id",
+    },
+  });
+  assert.match(observed.config, /forced_login_method = "chatgpt"/);
+  await assert.rejects(access(home));
+});
+
+test("Codex auth rejects API-key, access-token, and ambiguous bundles before filesystem access", async () => {
+  const invalid = [
+    undefined,
+    Buffer.from(JSON.stringify({ auth_mode: "api_key", tokens: {} }), "utf8").toString("base64"),
+    Buffer.from(JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: "sk-unsafe", tokens: {} }), "utf8").toString("base64"),
+    Buffer.from(JSON.stringify({ auth_mode: "chatgpt", CODEX_API_KEY: "unsafe", tokens: {} }), "utf8").toString("base64"),
+    Buffer.from(JSON.stringify({ auth_mode: "chatgpt", CODEX_ACCESS_TOKEN: "unsafe", tokens: {} }), "utf8").toString("base64"),
+    Buffer.from(JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "a", refresh_token: "r", id_token: "i" } }), "utf8").toString("base64"),
+  ];
+  for (const encoded of invalid) {
+    let filesystemTouched = false;
+    await assert.rejects(withChatGptCodexHome(encoded, async () => "unreachable", {
+      mkdtemp: async () => { filesystemTouched = true; return "/unreachable"; },
+      chmod: async () => { filesystemTouched = true; },
+      writeFile: async () => { filesystemTouched = true; },
+      rm: async () => { filesystemTouched = true; },
+    }), /requires a ChatGPT subscription login/);
+    assert.equal(filesystemTouched, false);
+  }
+  assert.deepEqual(decodeChatGptAuthBundle(chatGptBundle).auth_mode, "chatgpt");
 });
 
 test("paused image task and scheduler fail before any network or dispatch", async () => {
@@ -147,7 +217,7 @@ test("non-billable Codex auth probe accepts ChatGPT only and records its exact r
     throw new Error(`unexpected command ${args.join(" ")}`);
   };
 
-  const probe = await denyNetwork(() => runCodexAuthCheck(() => checkChatGptCodexAuth("codex", command)));
+  const probe = await denyNetwork(() => runCodexAuthCheck(() => checkChatGptCodexAuth("codex", command, chatGptBundle)));
   assert.deepEqual(probe.value, { login: "chatgpt", revision: "codex-cli 0.145.0" });
   assert.deepEqual(calls.map((call) => call.args), [["login", "status"], ["--version"]]);
   assert.ok(calls.every((call) => call.env.OPENAI_API_KEY === "" && call.env.CODEX_ACCESS_TOKEN === "" && call.env.VAULT_ACCESS_TOKEN === ""));
@@ -155,7 +225,7 @@ test("non-billable Codex auth probe accepts ChatGPT only and records its exact r
   assert.deepEqual(probe.dnsLookups, []);
 
   const apiKeyOnly: CodexCommandRunner = async () => ({ stdout: "Logged in using an API key\n" });
-  await assert.rejects(checkChatGptCodexAuth("codex", apiKeyOnly), /requires a ChatGPT subscription login/);
+  await assert.rejects(checkChatGptCodexAuth("codex", apiKeyOnly, chatGptBundle), /requires a ChatGPT subscription login/);
 
   assert.equal(CODEX_CLI_ARTIFACT_PACKAGE, "@openai/codex@0.145.0");
   const extension = triggerConfig.build?.extensions?.find((candidate) => candidate.name === "additionalPackages");
@@ -166,4 +236,24 @@ test("non-billable Codex auth probe accepts ChatGPT only and records its exact r
     addLayer: (layer: { id: string; dependencies?: Record<string, string> }) => layers.push(layer),
   } as never);
   assert.deepEqual(layers, [{ dependencies: { "@openai/codex": "0.145.0" }, id: "additionalPackages" }]);
+  const synced = triggerConfig.build?.extensions?.find((candidate) => candidate.name === "SyncEnvVarsExtension");
+  assert.ok(synced?.onBuildComplete, "Trigger must sync only the sealed Codex auth bundle");
+  const previousBundle = process.env.CODEX_AUTH_JSON_B64;
+  process.env.CODEX_AUTH_JSON_B64 = "sealed-chatgpt-bundle";
+  const syncLayers: Array<{ deploy?: { env?: Record<string, string> }; id?: string }> = [];
+  try {
+    await synced.onBuildComplete?.({
+      target: "deploy",
+      config: { project: "proj_snvnjoxqowcfsutewkzz" },
+      logger: { spinner: () => ({ stop: () => undefined }) },
+      addLayer: (layer: { deploy?: { env?: Record<string, string> }; id?: string }) => syncLayers.push(layer),
+    } as never, { deploy: { env: {} } } as never);
+  } finally {
+    if (previousBundle === undefined) delete process.env.CODEX_AUTH_JSON_B64;
+    else process.env.CODEX_AUTH_JSON_B64 = previousBundle;
+  }
+  assert.deepEqual(syncLayers, [{
+    id: "sync-env-vars",
+    deploy: { env: { CODEX_AUTH_JSON_B64: "sealed-chatgpt-bundle" }, override: true, parentEnv: undefined },
+  }]);
 });

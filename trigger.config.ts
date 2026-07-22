@@ -24,8 +24,12 @@ export default defineConfig({
       // `additionalPackages` puts the package's `codex` bin on the worker
       // path. The version is intentionally exact, never `latest` or a range.
       additionalPackages({ packages: [CODEX_CLI_ARTIFACT_PACKAGE] }),
-      syncEnvVars(() => process.env.VAULT_ACCESS_TOKEN
-        ? { VAULT_ACCESS_TOKEN: process.env.VAULT_ACCESS_TOKEN }
+      // Trigger receives precisely one secret for Codex: a base64-encoded,
+      // ChatGPT-only auth bundle. It is validated and materialized into an
+      // ephemeral home by src/lib/llm.ts, never inherited by the CLI process.
+      // In particular, do not sync vault or OpenAI/API-key environment values.
+      syncEnvVars(() => process.env.CODEX_AUTH_JSON_B64
+        ? { CODEX_AUTH_JSON_B64: process.env.CODEX_AUTH_JSON_B64 }
         : undefined),
     ],
   },

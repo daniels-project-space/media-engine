@@ -18,7 +18,7 @@
 | OpenAI image generation | inert | `generate-carousel` keeps its existing task ID but immediately throws the explicit paused error; it has no vault, HTTP, R2, Convex mutation, or spend call. |
 | Image-backed ad render | reachable only with an approved existing `imageUrl` and literal `aiEnabled === true` | `generate-ad` rejects generated/missing frames before its first vault read. Existing-image video rendering remains through Higgsfield/fal and its budget ledger. |
 | Image route callers | inert for generated images | `/api/trigger` `generate` and `/api/clients` `generate` return 503; `/api/studio` rejects generated/missing-frame draft and final renders before Trigger dispatch. |
-| Reasoning | reachable only through subscription Codex CLI | `src/lib/llm.ts` uses `codex exec --sandbox read-only`; `codexChildEnv()` clears `OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENAI_BASE_URL`, Anthropic variables, and `VAULT_ACCESS_TOKEN`. |
+| Reasoning | reachable only through subscription Codex CLI | `src/lib/llm.ts` uses `codex exec --sandbox read-only` with a fresh, mode-0700 `CODEX_HOME` created from the strict `CODEX_AUTH_JSON_B64` ChatGPT bundle; `codexChildEnv()` clears API, vault, access-token, and bundle variables. |
 | Scheduler | fail-closed | `schedule-tick` has no `cron`, checks `aiEnabled()` before reading streams or the vault, and only then can enqueue the now-paused carousel task. |
 | Campaign scheduler | reachable, separate | `campaign-tick` retains cron `7,22,37,52 * * * *`; it runs campaign orchestration, not an OpenAI client. |
 
@@ -32,7 +32,7 @@
 | Current public deployment | `/api/health`, `/api/capabilities` | **Stale / not cut over.** Public reads at 2026-07-22T15:35Z returned the old `brain: {cli, apiToken, ready}` shape and `provider: "anthropic (Claude subscription)"`; the audited source returns `Trigger Codex CLI` and `Codex CLI (ChatGPT subscription)`. It therefore cannot include `6de8857`. |
 | Convex application | `https://blissful-sardine-231.convex.cloud` | Reached indirectly by the public health route; source reads settings, posts, campaigns, and other application data through `ConvexHttpClient`. No source proxy aliases it. |
 | Central vault | `https://fantastic-roadrunner-485.convex.cloud` | `vaultService()` is the only vault client and requires `VAULT_ACCESS_TOKEN`; it retrieves named services only. Current paths no longer request service `openai`. |
-| Trigger.dev | project `proj_snvnjoxqowcfsutewkzz`; `https://api.trigger.dev/api/v1/tasks/<task>/trigger` | Vercel route bridges and Trigger tasks are reachable only if the Trigger vault key is present. `trigger.config.ts` syncs only `VAULT_ACCESS_TOKEN`; no OpenAI key is synced. Provider-side deployed task revision/schedules could not be inspected without controller access. |
+| Trigger.dev | project `proj_snvnjoxqowcfsutewkzz`; `https://api.trigger.dev/api/v1/tasks/<task>/trigger` | `trigger.config.ts` synchronizes only `CODEX_AUTH_JSON_B64`; it synchronizes no vault or OpenAI/API-key variable. The bundle is consumed only by the CLI launcher and never inherited by Codex. Provider-side deployed task revision/schedules could not be inspected without controller access. |
 | Cloudflare R2 | bucket `media-engine` | `storage.ts` uses the AWS S3 SDK plus vault `cloudflare` values. `/api/media/[...key]` is the sole committed R2 retrieval proxy: allowed prefixes redirect (302) to a one-hour presigned URL. |
 | Supabase | none in the repository | No SDK, URL, function, manifest, or proxy reference was found, so no Media Engine Supabase function is deployable from this checkout. |
 | Other external providers | fal, Higgsfield, ElevenLabs, Resend, Meta/Instagram, Shopify, Ayrshare/Postiz, Stripe, Microlink, DataForSEO/Serper, Smartlead, Modash | Some existing non-OpenAI integrations remain reachable behind their established vault and live/dry-run gates. They are not evidence of an OpenAI path. |
@@ -257,15 +257,18 @@ revision has no declarative schedule, then delete the `openai` vault service.
 ## Session 5 Codex authentication boundary
 
 `src/lib/llm.ts` now treats `codex login status` as an authentication gate, not
-merely an availability check. It runs the command with the same allowlisted
-child environment and accepts only its exact successful stdout line, `Logged in
-using ChatGPT`; help text, diagnostics, API-key, access-token, unknown,
-missing, and unreadable statuses fail closed. The subsequent `codex exec`
-invocation passes the CLI's `forced_login_method="chatgpt"` restriction as
-defense in depth, is ephemeral, and passes `--ignore-user-config
---ignore-rules`, so it can use the persisted ChatGPT login in `CODEX_HOME` but
-cannot load an alternate model provider, MCP configuration, hook, or other user
-configuration.
+merely an availability check. Trigger synchronizes only `CODEX_AUTH_JSON_B64`;
+the decoded bundle must be an exact `auth_mode: "chatgpt"` envelope with the
+expected ChatGPT token container. It rejects API-key, access-token, ambiguous,
+or malformed bundles before creating files or spawning Codex. Each invocation
+writes the validated CLI auth file and a ChatGPT-forcing config into a fresh
+mode-0700 home, mode-0600 files, and removes that home afterward. The command
+uses that home with an allowlisted child environment and accepts only its exact
+successful stdout line, `Logged in using ChatGPT`; help text, diagnostics,
+API-key, access-token, unknown, missing, and unreadable statuses fail closed.
+The subsequent `codex exec` also passes the CLI's
+`forced_login_method="chatgpt"` restriction as defense in depth, is ephemeral,
+and passes `--ignore-rules`.
 
 The child environment remains a fresh allowlist and explicitly blanks OpenAI,
 Codex API/access-token, Anthropic, base-URL, and vault-token variables. No
@@ -320,11 +323,9 @@ At the same time, bodyless public GETs to the canonical Vercel alias returned
 HTTP 200 with `brain.runtime: "Trigger Codex CLI"`, provider/model `Codex CLI
 (ChatGPT subscription)`, `aiEnabled: false`, and `liveMode: false`. No
 provider task, image route, vault query, or credential was invoked by this
-check. Provider-side least privilege remains a controller task: replace the
-currently inherited broad `VAULT_ACCESS_TOKEN` with the vault's supported
-Media-Engine-only capability (without exposing its value), delete the unused
-`openai` service, and retain name/status-only receipts. This source boundary
-continues to reject `openai` even before that rotation occurs.
+check. Provider-side least-privilege receipts remain controller-owned. This
+source boundary neither synchronizes a vault capability to Trigger nor permits
+an `openai` vault-service request.
 
 ## Session 7 exact-head and live recheck
 
