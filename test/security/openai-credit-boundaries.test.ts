@@ -116,7 +116,13 @@ test("runtime has no legacy Supabase client, function, environment, or project a
 
   // Keep this limited to executable TypeScript. The audit documentation may
   // name Supabase while recording the controller-side retirement receipt.
-  const source = await Promise.all((await allSourceFiles(path.join(root, "src"))).map((file) => readFile(file, "utf8")));
+  const executableFiles = [
+    ...(await allSourceFiles(path.join(root, "src"))),
+    ...(await allSourceFiles(path.join(root, "convex"))),
+    path.join(root, "next.config.ts"),
+    path.join(root, "trigger.config.ts"),
+  ];
+  const source = await Promise.all(executableFiles.map((file) => readFile(file, "utf8")));
   const runtime = source.join("\n");
   assert.doesNotMatch(
     runtime,
