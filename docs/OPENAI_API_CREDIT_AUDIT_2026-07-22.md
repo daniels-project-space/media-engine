@@ -157,3 +157,32 @@ no matches; `npm ls openai @ai-sdk/openai @ai-sdk/anthropic @mastra/core
 still exits 1 on the pre-existing `react-hooks/set-state-in-effect` findings in
 `src/app/settings/page.tsx:28` and `src/app/stores/page.tsx:22`; it reports no
 OpenAI-containment finding.
+
+## Session 4 alias-closure evidence
+
+At 2026-07-22T15:57:45Z and `15:57:46Z`, further bodyless, read-only GETs to
+the canonical Vercel hostname returned HTTP 200 with `server: Vercel` and
+matched paths `/api/health` and `/api/capabilities`, respectively. Health still
+reported `brain: { cli: false, apiToken: true, ready: true }`; capabilities
+still reported `model: "claude-sonnet-5"` and `provider: "anthropic (Claude
+subscription)"`. Neither response can be produced by this branch, whose
+equivalent route values are `brain.runtime: "Trigger Codex CLI"` and
+`provider: "Codex CLI (ChatGPT subscription)"`.
+
+This is direct, current evidence that the canonical alias remains on an older
+deployment. It also reported `aiEnabled: false`, but that setting cannot
+contain the stale build because the old build's source has not been proven to
+enforce the current pre-vault guards. The requests had no body and did not call
+an image/dispatch route, Trigger task, vault, OpenAI endpoint, or any other
+provider operation.
+
+At the time of the live check, the supplied branch and its origin both resolved
+to `609bfe8638f983dc434e60d6df6b97f2cd0305e0`; therefore the blocker is not an
+unpublished source containment commit. No committed Vercel project metadata, alias,
+rewrite, redirect, or provider-management capability exists in this checkout.
+Replacing or disabling that deployed alias is an external Vercel state change,
+and this runner is expressly not authorized to deploy or exercise provider
+credentials. The delivery controller must atomically promote this branch to the
+canonical alias, sync the Trigger revision (removing `schedule-tick`'s cron),
+then repeat only the two safe GET checks before deleting the now-unused central
+vault `openai` service. Do not validate by invoking any legacy route or task.
