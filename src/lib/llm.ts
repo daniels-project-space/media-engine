@@ -18,6 +18,19 @@ export type ChatOpts = {
 };
 
 const run = promisify(execFile);
+const CODEX_STATUS_TIMEOUT_MS = 10_000;
+
+/**
+ * `codex login status` is intentionally the authentication authority here.
+ * A zero exit only means that *some* credentials exist, while this workload
+ * accepts only the ChatGPT subscription login and must reject saved API-key
+ * and access-token modes.
+ */
+export function isChatGptLoginStatus(status: string): boolean {
+  const normalized = status.toLowerCase();
+  return normalized.includes("chatgpt")
+    && !/\bapi[ -]?key\b|\baccess token\b/.test(normalized);
+}
 
 /**
  * Give the specialist only its persisted ChatGPT CLI login and basic process
@@ -47,6 +60,22 @@ export function codexChildEnv(parent: NodeJS.ProcessEnv = process.env): NodeJS.P
   };
 }
 
+async function requireChatGptLogin(cli: string): Promise<void> {
+  try {
+    const { stdout, stderr } = await run(cli, ["login", "status"], {
+      cwd: "/tmp",
+      timeout: CODEX_STATUS_TIMEOUT_MS,
+      maxBuffer: 64 * 1024,
+      env: codexChildEnv(),
+    });
+    if (isChatGptLoginStatus(`${stdout}\n${stderr}`)) return;
+  } catch {
+    // Do not reveal saved-profile details. All unsuccessful checks have the
+    // same fail-closed result below.
+  }
+  throw new Error("Codex CLI requires a ChatGPT subscription login; API-key and access-token authentication are disabled");
+}
+
 export async function chat(opts: ChatOpts): Promise<string> {
   if (!(await aiEnabled())) throw new Error("AI paused — re-enable in Settings to run the orchestrator");
 
@@ -59,8 +88,13 @@ export async function chat(opts: ChatOpts): Promise<string> {
   ].filter(Boolean).join("\n\n");
 
   try {
-    const { stdout } = await run(process.env.CODEX_CLI ?? "codex", [
+    const cli = process.env.CODEX_CLI ?? "codex";
+    await requireChatGptLogin(cli);
+    const { stdout } = await run(cli, [
       "exec",
+      "--ephemeral",
+      "--ignore-user-config",
+      "--ignore-rules",
       "--sandbox", "read-only",
       "--skip-git-repo-check",
       "--color", "never",
