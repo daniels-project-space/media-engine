@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { accountTokenVaultService, vaultService } from "../lib/vault";
+import { aiEnabled } from "../lib/ai-gate";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const IG_BASE = "https://graph.instagram.com/v23.0";
@@ -32,10 +33,14 @@ async function waitContainer(id: string, token: string) {
 // Publishes an approved post to its persona's linked account.
 // Instagram uses the "Instagram API with Instagram Login" flow (no Facebook Page):
 // per-slide containers -> carousel container -> media_publish.
-export const publishPost = task({
-  id: "publish-post",
-  maxDuration: 600,
-  run: async (payload: { postId: string }) => {
+export async function runPublishPost(
+  payload: { postId: string },
+  isAiEnabled: () => Promise<boolean> = aiEnabled,
+) {
+    // This task can be invoked directly by Trigger, bypassing /api/trigger.
+    // Gate before creating a Convex client, resolving the social vault token,
+    // or issuing an Instagram request.
+    if (!(await isAiEnabled())) throw new AbortTaskRunError("AI generation is paused");
     const convex = new ConvexHttpClient(CONVEX_URL);
     const post = await convex.query(api.posts.get, { id: payload.postId as Id<"posts"> });
     if (!post) throw new AbortTaskRunError("post not found");
@@ -116,5 +121,10 @@ export const publishPost = task({
       await convex.mutation(api.posts.fail, { id: post._id, error: `publish: ${message}` });
       throw err;
     }
-  },
+}
+
+export const publishPost = task({
+  id: "publish-post",
+  maxDuration: 600,
+  run: (payload: { postId: string }) => runPublishPost(payload),
 });

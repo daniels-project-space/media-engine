@@ -9,11 +9,14 @@ import { abortGeneratedCarousel } from "../../src/trigger/generate-carousel";
 import { runScheduleTick } from "../../src/trigger/schedule-tick";
 import { runCampaignTick } from "../../src/trigger/campaign-tick";
 import { runCodexAuthCheck } from "../../src/trigger/codex-auth-check";
+import { runPublishPost } from "../../src/trigger/publish-post";
 import { POST as triggerPost } from "../../src/app/api/trigger/route";
 import { POST as studioPost } from "../../src/app/api/studio/route";
 import { POST as campaignPost } from "../../src/app/api/campaign/route";
 import { POST as tickPost } from "../../src/app/api/tick/route";
 import { POST as repurposePost } from "../../src/app/api/repurpose/route";
+import { POST as clientPost } from "../../src/app/api/client/route";
+import { POST as crossmarketPost } from "../../src/app/api/crossmarket/route";
 import triggerConfig, { CODEX_CLI_ARTIFACT_PACKAGE } from "../../trigger.config";
 
 const root = path.resolve(import.meta.dirname, "../..");
@@ -218,6 +221,14 @@ test("paused image task and scheduler fail before any network or dispatch", asyn
   assert.equal(campaignScheduler.value, "paused");
   assert.deepEqual(campaignScheduler.fetches, []);
   assert.deepEqual(campaignScheduler.dnsLookups, []);
+
+  const publisher = await denyNetwork(async () => {
+    await assert.rejects(runPublishPost({ postId: "ignored" }, async () => false), /AI generation is paused/);
+    return "paused";
+  });
+  assert.equal(publisher.value, "paused");
+  assert.deepEqual(publisher.fetches, []);
+  assert.deepEqual(publisher.dnsLookups, []);
 });
 
 test("direct image route returns 503 before vault or Trigger dispatch", async () => {
@@ -259,10 +270,15 @@ test("disabled billed routes fail before Convex, vault, Trigger, or providers", 
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ assetId: "ignored", platform: "instagram", mode: "reframe" }),
       }) as never),
+      clientPost(new Request("https://media-engine.invalid/api/client", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Test client", brief: "A product brief" }),
+      }) as never),
+      crossmarketPost(),
     ]);
     return Promise.all(responses.map(async (response) => ({ status: response.status, body: await response.json() as { error?: string } })));
   }));
-  assert.equal(probe.value.length, 6);
+  assert.equal(probe.value.length, 8);
   for (const response of probe.value) {
     assert.equal(response.status, 503);
     assert.match(response.body.error ?? "", /AI generation is paused/);
@@ -295,6 +311,18 @@ test("non-billable Codex auth probe accepts ChatGPT only and records its exact r
     async () => ({ stdout: " Logged in using ChatGPT\n", stderr: "", exitCode: 0 }),
   ];
   for (const commandWithBadReceipt of invalidStatusReceipts) {
+    await assert.rejects(checkChatGptCodexAuth("codex", commandWithBadReceipt, chatGptBundle), /requires a ChatGPT subscription login/);
+  }
+
+  const invalidVersionReceipts: CodexCommandRunner[] = [
+    async (_cli, args) => args.join(" ") === "login status"
+      ? { stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 0 }
+      : { stdout: "codex-cli 0.145.0\n", stderr: "warning: legacy config\n", exitCode: 0 },
+    async (_cli, args) => args.join(" ") === "login status"
+      ? { stdout: "Logged in using ChatGPT\n", stderr: "", exitCode: 0 }
+      : { stdout: "codex-cli 0.145.0\n", stderr: "", exitCode: 1 },
+  ];
+  for (const commandWithBadReceipt of invalidVersionReceipts) {
     await assert.rejects(checkChatGptCodexAuth("codex", commandWithBadReceipt, chatGptBundle), /requires a ChatGPT subscription login/);
   }
 

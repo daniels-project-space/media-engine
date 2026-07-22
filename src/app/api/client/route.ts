@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { understand } from "@/lib/orchestrator/understand";
+import { aiEnabled } from "@/lib/ai-gate";
 
 export const maxDuration = 120;
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -20,6 +21,12 @@ export async function POST(req: NextRequest) {
     goals?: string;
   };
   if (!b.name || b.name.trim().length < 2) return NextResponse.json({ error: "name is required" }, { status: 400 });
+  // Brand enrichment can launch Codex and fetch a customer URL. Preserve a
+  // plain CRM create, but keep the enrichment path side-effect free while
+  // billing is disabled.
+  if ((b.website || b.brief) && !(await aiEnabled())) {
+    return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
+  }
   const cx = new ConvexHttpClient(CONVEX_URL);
 
   const clientId = await cx.mutation(api.crm.create, {
