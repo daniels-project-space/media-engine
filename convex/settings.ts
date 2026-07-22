@@ -1,6 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { requireAuthenticatedAiEnable } from "./settings-access";
+import { requireAuthenticatedAiEnable } from "./settings_access";
 
 export const all = query({
   args: {},

@@ -6,7 +6,7 @@ import path from "node:path";
 import { checkChatGptCodexAuth, codexChildEnv, decodeChatGptAuthBundle, withChatGptCodexHome, type CodexCommandRunner } from "../../src/lib/llm";
 import { MEDIA_ENGINE_CONVEX_URL } from "../../src/lib/ai-gate";
 import { VAULT_SERVICES, vaultServiceName } from "../../src/lib/vault";
-import { requireAuthenticatedAiEnable } from "../../convex/settings-access";
+import { requireAuthenticatedAiEnable } from "../../convex/settings_access";
 import { abortGeneratedCarousel } from "../../src/trigger/generate-carousel";
 import { runScheduleTick } from "../../src/trigger/schedule-tick";
 import { runCampaignTick } from "../../src/trigger/campaign-tick";
