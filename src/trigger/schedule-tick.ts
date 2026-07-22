@@ -1,22 +1,28 @@
-import { schedules, logger, tasks } from "@trigger.dev/sdk/v3";
+import { schedules, logger, tasks, AbortTaskRunError } from "@trigger.dev/sdk/v3";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import { vaultService } from "../lib/vault";
+import { aiEnabled } from "../lib/ai-gate";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const MAX_GENERATIONS_PER_TICK = 3;
 const MAX_PUBLISHES_PER_TICK = 3;
 
-// The autopilot heartbeat. Every 30 minutes:
+// The autopilot heartbeat. Its declarative cron is deliberately absent: deploying
+// this task removes the production schedule. An imperative/dashboard schedule
+// cannot bypass the fail-closed check at the start of the run.
+//
 // 1. Planned posts due soon on ACTIVE streams -> start generation.
 // 2. Ready posts on ACTIVE + fully-automatic streams -> auto-approve.
 // 3. Approved posts due on ACTIVE streams with a LINKED account -> publish.
 // Approval-gated streams stop at "ready" and wait for Daniel in the queue.
 export const scheduleTick = schedules.task({
   id: "schedule-tick",
-  cron: "*/30 * * * *",
   maxDuration: 300,
   run: async () => {
+    if (!(await aiEnabled())) {
+      throw new AbortTaskRunError("AI generation is paused");
+    }
     const convex = new ConvexHttpClient(CONVEX_URL);
     const now = Date.now();
     const soon = now + 60 * 60 * 1000;

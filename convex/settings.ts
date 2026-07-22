@@ -9,12 +9,13 @@ export const all = query({
   },
 });
 
-// AI (OpenRouter) kill switch — default ON; set false to pause all LLM spend.
+// AI generation kill switch — default OFF. Only an explicit boolean true enables
+// provider-backed generation; missing or malformed values remain paused.
 export const aiEnabled = query({
   args: {},
   handler: async (ctx) => {
     const row = await ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", "aiEnabled")).unique();
-    return row ? Boolean(row.value) : true;
+    return row?.value === true;
   },
 });
 

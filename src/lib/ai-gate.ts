@@ -3,14 +3,13 @@ import { api } from "../../convex/_generated/api";
 
 const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL ?? "https://blissful-sardine-231.convex.cloud";
 
-// Global OpenRouter (LLM) kill switch. Reads the `aiEnabled` settings flag. Every
-// OpenRouter call site checks this first so all LLM spend can be paused in one place.
-// Fails OPEN on a read error (a transient Convex blip shouldn't disable AI when it's
-// meant to be on — the stored flag is the reliable control).
+// Global generation kill switch. This is intentionally fail-closed: a missing
+// setting, malformed value, or Convex read failure must never permit a provider
+// request that could consume credits.
 export async function aiEnabled(): Promise<boolean> {
   try {
-    return await new ConvexHttpClient(CONVEX_URL).query(api.settings.aiEnabled, {});
+    return (await new ConvexHttpClient(CONVEX_URL).query(api.settings.aiEnabled, {})) === true;
   } catch {
-    return true;
+    return false;
   }
 }

@@ -4,6 +4,7 @@ import { presignedGet } from "@/lib/storage";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
+import { aiEnabled } from "@/lib/ai-gate";
 
 export const maxDuration = 60;
 
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
   if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
 
   try {
+    if (!(await aiEnabled())) return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
     if (body.action === "plan") {
       const productImageUrl = body.productImageKey ? await presignedGet(body.productImageKey, 60 * 60 * 24) : undefined;
       const runId = await triggerTask("plan-ad-script", {

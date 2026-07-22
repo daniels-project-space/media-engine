@@ -6,6 +6,7 @@ import { vaultService } from "../lib/vault";
 import { putObject, presignedGet } from "../lib/storage";
 import { scoreImage } from "../lib/vision";
 import { buildVariantTag } from "../lib/variant";
+import { aiEnabled } from "../lib/ai-gate";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const DEFAULT_CAP_PENCE = 500;
@@ -73,6 +74,9 @@ export const generateCarousel = task({
   id: "generate-carousel",
   maxDuration: 900,
   run: async (payload: Payload, { ctx }) => {
+    // Check before reading posts, writing state, or retrieving the OpenAI vault
+    // entry. Direct Trigger calls therefore cannot bypass the HTTP/scheduler gate.
+    if (!(await aiEnabled())) throw new AbortTaskRunError("AI generation is paused");
     const convex = new ConvexHttpClient(CONVEX_URL);
 
     // Resolve the post: reuse existing (planned post or retry attempt) or create one.

@@ -16,6 +16,7 @@ import { renderClip, VIDEO_MODELS, primeHiggsfield } from "../lib/video-router";
 import { higgsGenerateAudio } from "../lib/higgsfield";
 import { scoreImage } from "../lib/vision";
 import { buildVariantTag } from "../lib/variant";
+import { aiEnabled } from "../lib/ai-gate";
 import sharp from "sharp";
 import * as opentype from "opentype.js";
 
@@ -225,6 +226,9 @@ export const generateAd = task({
   machine: "large-1x", // 4 concurrent 1080x1920 x264 encodes need the RAM headroom
   retry: { maxAttempts: 1 },
   run: async (payload: Payload, { ctx }) => {
+    // This task obtains an OpenAI image key for generated-frame scenes. Pause the
+    // entire render rather than silently substituting a lower-quality route.
+    if (!(await aiEnabled())) throw new AbortTaskRunError("AI generation is paused");
     const convex = new ConvexHttpClient(CONVEX_URL);
     const streamSlug = payload.streamSlug ?? "client-ads";
     const quick = payload.quick !== false; // quick UGC is the default

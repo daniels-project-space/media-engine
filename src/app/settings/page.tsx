@@ -35,7 +35,7 @@ export default function Settings() {
   }
 
   const adsEnabled = Boolean(settings.adsEnabled ?? false);
-  const aiOn = settings.aiEnabled !== false; // default ON
+  const aiOn = settings.aiEnabled === true; // default OFF; only explicit true enables generation
 
   return (
     <div className="max-w-3xl">

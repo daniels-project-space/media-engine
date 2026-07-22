@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { vaultService } from "@/lib/vault";
+import { aiEnabled } from "@/lib/ai-gate";
 
 export const maxDuration = 30;
 
@@ -26,6 +27,10 @@ export async function POST(req: NextRequest) {
 
   let taskId: string;
   let payload: Record<string, unknown>;
+  if ((body.action === "generate" || body.action === "plan") && !(await aiEnabled())) {
+    return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
+  }
+
   if (body.action === "generate" && body.postId) {
     taskId = "generate-carousel";
     payload = { postId: body.postId };

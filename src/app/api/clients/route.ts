@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
   };
 
   if (body.action === "generate") {
+    if (!(await aiEnabled())) return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
     if (!body.orderId || !body.brief) return NextResponse.json({ error: "orderId + brief required" }, { status: 400 });
     const trigger = await vaultService("trigger");
     const key = trigger.TRIGGER_SECRET_KEY_MEDIA_ENGINE;
