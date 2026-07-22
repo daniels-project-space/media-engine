@@ -242,6 +242,10 @@ test("disabled billed routes fail before Convex, vault, Trigger, or providers", 
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "short", imageUrl: "https://example.invalid/source.png", streamSlug: "test", title: "test" }),
       }) as never),
+      triggerPost(new Request("https://media-engine.invalid/api/trigger", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "publish", postId: "ignored" }),
+      }) as never),
       studioPost(new Request("https://media-engine.invalid/api/studio", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "plan", projectId: "ignored" }),
@@ -258,7 +262,7 @@ test("disabled billed routes fail before Convex, vault, Trigger, or providers", 
     ]);
     return Promise.all(responses.map(async (response) => ({ status: response.status, body: await response.json() as { error?: string } })));
   }));
-  assert.equal(probe.value.length, 5);
+  assert.equal(probe.value.length, 6);
   for (const response of probe.value) {
     assert.equal(response.status, 503);
     assert.match(response.body.error ?? "", /AI generation is paused/);

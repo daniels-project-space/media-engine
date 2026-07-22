@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
   }
   // Every action below can dispatch Codex work or a billable media task. Check
   // before resolving the Trigger vault secret or making the dispatch request.
-  if (body.action !== "publish" && !(await aiEnabled())) {
+  if (!(await aiEnabled())) {
     return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
   }
 
