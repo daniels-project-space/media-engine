@@ -4,6 +4,7 @@ import test from "node:test";
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { checkChatGptCodexAuth, codexChildEnv, decodeChatGptAuthBundle, withChatGptCodexHome, type CodexCommandRunner } from "../../src/lib/llm";
+import { MEDIA_ENGINE_CONVEX_URL } from "../../src/lib/ai-gate";
 import { VAULT_SERVICES, vaultServiceName } from "../../src/lib/vault";
 import { requireAuthenticatedAiEnable } from "../../convex/settings-access";
 import { abortGeneratedCarousel } from "../../src/trigger/generate-carousel";
@@ -160,6 +161,12 @@ test("the public settings mutation applies the kill-switch identity check", asyn
     settingsSource,
     /requireAuthenticatedAiEnable\(key, value, \(await ctx\.auth\.getUserIdentity\(\)\) !== null\)/,
   );
+});
+
+test("the kill switch always reads Media Engine's Convex deployment", async () => {
+  assert.equal(MEDIA_ENGINE_CONVEX_URL, "https://blissful-sardine-231.convex.cloud");
+  const gateSource = await readFile(path.join(root, "src/lib/ai-gate.ts"), "utf8");
+  assert.doesNotMatch(gateSource, /NEXT_PUBLIC_CONVEX_URL/);
 });
 
 test("Codex child environment removes every API, vault, and access token", () => {
