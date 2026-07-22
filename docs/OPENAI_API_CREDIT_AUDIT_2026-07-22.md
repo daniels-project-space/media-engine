@@ -221,3 +221,34 @@ an empty tree and `git diff --check` passed. `npm run lint` still fails only on
 the existing `react-hooks/set-state-in-effect` errors at
 `src/app/settings/page.tsx:28` and `src/app/stores/page.tsx:22` (plus warnings);
 it reports no containment error.
+
+## Session 4 supervisor follow-up — deployed schedule and vault boundary
+
+At `2026-07-22T16:07:01Z`, bodyless, read-only GETs to the canonical hostname
+again returned `HTTP 200`, `server: Vercel`, and `x-matched-path` values
+`/api/health` and `/api/capabilities`. The health response reported
+`brain.runtime: "Trigger Codex CLI"`, `aiEnabled: false`, and `liveMode: false`.
+The capabilities response identified both its model and provider as `Codex CLI
+(ChatGPT subscription)` and its safety capabilities explicitly say image
+generation is paused. This confirms the canonical alias is still on the
+contained Vercel deployment; no image, dispatch, Trigger, vault, or provider
+route was invoked by these checks.
+
+The current source leaves no caller able to dispatch an OpenAI image run:
+`schedule-tick` has no `cron`, first checks the fail-closed setting before any
+Convex or vault work, and its sole `generate-carousel` dispatch reaches a task
+that immediately throws the paused error. `generate-ad` similarly rejects a
+generated or missing frame before its first vault access. A full runtime-source
+scan (excluding documentation and lock metadata) found no OpenAI host,
+`/v1/images/generations`, `gpt-image-*`, `vaultService("openai")`, direct OpenAI
+SDK import, or OpenAI package dependency.
+
+The Trigger production revision/schedule inventory and the central-vault
+service inventory are authenticated provider state. This checkout has no
+Vercel, Trigger, Convex, or vault management capability, and credentials were
+not read or exercised. Consequently it cannot honestly prove the removed
+`schedule-tick` cron has synchronized, nor delete/re-read the unused central
+vault service named `openai`. Do not use a task invocation as a substitute for
+that proof. The delivery controller must make these two provider-side changes
+and retain its name/status-only receipts: verify the deployed `schedule-tick`
+revision has no declarative schedule, then delete the `openai` vault service.
