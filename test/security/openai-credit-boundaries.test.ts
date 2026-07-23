@@ -10,7 +10,7 @@ import { requireAuthenticatedAiEnable } from "../../convex/settings_access";
 import { abortGeneratedCarousel } from "../../src/trigger/generate-carousel";
 import { runScheduleTick } from "../../src/trigger/schedule-tick";
 import { runCampaignTick } from "../../src/trigger/campaign-tick";
-import { runCodexAuthCheck } from "../../src/trigger/codex-auth-check";
+import { createCodexAuthCheckHandler, runCodexAuthCheck } from "../../src/trigger/codex-auth-check";
 import { runPublishPost } from "../../src/trigger/publish-post";
 import { POST as triggerPost } from "../../src/app/api/trigger/route";
 import { POST as studioPost } from "../../src/app/api/studio/route";
@@ -468,4 +468,20 @@ test("non-billable Codex auth probe accepts ChatGPT only and records its exact r
     id: "sync-env-vars",
     deploy: { env: { CODEX_AUTH_JSON_B64: "sealed-chatgpt-bundle" }, override: true, parentEnv: undefined },
   }]);
+});
+
+test("Codex auth Trigger handler ignores payload and context when selecting its checker", async () => {
+  let checks = 0;
+  const handler = createCodexAuthCheckHandler(async () => {
+    checks += 1;
+    return { revision: "codex-cli 0.145.0" };
+  });
+
+  const result = await handler(
+    { check: "ordinary Trigger payload, not a checker" },
+    { ctx: { run: { id: "run_test" } } },
+  );
+
+  assert.deepEqual(result, { login: "chatgpt", revision: "codex-cli 0.145.0" });
+  assert.equal(checks, 1);
 });
