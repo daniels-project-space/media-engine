@@ -603,3 +603,48 @@ in this repository's scope is controller-owned deployment of this exact head,
 then the bounded disabled POST checks and the already-listed provider-account
 receipts. The definition of done is not met without that deployed-state and
 billing reconciliation evidence.
+
+## Session 15 independent alias and source recheck
+
+At 2026-07-23T06:38Z, the supplied branch and its `origin` tracking ref both
+resolved to `7f84c91b51f0aa9e3fdcab9d12680317017e3d73`; the corrective
+`c6825035a7cf2fb3423cb088bfaa57a69627f7cf` remains an ancestor. The one
+configured remote remains the canonical Media Engine repository. No source
+change was indicated by the caller trace: neither `/api/tick` nor
+`/api/crossmarket` has an in-repository caller. Their POST paths check the
+shared fail-closed `aiEnabled()` gate before their respective Trigger/Vault or
+Convex/Codex work. Reasoning call sites import only `src/lib/llm.ts`, which
+uses the pinned ChatGPT-authenticated Codex CLI and clears API, vault, and
+access-token variables in its child environment.
+
+Four bodyless, read-only requests to the canonical Vercel alias returned
+`server: Vercel` and the expected matched paths. Health returned HTTP 200 with
+`brain.runtime: "Trigger Codex CLI"`, `aiEnabled: false`, and `liveMode:
+false`; capabilities returned HTTP 200 with model and provider `Codex CLI
+(ChatGPT subscription)`. The source-compatible `GET /api/crossmarket` returned
+HTTP 200 with an empty proposal list. However, `GET /api/tick` returned HTTP
+503 with `{ "ok": false, "error": "AI generation is paused" }`, rather
+than this exact head's HTTP 405, `Allow: POST`, and `method not allowed`
+response. Thus the canonical alias is still serving a predecessor and cannot
+be tied to this contained head. No POST, Trigger task, vault endpoint, Convex
+mutation, Codex invocation, credential endpoint, or provider API was called;
+a POST negative probe remains unsafe until that deployment mismatch is fixed.
+
+On the exact local head, `npm run test:security` passed 14/14,
+`npx tsc --noEmit` passed, and
+`NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run
+build` completed with `.next/BUILD_ID` `BLoQgz1MZiQ8w7wSBggGP`.
+`git diff --check` passed. The suite covers absence of a runtime OpenAI
+client/host/model path and legacy Supabase path, pre-network rejection of
+OpenAI vault aliases, unauthenticated kill-switch enablement, cleared Codex
+child credentials, and disabled route/GET no-dispatch behavior.
+
+The definition of done remains unmet. The controller must deploy this exact
+head to the canonical alias, verify the deployed Trigger revision and its
+no-cron `schedule-tick` state, then run the bounded disabled POST probes. The
+redacted provider receipts already specified above remain required for Vercel
+and Trigger environment aliases, Media-only vault capability plus deletion and
+re-read of `openai`, legacy Supabase unreachability, revoked OpenAI Platform
+keys, and disabled OpenAI API/ChatGPT/Codex recharge controls. This checkout
+has no scoped credentials or authority to inspect or alter those provider
+states.
