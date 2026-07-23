@@ -500,3 +500,41 @@ deletion/re-read of `openai`, legacy Supabase retirement, revoked OpenAI
 Platform keys, and OpenAI/ChatGPT/Codex billing controls showing no API
 recharge. Do not treat this route test or public reads as substitutes for
 those provider receipts.
+
+## Session 12 exact-head negative re-probe
+
+At 2026-07-23T02:12Z, the supplied branch, `origin`, and the preserved
+lineage remote all resolved to
+`c6825035a7cf2fb3423cb088bfaa57a69627f7cf` (`security: prevent tick GET
+dispatch`). The worktree was clean before this evidence update. The source
+returns HTTP 405, `Allow: POST`, and `{ ok: false, error: "method not
+allowed" }` for `GET /api/tick` without consulting the AI gate, Convex, vault,
+Trigger, Codex, or any provider.
+
+A new bodyless public `GET https://media-engine-seven.vercel.app/api/tick`
+instead returned HTTP 503 from Vercel (`x-matched-path: /api/tick`) with
+`{ "ok": false, "error": "AI generation is paused" }`. That is safe while
+the public `aiEnabled` setting is false, but it proves the canonical alias is
+not yet serving this exact head: it still executes the predecessor GET-to-POST
+shape. In the same read-only recheck, `/api/health` reported
+`brain.runtime: "Trigger Codex CLI"`, `aiEnabled: false`, and `liveMode:
+false`; `/api/capabilities` reported model and provider
+`Codex CLI (ChatGPT subscription)`. No POST, task endpoint, vault endpoint,
+or credential-bearing provider endpoint was invoked.
+
+Current-head verification passed: `npm run test:security` (14/14, including
+the DNS/fetch-denied GET regression), `npx tsc --noEmit`, and
+`NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run
+build` (generated `.next/BUILD_ID`). `git diff --check` passed. The security
+suite confirms no runtime OpenAI client/host/model path, rejects `openai`
+before DNS/fetch, and clears API/vault/access-token variables from Codex child
+processes.
+
+The only valid next action is controller-owned: promote this exact revision to
+the canonical Vercel alias, verify the deployed Trigger revision and its
+no-cron `schedule-tick` state, then repeat the bounded disabled negative POST
+probes. Retain the required redacted provider receipts for Vercel/Trigger
+environment-key names, Media-only vault capability plus deletion/re-read of
+`openai`, legacy Supabase unreachability, revoked OpenAI Platform keys, and
+disabled API/ChatGPT/Codex recharge controls. This checkout has no authority
+to inspect or change those provider states.
