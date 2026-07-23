@@ -572,3 +572,34 @@ Final local verification on this exact source passed `npm run test:security`
 `NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run
 build`; the resulting `.next/BUILD_ID` was `c0wScBCVcZSOS9glAl87B`.
 `git diff --check` also passed.
+
+## Session 14 independent production re-probe
+
+At 2026-07-23T03:18Z, the supplied branch and its `origin` tracking ref both
+resolved to `3e617bf6fce42d9a253030018d0d472d00f2f052`; the corrective
+`c6825035a7cf2fb3423cb088bfaa57a69627f7cf` remains its ancestor. Three
+bodyless, read-only GET requests to the canonical alias returned `server:
+Vercel`, cache-miss responses, and the expected matched paths. Health returned
+HTTP 200 with `brain.runtime: "Trigger Codex CLI"`, `aiEnabled: false`, and
+`liveMode: false`; capabilities returned HTTP 200 with model and provider
+`Codex CLI (ChatGPT subscription)`.
+
+However, `GET /api/tick` returned HTTP 503 with `{ "ok": false, "error":
+"AI generation is paused" }`, rather than this exact head's HTTP 405,
+`Allow: POST`, and `method not allowed` response. The canonical alias therefore
+still serves a build predating the GET-dispatch correction and cannot be tied to
+the contained head. No POST, Trigger task, vault, Convex mutation, Codex
+invocation, provider API, or credential-bearing endpoint was called. A POST
+negative probe remains unsafe until controller deployment because the old GET
+implementation demonstrates that the alias can still route dispatch-capable
+logic when the kill switch changes.
+
+On the exact local head, `npm run test:security` passed 14/14 (including the
+network-denied `GET /api/tick` regression), `npx tsc --noEmit` passed, and
+`NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run
+build` completed with `.next/BUILD_ID`
+`TZ2fwpG2TgYGh2PQQtKlz`; `git diff --check` passed. The only remaining action
+in this repository's scope is controller-owned deployment of this exact head,
+then the bounded disabled POST checks and the already-listed provider-account
+receipts. The definition of done is not met without that deployed-state and
+billing reconciliation evidence.
