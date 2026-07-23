@@ -538,3 +538,37 @@ environment-key names, Media-only vault capability plus deletion/re-read of
 `openai`, legacy Supabase unreachability, revoked OpenAI Platform keys, and
 disabled API/ChatGPT/Codex recharge controls. This checkout has no authority
 to inspect or change those provider states.
+
+## Session 13 canonical-alias re-read
+
+At 2026-07-23T02:41Z, the supplied branch and its `origin` tracking ref both
+resolved to `db230bce701bdd55bf10081e47bd16ba82e2071b`; the corrective
+`c6825035a7cf2fb3423cb088bfaa57a69627f7cf` is an ancestor of that exact head.
+The one configured repository remote is
+`https://github.com/daniels-project-space/media-engine.git`. No source change
+was indicated by this re-read.
+
+Three bodyless, read-only requests to the canonical Vercel alias returned
+`server: Vercel` and `x-matched-path` values for the requested routes. Health
+returned HTTP 200 with `brain.runtime: "Trigger Codex CLI"`, `aiEnabled:
+false`, and `liveMode: false`; capabilities returned HTTP 200 with model and
+provider `Codex CLI (ChatGPT subscription)`. `GET /api/tick` returned HTTP 503
+with `{ "ok": false, "error": "AI generation is paused" }`, rather than
+the exact-head HTTP 405 and `Allow: POST` response. Thus the canonical alias
+still cannot be tied to the contained corrective head. No POST, Trigger,
+vault, Convex mutation, Codex invocation, provider API, or credential endpoint
+was called; repeating a POST while this stale alias can dispatch a run is not a
+safe negative probe.
+
+The controller must deploy this exact head to the alias before the bounded
+disabled POST re-probe can establish the route-level claim. The independent
+provider-account receipts listed above remain required to establish that no
+deployed environment, vault record, legacy function, Platform key, or billing
+control can consume OpenAI API credits. This checkout has neither the scoped
+credentials nor authority to inspect or alter those states.
+
+Final local verification on this exact source passed `npm run test:security`
+(14/14), `npx tsc --noEmit`, and
+`NEXT_PUBLIC_CONVEX_URL=https://blissful-sardine-231.convex.cloud npm run
+build`; the resulting `.next/BUILD_ID` was `c0wScBCVcZSOS9glAl87B`.
+`git diff --check` also passed.
