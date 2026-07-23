@@ -15,7 +15,7 @@ import { runPublishPost } from "../../src/trigger/publish-post";
 import { POST as triggerPost } from "../../src/app/api/trigger/route";
 import { POST as studioPost } from "../../src/app/api/studio/route";
 import { POST as campaignPost } from "../../src/app/api/campaign/route";
-import { POST as tickPost } from "../../src/app/api/tick/route";
+import { GET as tickGet, POST as tickPost } from "../../src/app/api/tick/route";
 import { POST as repurposePost } from "../../src/app/api/repurpose/route";
 import { POST as clientPost } from "../../src/app/api/client/route";
 import { POST as crossmarketPost } from "../../src/app/api/crossmarket/route";
@@ -343,6 +343,22 @@ test("disabled billed routes fail before Convex, vault, Trigger, or providers", 
     assert.equal(response.status, 503);
     assert.match(response.body.error ?? "", /AI generation is paused/);
   }
+  assert.deepEqual(probe.fetches, []);
+  assert.deepEqual(probe.dnsLookups, []);
+});
+
+test("tick GET is never an alternate Trigger-dispatch path", async () => {
+  const probe = await denyNetwork(async () => {
+    const response = await tickGet();
+    return {
+      status: response.status,
+      allow: response.headers.get("allow"),
+      body: await response.json() as { error?: string },
+    };
+  });
+  assert.equal(probe.value.status, 405);
+  assert.equal(probe.value.allow, "POST");
+  assert.equal(probe.value.body.error, "method not allowed");
   assert.deepEqual(probe.fetches, []);
   assert.deepEqual(probe.dnsLookups, []);
 });

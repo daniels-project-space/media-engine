@@ -473,3 +473,30 @@ token, delete then re-read `openai`, retire the legacy Supabase function, and
 retain OpenAI Platform plus ChatGPT/Codex billing receipts showing no usable
 key or automatic recharge. Until those receipts and the contained deployment
 exist, the provider-account definition of done is not met.
+
+## Session 11 reachable-route correction and production re-read
+
+On 2026-07-23T01:54Z, the canonical production alias again returned HTTP 200
+for `GET /api/health`; it reported `server: Vercel`, `aiEnabled: false`,
+`liveMode: false`, and `brain.runtime: "Trigger Codex CLI"`. Its read-only
+`GET /api/capabilities` response still identified both model and provider as
+`Codex CLI (ChatGPT subscription)`. These requests did not invoke a task,
+vault, provider, or credential endpoint.
+
+Caller tracing found no repository caller of `GET /api/tick`, but the route
+had implemented GET as `return POST()`. That made ordinary GET requests an
+alternate Trigger dispatch path whenever AI was enabled. GET now returns HTTP
+405 with `Allow: POST` before the AI gate, vault, Trigger, Convex, Codex, or
+any provider is contacted. The security regression test denies DNS and fetch
+and verifies that exact status, header, and response body.
+
+This is a source-level correction only. The production alias cannot be tied
+to this contained revision from this checkout: the previous POST discrepancy
+remains proof it is stale until the delivery controller deploys this revision
+and repeats the bounded negative POST probes while `aiEnabled` is false.
+Provider-side completion remains outstanding: name/status-only Vercel and
+Trigger environment inventories, Media-only vault capability replacement and
+deletion/re-read of `openai`, legacy Supabase retirement, revoked OpenAI
+Platform keys, and OpenAI/ChatGPT/Codex billing controls showing no API
+recharge. Do not treat this route test or public reads as substitutes for
+those provider receipts.

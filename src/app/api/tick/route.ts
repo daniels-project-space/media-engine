@@ -26,5 +26,10 @@ export async function POST() {
 }
 
 export async function GET() {
-  return POST();
+  // A GET can be issued by link checkers, browser prefetchers, and monitoring
+  // systems. It must never be an alternate route to Trigger dispatch.
+  return NextResponse.json(
+    { ok: false, error: "method not allowed" },
+    { status: 405, headers: { Allow: "POST" } },
+  );
 }
