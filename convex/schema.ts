@@ -133,6 +133,9 @@ export default defineSchema({
     title: v.optional(v.string()),
     hook: v.optional(v.string()),
     caption: v.optional(v.string()),
+    // Present only for private client-render outputs. The completion mutation
+    // verifies this binding before a paid render can advance a project.
+    renderJobId: v.optional(v.id("renderJobs")),
     slides: v.optional(
       v.array(
         v.object({
@@ -234,6 +237,10 @@ export default defineSchema({
     missingFields: v.optional(v.array(v.string())),
     narrative: v.optional(projectNarrative),
     shots: v.optional(v.array(projectShot)),
+    // A snapshot is taken only at explicit approval. Legacy Studio mutations
+    // may still edit `shots` while being retired, but can never alter a queued
+    // or running paid render.
+    approvedShots: v.optional(v.array(projectShot)),
     storyboardVersion: v.optional(v.number()),
     renderPlan: v.optional(projectRenderPlan),
     approvedPlanVersion: v.optional(v.number()),
@@ -270,7 +277,11 @@ export default defineSchema({
     model: v.literal("seedance_2_0"),
     creditSource: v.literal("higgsfield_subscription"),
     status: v.union(v.literal("queued"), v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("cancelled")),
+    // One 32-byte server-generated dispatch capability is consumed by the
+    // Trigger worker before it may read the approved plan or create media.
+    dispatchToken: v.optional(v.string()),
     triggerRunId: v.optional(v.string()),
+    workerRunId: v.optional(v.string()),
     postId: v.optional(v.id("posts")),
     creditsUsed: v.optional(v.number()),
     error: v.optional(v.string()),

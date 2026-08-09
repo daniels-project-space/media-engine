@@ -1,4 +1,4 @@
-import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
+import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk";
 import { ConvexHttpClient } from "convex/browser";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";

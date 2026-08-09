@@ -1,4 +1,4 @@
-import { query } from "./_generated/server";
+import { query } from "./retiredLegacy";
 import { v } from "convex/values";
 
 function dayOf(ts: number): string {

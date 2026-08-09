@@ -1,4 +1,4 @@
-import { task, logger } from "@trigger.dev/sdk/v3";
+import { task, logger } from "@trigger.dev/sdk";
 import { runLaunch } from "../lib/orchestrator/run";
 
 // Master campaign task: understand → research → strategise → persist plan.

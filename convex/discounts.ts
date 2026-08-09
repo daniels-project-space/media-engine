@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation } from "./retiredLegacy";
 import { v } from "convex/values";
 
 // Discount codes minted for campaigns (via the Stripe adapter, or manual).

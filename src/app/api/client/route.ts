@@ -4,6 +4,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { understand } from "@/lib/orchestrator/understand";
 import { requireOperator } from "@/lib/operator-auth";
+import { legacyControlPlaneRetired } from "@/lib/legacy-control-plane";
 
 export const maxDuration = 120;
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -14,6 +15,9 @@ const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 export async function POST(req: NextRequest) {
   const denied = requireOperator(req);
   if (denied) return denied;
+  if (legacyControlPlaneRetired()) {
+    return NextResponse.json({ error: "Legacy client records are retired; use Client Work." }, { status: 410 });
+  }
   const b = (await req.json().catch(() => ({}))) as {
     name?: string;
     website?: string;
@@ -67,6 +71,9 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const denied = requireOperator(req);
   if (denied) return denied;
+  if (legacyControlPlaneRetired()) {
+    return NextResponse.json({ error: "Legacy client records are retired; use Client Work." }, { status: 410 });
+  }
   const cx = new ConvexHttpClient(CONVEX_URL);
   const clients = await cx.query(api.crm.list, {});
   return NextResponse.json({ clients });

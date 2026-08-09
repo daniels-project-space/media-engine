@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomBytes } from "node:crypto";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { requireOperator } from "@/lib/operator-auth";
 import { creativeServiceToken } from "@/lib/creative-service";
 import { vaultService } from "@/lib/vault";
-import { presignedGet } from "@/lib/storage";
 import { chatJson } from "@/lib/llm";
+import { assertSeedanceRendererEnabled, SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE } from "@/lib/video-router";
 
 export const maxDuration = 60;
 
@@ -258,8 +259,7 @@ export async function POST(request: NextRequest) {
       if (!context.order?.productImageKey) {
         throw new Error("A client product or approved reference image is required for subscription-only rendering");
       }
-      const productImageUrl = await presignedGet(context.order.productImageKey, 60 * 60 * 24);
-      const runId = await triggerTask("plan-ad-script", { projectId, productImageUrl, clipCount: 3, secondsPerShot: 5 });
+      const runId = await triggerTask("plan-ad-script", { projectId, clipCount: 3, secondsPerShot: 5 });
       return NextResponse.json({ runId });
     }
 
@@ -287,72 +287,32 @@ export async function POST(request: NextRequest) {
     if (action === "render") {
       const kind = body.kind === "draft" || body.kind === "final" ? body.kind : null;
       if (!kind) throw new Error("render kind must be draft or final");
-      const context = await projectContext(projectId);
-      if (!context) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+      // Fail before we create a render job or invoke Trigger. The worker has a
+      // matching guard, but admission must be safe even if a prior worker build
+      // is still serving a deployment during the cloud cutover.
+      assertSeedanceRendererEnabled();
+      const dispatchToken = randomBytes(32).toString("base64url");
       const { convex, serviceToken } = await serviceClient();
       const admission = (await convex.action(api.creativeGateway.startRender, {
         serviceToken,
-        payload: { projectId, kind },
+        payload: { projectId, kind, dispatchToken },
       })) as { jobId: Id<"renderJobs">; reused: boolean };
       if (admission.reused) return NextResponse.json({ jobId: admission.jobId, reused: true });
 
       try {
-        const shots = context.project.shots ?? [];
-        if (!shots.length) throw new Error("No approved storyboard shots exist");
-        const scenes = await Promise.all(shots.map(async (shot) => {
-          if (shot.kind === "card") {
-            return {
-              model: "seedance-2",
-              kind: "card",
-              cardTitle: shot.cardTitle ?? context.project.buyer,
-              cardSub: shot.cardSub ?? context.project.narrative?.cta ?? "",
-              motion: "hold clean brand end card",
-              seconds: Math.max(2, Math.min(4, shot.seconds || 3)),
-            };
-          }
-          // Signed URLs are intentionally short lived. Keep the durable R2 key in
-          // the approved storyboard and re-sign it at dispatch time so an old
-          // plan does not fail merely because it waited for client approval.
-          const imageUrl = shot.imageKey
-            ? await presignedGet(shot.imageKey, 60 * 60 * 24)
-            : shot.imageUrl;
-          if (!imageUrl) throw new Error("Every storyboard shot needs an approved client/reference image");
-          return {
-            model: "seedance-2",
-            imageUrl,
-            intent: shot.beat ?? shot.imagePrompt ?? context.project.brief,
-            motion: shot.motion,
-            seconds: Math.max(4, Math.min(12, shot.seconds)),
-          };
-        }));
         const runId = await triggerTask("generate-ad", {
-          projectId,
           renderJobId: admission.jobId,
-          renderKind: kind,
-          subscriptionOnly: true,
-          title: `${context.project.title} — ${kind}`,
-          concept: `creative-${projectId}-${kind}-v${context.project.storyboardVersion ?? 1}`,
-          caption: context.project.narrative?.corePromise,
-          hook: context.project.narrative?.arc[0]?.beat,
-          // `quick` enables the Higgsfield subscription music/SFX mix. Explicit
-          // storyboard seconds still control every clip length, so this is not a
-          // short-cut trim of the approved marketing narrative.
-          quick: true,
-          bestOf: 1,
-          // Music is only generated through the linked Higgsfield subscription;
-          // the task rejects any third-party audio fallback in this mode.
-          musicPrompt: "polished, modern product-film atmosphere, no vocals",
-          scenes,
-        });
-        await convex.action(api.creativeGateway.markRenderDispatched, {
-          serviceToken,
-          payload: { jobId: admission.jobId, triggerRunId: runId },
+          dispatchToken,
         });
         return NextResponse.json({ jobId: admission.jobId, runId, reused: false });
       } catch (error) {
-        await convex.action(api.creativeGateway.failRender, {
+        await convex.action(api.creativeGateway.failQueuedDispatch, {
           serviceToken,
-          payload: { jobId: admission.jobId, error: error instanceof Error ? error.message : "render dispatch failed" },
+          payload: {
+            jobId: admission.jobId,
+            dispatchToken,
+            error: error instanceof Error ? error.message : "render dispatch failed",
+          },
         }).catch(() => {});
         throw error;
       }
@@ -361,7 +321,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unknown work action" }, { status: 400 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Work request failed";
-    const status = message.includes("required") || message.includes("before") || message.includes("must") || message.includes("No approved") || message.includes("Every storyboard") ? 400 : 500;
+    const status = message.includes(SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE)
+      ? 503
+      : message.includes("required") || message.includes("before") || message.includes("must") || message.includes("No approved") || message.includes("Every storyboard")
+        ? 400
+        : 500;
     console.error("work action failed", error);
     return NextResponse.json({ error: message.slice(0, 500) }, { status });
   }

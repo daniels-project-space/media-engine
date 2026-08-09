@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { presignedGet } from "@/lib/storage";
+import { requireOperator } from "@/lib/operator-auth";
 
 export const maxDuration = 15;
 
-// Stable media URL: /api/media/posts/<id>/ad.mp4 -> 302 to a freshly presigned R2
-// URL. Presigned URLs expire, so the UI references R2 KEYS through this route and
-// never shows a dead link.
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ key: string[] }> }) {
+// Stable media URL. Client work is always private; public marketing assets keep
+// their separate allowlist so a render key cannot become a public URL by name.
+export async function GET(req: NextRequest, ctx: { params: Promise<{ key: string[] }> }) {
   const { key } = await ctx.params;
   const objectKey = key.join("/");
-  const allowed = ["posts/", "demo/", "buildout/", "reference/"];
+  const privateKey = objectKey.startsWith("creative/") || objectKey.startsWith("posts/");
+  if (privateKey) {
+    const denied = requireOperator(req);
+    if (denied) return denied;
+  }
+  const allowed = ["creative/", "posts/", "demo/", "buildout/", "reference/"];
   if (!allowed.some((p) => objectKey.startsWith(p))) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }

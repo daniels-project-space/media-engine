@@ -1,17 +1,19 @@
-import { schedules, logger } from "@trigger.dev/sdk/v3";
-import { tickCampaigns } from "../lib/orchestrator/tick";
+import { schedules, logger } from "@trigger.dev/sdk";
 
-// Campaign heartbeat — advances due steps of LIVE campaigns within budget, all
-// gated (dry-run unless liveMode + keys). Runs every 15 minutes, offset from the
-// content scheduler's 30-min tick. Bounded work per run.
+// The old campaign heartbeat could invoke social, email, and influencer
+// integrations from legacy Convex state. It is deliberately retained under its
+// old task id only to drain scheduled invocations safely while Distribution is
+// rebuilt behind an authenticated operator boundary.
 export const campaignTick = schedules.task({
   id: "campaign-tick",
   cron: "7,22,37,52 * * * *",
   maxDuration: 300,
   run: async () => {
-    const res = await tickCampaigns(20);
-    logger.log("campaign-tick", { processed: res.processed });
-    for (const line of res.log) logger.log(line);
-    return res;
+    const result = {
+      automationDisabled: true,
+      reason: "Legacy Distribution is retired pending authenticated migration",
+    };
+    logger.warn("campaign-tick skipped", result);
+    return result;
   },
 });

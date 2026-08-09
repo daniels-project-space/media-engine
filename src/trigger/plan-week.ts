@@ -1,4 +1,4 @@
-import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
+import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk";
 import { planPersonaWeek } from "../lib/orchestrator/persona-plan";
 
 // Plans review-only Instagram copy/scene briefs as `planned` posts. It never

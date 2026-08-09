@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { mutation } from "./retiredLegacy";
 
 // Seeds the ad-agency knowledge base: marketing playbooks (how to market X, what
 // to say, what works per category) + a model/LoRA registry derived from existing

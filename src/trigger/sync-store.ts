@@ -1,4 +1,4 @@
-import { task, logger } from "@trigger.dev/sdk/v3";
+import { task, logger } from "@trigger.dev/sdk";
 import { syncStore } from "../lib/orchestrator/store";
 
 // Pull a Shopify store's catalogue into Convex with per-product channel plans,

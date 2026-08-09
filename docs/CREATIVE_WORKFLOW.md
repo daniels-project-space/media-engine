@@ -29,8 +29,9 @@ both the client conversation and every credit-consuming production decision.
   video-model fallback is available to this workflow
 
 The renderer re-signs the stored R2 reference image immediately before dispatch
-so client approval does not expire with a temporary upload URL. It quotes the
-Higgsfield credit cost and checks the balance before each video job.
+so client approval does not expire with a temporary upload URL. It invokes only
+the reviewed Seedance 2.0 MCP tool; it never uses an undocumented direct REST
+endpoint or a paid fallback.
 
 ## One-time connection setup
 
@@ -46,13 +47,19 @@ invalidates the grant; no OAuth integration can safely promise otherwise.
 
 ### Deployed renderer
 
-Desktop OAuth is intentionally not copied into Vercel or Trigger. The deployed
-renderer needs its own `higgsfield` vault entry with both
-`HIGGSFIELD_ACCESS_TOKEN` and `HIGGSFIELD_REFRESH_TOKEN`. The refresh token is
-rotated and persisted by `src/lib/higgsfield.ts` after it is used. On the first
-successful refresh, the app stores the rotating pair together as
-`HIGGSFIELD_SESSION`; that prevents a cold worker from reading a mismatched
-pair. Do not overwrite that generated session value.
+Desktop OAuth is intentionally not copied into Vercel or Trigger. Sign in to
+the private production app, open **Settings**, and choose **Connect Higgsfield
+to this production app**. That starts a separate authorization-code + PKCE
+flow for `https://mcp.higgsfield.ai/mcp`, using the canonical production HTTPS
+callback only.
+
+The deployed app stores one encrypted `HIGGSFIELD_SESSION` bundle in the
+`higgsfield` vault entry. Access and refresh tokens rotate together through an
+atomic compare-and-swap mutation; a cold worker cannot read half of a rotated
+pair. The first post-link operation is the non-billable MCP `tools/list` call.
+Only after its exact Seedance 2.0 schema is reviewed may the renderer be
+enabled. Do not overwrite the generated session value or pass it to
+`fnf.higgsfield.ai`.
 
 The Vercel and Trigger runtimes also need `VAULT_ACCESS_TOKEN` with permission
 to read and update that `higgsfield` vault entry; without it, rendering fails
@@ -63,6 +70,8 @@ secrets without committing them to source:
 
 - `MEDIA_ENGINE_OPERATOR_PASSWORD` and `MEDIA_ENGINE_SESSION_SECRET` in the
   hosting environment
+- `HIGGSFIELD_OAUTH_COOKIE_SECRET` and `MEDIA_ENGINE_PUBLIC_ORIGIN` in the
+  hosting environment; the latter must be the canonical production HTTPS origin
 - `MEDIA_ENGINE_CONVEX_SERVICE_TOKEN` in the hosting environment or the
   `media-engine` vault service, and the identical value in the media-engine
   Convex environment

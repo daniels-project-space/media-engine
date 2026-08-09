@@ -1,4 +1,4 @@
-import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
+import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk";
 import { ConvexHttpClient } from "convex/browser";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -12,7 +12,6 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { putObject, presignedGet } from "../lib/storage";
 import { CANONICAL_VIDEO_MODEL, renderClip, primeHiggsfield } from "../lib/video-router";
-import { higgsGenerateAudio } from "../lib/higgsfield";
 import { creativeServiceToken } from "../lib/creative-service";
 import { scoreImage } from "../lib/vision";
 import { buildVariantTag } from "../lib/variant";
@@ -25,9 +24,8 @@ const FFMPEG = process.env.FFMPEG_PATH ?? "ffmpeg";
 
 type Scene = {
   kind?: "i2v" | "card";
-  model: typeof CANONICAL_VIDEO_MODEL;
-  /** A client-approved product or reference image, never a generated frame. */
-  imageUrl?: string;
+  /** Durable, private R2 key from the approved Convex plan; never a URL. */
+  imageKey?: string;
   motion: string;
   // Card kind: deterministic Sharp/FFmpeg typography, never AI-generated text.
   cardTitle?: string;
@@ -39,25 +37,93 @@ type Scene = {
 };
 
 type Payload = {
-  title: string;
-  streamSlug?: string;
-  caption?: string;
-  scenes: Scene[];
-  // Higgsfield music/SFX mixes the final cut when enabled. There is no third-party audio fallback.
-  quick?: boolean;
-  segSeconds?: number;
-  musicPrompt?: string;
-  concept?: string;
-  hook?: string;
-  /** Must be true. Any legacy caller fails closed. */
-  subscriptionOnly?: true;
-  projectId?: string;
-  renderJobId?: string;
-  renderKind?: "draft" | "final";
+  /** The only task inputs: an admitted render job and its one-time capability. */
+  renderJobId: string;
+  dispatchToken: string;
+};
+
+type ClaimedExecution = {
+  job: { id: Id<"renderJobs">; kind: "draft" | "final"; planVersion: number };
+  project: {
+    id: Id<"adProjects">;
+    buyer: string;
+    title: string;
+    narrative?: { corePromise: string; arc: { beat: string; purpose: string }[]; cta: string };
+    shots: Array<{
+      kind?: string;
+      imageKey?: string;
+      motion: string;
+      beat?: string;
+      imagePrompt?: string;
+      seconds: number;
+      cardTitle?: string;
+      cardSub?: string;
+    }>;
+  };
+  referenceKey: string;
 };
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function requiredDispatchValue(value: unknown, field: string, maximum: number): string {
+  if (typeof value !== "string" || !value || value.length > maximum) {
+    throw new AbortTaskRunError(`generate-ad requires a valid ${field}`);
+  }
+  return value;
+}
+
+function asClaimedExecution(value: unknown): ClaimedExecution {
+  if (!value || typeof value !== "object") throw new AbortTaskRunError("render claim returned no approved execution context");
+  const candidate = value as Partial<ClaimedExecution>;
+  if (
+    !candidate.job ||
+    !candidate.project ||
+    typeof candidate.job.id !== "string" ||
+    (candidate.job.kind !== "draft" && candidate.job.kind !== "final") ||
+    typeof candidate.project.id !== "string" ||
+    typeof candidate.project.title !== "string" ||
+    !Array.isArray(candidate.project.shots) ||
+    typeof candidate.referenceKey !== "string" ||
+    !candidate.referenceKey.startsWith("products/client/")
+  ) {
+    throw new AbortTaskRunError("render claim returned malformed execution data");
+  }
+  return candidate as ClaimedExecution;
+}
+
+function canonicalScenes(execution: ClaimedExecution): Scene[] {
+  const shots = execution.project.shots;
+  if (shots.length === 0 || shots.length > 6) {
+    throw new Error("approved storyboard must contain between one and six shots");
+  }
+  return shots.map((shot, index) => {
+    const seconds = shot.seconds;
+    if (!Number.isFinite(seconds) || seconds <= 0 || typeof shot.motion !== "string" || !shot.motion.trim() || shot.motion.length > 500) {
+      throw new Error(`approved storyboard shot ${index + 1} is invalid`);
+    }
+    if (shot.kind === "card") {
+      if (seconds < 2 || seconds > 4) throw new Error(`approved end card ${index + 1} must be 2–4 seconds`);
+      return {
+        kind: "card" as const,
+        motion: "hold clean brand end card",
+        cardTitle: shot.cardTitle ?? execution.project.title,
+        cardSub: shot.cardSub ?? execution.project.narrative?.cta,
+        seconds,
+      };
+    }
+    if (shot.imageKey !== execution.referenceKey || seconds < 4 || seconds > 15) {
+      throw new Error(`approved footage shot ${index + 1} must use the verified client reference for 4–15 seconds`);
+    }
+    return {
+      kind: "i2v" as const,
+      imageKey: execution.referenceKey,
+      motion: shot.motion,
+      intent: shot.beat ?? shot.imagePrompt ?? execution.project.title,
+      seconds,
+    };
+  });
 }
 
 // The container has no system fonts, so cards use bundled glyph outlines and
@@ -106,7 +172,8 @@ async function makeCard(
 /**
  * Stitches an approved-reference marketing video. Each moving scene is rendered
  * by Higgsfield Seedance 2.0 against a quoted subscription-credit balance; brand
- * cards, Higgsfield audio, and visual drift QC remain deterministic and local.
+ * cards and assembly remain deterministic and local. No non-Seedance model is
+ * allowed to consume the connected subscription credits.
  */
 export const generateAd = task({
   id: "generate-ad",
@@ -114,112 +181,89 @@ export const generateAd = task({
   machine: "large-1x",
   retry: { maxAttempts: 1 },
   run: async (payload: Payload, { ctx }) => {
+    const jobId = requiredDispatchValue(payload.renderJobId, "renderJobId", 128) as Id<"renderJobs">;
+    const dispatchToken = requiredDispatchValue(payload.dispatchToken, "dispatchToken", 128);
     const convex = new ConvexHttpClient(CONVEX_URL);
-    const renderServiceToken = payload.renderJobId ? await creativeServiceToken() : undefined;
+    const renderServiceToken = await creativeServiceToken();
+    let execution: ClaimedExecution | null = null;
     let lifecycleFailureRecorded = false;
+
     const failRenderLifecycle = async (err: unknown): Promise<void> => {
-      if (!payload.renderJobId || !renderServiceToken || lifecycleFailureRecorded) return;
+      if (!execution || lifecycleFailureRecorded) return;
       try {
         await convex.action(api.creativeGateway.failRender, {
           serviceToken: renderServiceToken,
           payload: {
-            jobId: payload.renderJobId as Id<"renderJobs">,
+            jobId: execution.job.id,
+            triggerRunId: ctx.run.id,
             error: err instanceof Error ? err.message : String(err),
           },
         });
         lifecycleFailureRecorded = true;
       } catch (lifecycleErr) {
-        logger.error("could not record render job failure", {
-          renderJobId: payload.renderJobId,
+        logger.error("could not record claimed render job failure", {
+          renderJobId: execution.job.id,
           error: lifecycleErr instanceof Error ? lifecycleErr.message : String(lifecycleErr),
         });
       }
     };
-    const abortRender = async (message: string): Promise<never> => {
-      const error = new AbortTaskRunError(message);
-      await failRenderLifecycle(error);
-      throw error;
-    };
-
-    if (payload.subscriptionOnly !== true) {
-      await abortRender("generate-ad accepts only Higgsfield subscription-credit render plans");
-    }
-    if (!Array.isArray(payload.scenes) || payload.scenes.length === 0) {
-      await abortRender("render requires at least one scene");
-    }
-    const invalidScene = payload.scenes.find((scene) => {
-      const seconds = scene.seconds ?? payload.segSeconds ?? 5;
-      return (
-        scene.model !== CANONICAL_VIDEO_MODEL ||
-        (scene.kind !== undefined && scene.kind !== "i2v" && scene.kind !== "card") ||
-        (!Number.isFinite(seconds) || seconds <= 0) ||
-        (scene.kind !== "card" && (!scene.imageUrl || seconds < 4 || seconds > 15))
-      );
-    });
-    if (invalidScene) {
-      await abortRender(
-        "every moving scene requires an approved reference image, Higgsfield Seedance 2.0, and a 4–15 second duration",
-      );
-    }
-
-    const streamSlug = payload.streamSlug ?? "client-ads";
-    const quick = payload.quick !== false;
-    const seg = payload.segSeconds ?? 5;
-    const sceneDur = (scene: Scene): number => scene.seconds ?? (quick ? seg : 5);
-    const sceneOffset = (index: number): number =>
-      payload.scenes.slice(0, index).reduce((sum, scene) => sum + sceneDur(scene), 0);
-    const totalDur = payload.scenes.reduce((sum, scene) => sum + sceneDur(scene), 0);
-    const tag = buildVariantTag({
-      concept: payload.concept ?? payload.title,
-      hook: payload.hook ?? payload.caption,
-      variantId: ctx.run.id.slice(-8),
-    });
-
-    const generating = await convex.query(api.posts.byStatus, { status: "generating" });
-    const failed = await convex.query(api.posts.byStatus, { status: "failed" });
-    const prior = [...generating, ...failed].find((post) => post.externalId === ctx.run.id);
-    const postId =
-      prior?._id ??
-      ((await convex.mutation(api.posts.create, {
-        streamSlug,
-        platform: "instagram",
-        kind: "reel",
-        title: payload.title,
-        hook: payload.hook,
-        caption: payload.caption,
-        slides: payload.scenes.map((scene) => ({ prompt: scene.motion, role: scene.kind ?? "i2v" })),
-        externalId: ctx.run.id,
-        variantTag: tag.variantTag,
-        concept: payload.concept ?? tag.concept,
-        hookId: tag.hookId,
-        variantId: tag.variantId,
-      })) as Id<"posts">);
-    await convex.mutation(api.posts.setStatus, { id: postId, status: "generating" });
-
-    let higgsCreditsUsed = 0;
-    let motionScoreSum = 0;
-    let motionScoreCount = 0;
 
     try {
+      // This is intentionally the first non-log side effect. A direct Trigger
+      // invocation without the private one-time capability cannot read a plan,
+      // create a post, access R2, or reach a billable renderer.
+      const claim = await convex.action(api.creativeGateway.claimRenderExecution, {
+        serviceToken: renderServiceToken,
+        payload: { jobId, dispatchToken, triggerRunId: ctx.run.id },
+      });
+      execution = asClaimedExecution(claim);
+      const scenes = canonicalScenes(execution);
+
+      // Non-billable MCP manifest verification happens before the post ledger
+      // or any media side effect. It currently fails closed until the exact
+      // Seedance tool contract has been reviewed.
+      await primeHiggsfield();
+
+      const concept = `creative-${execution.project.id}-${execution.job.kind}-v${execution.job.planVersion}`;
+      const tag = buildVariantTag({
+        concept,
+        hook: execution.project.narrative?.arc[0]?.beat ?? execution.project.narrative?.corePromise,
+        variantId: ctx.run.id.slice(-8),
+      });
+      const postId = (await convex.action(api.creativeGateway.createRenderPost, {
+        serviceToken: renderServiceToken,
+        payload: {
+          jobId: execution.job.id,
+          triggerRunId: ctx.run.id,
+          variantTag: tag.variantTag,
+          concept: tag.concept,
+          hookId: tag.hookId,
+          variantId: tag.variantId,
+        },
+      })) as Id<"posts">;
+
+      let higgsCreditsUsed = 0;
+      let motionScoreSum = 0;
+      let motionScoreCount = 0;
       const dir = await mkdtemp(path.join(tmpdir(), "ad-"));
 
       const renderScene = async (scene: Scene, index: number): Promise<string> => {
-        logger.log(`scene ${index + 1}/${payload.scenes.length} (${scene.kind ?? scene.model})`);
-        const duration = sceneDur(scene);
+        const duration = scene.seconds ?? 0;
+        logger.log(`scene ${index + 1}/${scenes.length} (${scene.kind ?? "i2v"})`);
         if (scene.kind === "card") {
           const norm = path.join(dir, `norm-${index}.mp4`);
-          await makeCard(FFMPEG, norm, scene.cardTitle ?? "", scene.cardSub, duration);
-          await putObject(`posts/${postId}/scene-${index + 1}.mp4`, await readFile(norm), "video/mp4");
+          await makeCard(FFMPEG, norm, scene.cardTitle ?? execution?.project.title ?? "", scene.cardSub, duration);
+          await putObject(`creative/${postId}/scene-${index + 1}.mp4`, await readFile(norm), "video/mp4");
           return norm;
         }
 
-        if (!scene.imageUrl) throw new Error(`scene ${index + 1}: approved reference image is required`);
-        const source = await fetch(scene.imageUrl);
+        if (!scene.imageKey) throw new Error(`scene ${index + 1}: approved reference image is required`);
+        const source = await fetch(await presignedGet(scene.imageKey, 60 * 60));
         if (!source.ok) throw new Error(`scene ${index + 1}: reference image HTTP ${source.status}`);
         const firstBytes = Buffer.from(await source.arrayBuffer());
         const sourceType = source.headers.get("content-type")?.split(";", 1)[0] ?? "image/png";
         const firstContentType = sourceType.startsWith("image/") ? sourceType : "image/png";
-        const firstKey = `posts/${postId}/scene-${index + 1}-a.png`;
+        const firstKey = `creative/${postId}/scene-${index + 1}-a.png`;
         await putObject(firstKey, firstBytes, firstContentType);
         const firstUrl = await presignedGet(firstKey);
 
@@ -233,14 +277,6 @@ export const generateAd = task({
           aspectRatio: "9:16",
         });
         higgsCreditsUsed += clip.credits;
-        await convex.mutation(api.spend.log, {
-          day: today(),
-          service: "higgsfield",
-          model: `seedance_2_0 (${clip.credits}cr)`,
-          costPence: 0,
-          ref: postId,
-        });
-
         const raw = path.join(dir, `raw-${index}.mp4`);
         const response = await fetch(clip.url);
         if (!response.ok || !response.body) throw new Error(`clip download HTTP ${response.status}`);
@@ -252,8 +288,6 @@ export const generateAd = task({
           "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-an", norm,
         ]);
 
-        // Drift guard: if image-to-video stops matching the approved product,
-        // retain product accuracy with a deterministic Ken-Burns fallback.
         const lastFrame = path.join(dir, `lf-${index}.jpg`);
         await exec(FFMPEG, ["-y", "-sseof", "-0.2", "-i", norm, "-frames:v", "1", lastFrame]);
         const lastFrameBytes = await readFile(lastFrame);
@@ -264,25 +298,15 @@ export const generateAd = task({
         motionScoreSum += score;
         motionScoreCount++;
         logger.log(`scene ${index + 1} motion QC: last-frame score ${score}${issues ? ` — ${issues}` : ""}`);
-        if (score < 45) {
-          logger.warn(`scene ${index + 1} drifted (score ${score}) — Ken-Burns fallback on approved still`);
-          const still = path.join(dir, `still-${index}.png`);
-          await writeFile(still, firstBytes);
-          await exec(FFMPEG, [
-            "-y", "-loop", "1", "-i", still, "-t", String(duration),
-            "-vf", `scale=1350:2400,zoompan=z='min(zoom+0.0009,1.12)':d=${Math.round(duration * 30)}:s=1080x1920:fps=30,setsar=1,format=yuv420p`,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-an", norm,
-          ]);
-        }
+        if (score < 45) throw new Error(`scene ${index + 1} failed the Seedance motion quality gate`);
 
-        await putObject(`posts/${postId}/scene-${index + 1}.mp4`, await readFile(norm), "video/mp4");
+        await putObject(`creative/${postId}/scene-${index + 1}.mp4`, await readFile(norm), "video/mp4");
         return norm;
       };
 
-      await primeHiggsfield();
       const scenePaths: string[] = [];
-      for (let index = 0; index < payload.scenes.length; index++) {
-        scenePaths.push(await renderScene(payload.scenes[index], index));
+      for (let index = 0; index < scenes.length; index++) {
+        scenePaths.push(await renderScene(scenes[index], index));
       }
 
       const listFile = path.join(dir, "list.txt");
@@ -291,66 +315,25 @@ export const generateAd = task({
       await exec(FFMPEG, ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", silent]);
 
       const final = path.join(dir, "final.mp4");
-      if (quick) {
-        const musicPrompt = payload.musicPrompt ?? "upbeat modern commercial music bed, glossy and driving, no vocals, social-ad energy";
-        const [musicUrl, whooshUrl] = await Promise.all([
-          higgsGenerateAudio("sonilo_music", musicPrompt, Math.ceil(totalDur) + 1),
-          higgsGenerateAudio("mirelo_text_to_audio", "fast clean cinematic whoosh transition swoosh, short punchy", 1),
-        ]);
-        if (musicUrl) {
-          const musicResponse = await fetch(musicUrl);
-          if (!musicResponse.ok || !musicResponse.body) throw new Error(`Higgsfield music download HTTP ${musicResponse.status}`);
-          const musicPath = path.join(dir, "music.mp3");
-          await pipeline(Readable.fromWeb(musicResponse.body as import("node:stream/web").ReadableStream), createWriteStream(musicPath));
-          const inputs = ["-i", silent, "-i", musicPath];
-          const mixes = [`[1:a]volume=0.9,atrim=0:${totalDur.toFixed(2)},afade=t=out:st=${Math.max(0, totalDur - 0.4).toFixed(2)}:d=0.4[music]`];
-          const labels = ["[music]"];
-          if (whooshUrl) {
-            const whooshResponse = await fetch(whooshUrl);
-            if (!whooshResponse.ok || !whooshResponse.body) throw new Error(`Higgsfield SFX download HTTP ${whooshResponse.status}`);
-            const whooshPath = path.join(dir, "whoosh.mp3");
-            await pipeline(Readable.fromWeb(whooshResponse.body as import("node:stream/web").ReadableStream), createWriteStream(whooshPath));
-            let inputIndex = 2;
-            for (let sceneIndex = 1; sceneIndex < payload.scenes.length; sceneIndex++) {
-              const delay = Math.round(sceneOffset(sceneIndex) * 1000);
-              inputs.push("-i", whooshPath);
-              mixes.push(`[${inputIndex}:a]adelay=${delay}|${delay},volume=0.6[w${sceneIndex}]`);
-              labels.push(`[w${sceneIndex}]`);
-              inputIndex++;
-            }
-          }
-          await exec(FFMPEG, [
-            "-y", ...inputs, "-filter_complex", `${mixes.join(";")};${labels.join("")}amix=inputs=${labels.length}:normalize=0[a]`,
-            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", "-movflags", "+faststart", final,
-          ]);
-          await convex.mutation(api.spend.log, { day: today(), service: "higgsfield", model: "audio (music+sfx)", costPence: 0, ref: postId });
-        } else {
-          await exec(FFMPEG, ["-y", "-i", silent, "-c", "copy", "-movflags", "+faststart", final]);
-        }
-      } else {
-        await exec(FFMPEG, ["-y", "-i", silent, "-c", "copy", "-movflags", "+faststart", final]);
-      }
+      await exec(FFMPEG, ["-y", "-i", silent, "-c", "copy", "-movflags", "+faststart", final]);
 
-      const r2Key = `posts/${postId}/ad.mp4`;
+      const r2Key = `creative/${postId}/ad.mp4`;
       await putObject(r2Key, await readFile(final), "video/mp4");
       const url = await presignedGet(r2Key);
-      await convex.mutation(api.posts.attachResult, {
-        id: postId,
-        slides: [{ r2Key, url, prompt: payload.title, role: "video" }],
+      await convex.action(api.creativeGateway.completeRender, {
+        serviceToken: renderServiceToken,
+        payload: {
+          jobId: execution.job.id,
+          triggerRunId: ctx.run.id,
+          postId,
+          creditsUsed: higgsCreditsUsed,
+          slides: [{ r2Key, url, prompt: execution.project.title, role: "video" }],
+          qcScore: motionScoreCount > 0 ? Math.round(motionScoreSum / motionScoreCount) : undefined,
+        },
       });
-      if (motionScoreCount > 0) {
-        await convex.mutation(api.posts.setQc, { id: postId, qcScore: Math.round(motionScoreSum / motionScoreCount) });
-      }
-      if (payload.renderJobId && renderServiceToken) {
-        await convex.action(api.creativeGateway.completeRender, {
-          serviceToken: renderServiceToken,
-          payload: { jobId: payload.renderJobId as Id<"renderJobs">, postId, creditsUsed: higgsCreditsUsed },
-        });
-      }
       logger.log("ad ready", { postId, url, variantTag: tag.variantTag, higgsCreditsUsed });
       return { postId, url, variantTag: tag.variantTag, estimatePence: 0, higgsCreditsUsed };
     } catch (err) {
-      await convex.mutation(api.posts.fail, { id: postId, error: err instanceof Error ? err.message : String(err) });
       await failRenderLifecycle(err);
       throw err;
     }

@@ -94,11 +94,19 @@ export const startRender = action({
   },
 });
 
-export const markRenderDispatched = action({
+export const claimRenderExecution = action({
   args: { ...serviceArgs, payload: v.any() },
   handler: async (ctx, { serviceToken, payload }): Promise<unknown> => {
     requireServiceToken(serviceToken);
-    return await ctx.runMutation(internal.creative.markRenderDispatched, payload);
+    return await ctx.runMutation(internal.creative.claimRenderExecution, payload);
+  },
+});
+
+export const createRenderPost = action({
+  args: { ...serviceArgs, payload: v.any() },
+  handler: async (ctx, { serviceToken, payload }): Promise<unknown> => {
+    requireServiceToken(serviceToken);
+    return await ctx.runMutation(internal.creative.createRenderPost, payload);
   },
 });
 
@@ -123,5 +131,13 @@ export const failRender = action({
   handler: async (ctx, { serviceToken, payload }): Promise<unknown> => {
     requireServiceToken(serviceToken);
     return await ctx.runMutation(internal.creative.failRender, payload);
+  },
+});
+
+export const failQueuedDispatch = action({
+  args: { ...serviceArgs, payload: v.any() },
+  handler: async (ctx, { serviceToken, payload }): Promise<unknown> => {
+    requireServiceToken(serviceToken);
+    return await ctx.runMutation(internal.creative.failQueuedDispatch, payload);
   },
 });

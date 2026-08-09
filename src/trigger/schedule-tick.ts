@@ -1,8 +1,4 @@
-import { schedules, logger } from "@trigger.dev/sdk/v3";
-import { ConvexHttpClient } from "convex/browser";
-import { api } from "../../convex/_generated/api";
-
-const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
+import { schedules, logger } from "@trigger.dev/sdk";
 
 // The former autopilot heartbeat remains scheduled so deployments with this task
 // ID do not start an old renderer. It performs no generation, approval, or
@@ -13,18 +9,10 @@ export const scheduleTick = schedules.task({
   cron: "*/30 * * * *",
   maxDuration: 60,
   run: async () => {
-    const convex = new ConvexHttpClient(CONVEX_URL);
-    const now = Date.now();
-    const [planned, approved] = await Promise.all([
-      convex.query(api.posts.due, { status: "planned", before: now }),
-      convex.query(api.posts.due, { status: "approved", before: now }),
-    ]);
-
     const result = {
       generationDisabled: true,
       publishingDisabled: true,
-      plannedAwaitingReview: planned.length,
-      approvedAwaitingManualAction: approved.length,
+      legacyQueueInspectionDisabled: true,
     };
     logger.warn("social scheduler paused by generation policy", result);
     return result;

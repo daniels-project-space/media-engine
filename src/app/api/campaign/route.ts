@@ -5,6 +5,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { vaultService } from "@/lib/vault";
 import { runLaunch } from "@/lib/orchestrator/run";
 import { requireOperator } from "@/lib/operator-auth";
+import { legacyControlPlaneRetired } from "@/lib/legacy-control-plane";
 
 export const maxDuration = 120;
 
@@ -34,6 +35,9 @@ async function dispatch(taskId: string, payload: unknown): Promise<string | null
 export async function POST(req: NextRequest) {
   const denied = requireOperator(req);
   if (denied) return denied;
+  if (legacyControlPlaneRetired()) {
+    return NextResponse.json({ error: "Legacy campaigns are retired" }, { status: 410 });
+  }
   const body = (await req.json().catch(() => ({}))) as {
     brief?: string;
     productUrl?: string;
@@ -77,6 +81,9 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const denied = requireOperator(req);
   if (denied) return denied;
+  if (legacyControlPlaneRetired()) {
+    return NextResponse.json({ error: "Legacy campaigns are retired" }, { status: 410 });
+  }
   const cx = new ConvexHttpClient(CONVEX_URL);
   const id = req.nextUrl.searchParams.get("id");
   if (!id) {

@@ -44,11 +44,9 @@ type FocusItem = {
 };
 
 const CATEGORY_CARDS = [
-  { href: "/work", label: "Work", description: "Requests, client context, narrative plans, and delivery." },
-  { href: "/queue", label: "Publish", description: "Review the publishing queue and channel-ready media." },
-  { href: "/campaigns", label: "Growth", description: "Campaigns, leads, email, and launch activity." },
-  { href: "/ads", label: "Library", description: "Rendered media, reusable references, and visual inputs." },
-  { href: "/settings", label: "System", description: "Connections, budgets, safeguards, and service health." },
+  { href: "/work", label: "Client desk", description: "Requests, buyer messages, briefs, and delivery tracking." },
+  { href: "/work", label: "Production", description: "Narrative plans, storyboard approval, and private client renders." },
+  { href: "/settings", label: "Connections", description: "Higgsfield OAuth, renderer release gates, and safe service status." },
 ] as const;
 
 const TONE_META: Record<FocusItem["tone"], { label: string; className: string }> = {

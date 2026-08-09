@@ -6,6 +6,8 @@ const messageRole = v.union(v.literal("buyer"), v.literal("operator"), v.literal
 const messageStatus = v.union(v.literal("received"), v.literal("draft"), v.literal("approved"), v.literal("sent"));
 const intakeStatus = v.union(v.literal("collecting"), v.literal("needs_reply"), v.literal("ready_to_plan"), v.literal("complete"));
 const renderKind = v.union(v.literal("draft"), v.literal("final"));
+const DISPATCH_TOKEN_MIN_CHARS = 43; // 32 random bytes encoded as base64url
+const DISPATCH_TOKEN_MAX_CHARS = 128;
 
 const shot = v.object({
   id: v.optional(v.string()),
@@ -46,6 +48,22 @@ const renderPlan = v.object({
 
 function latestByConcept<T extends { concept?: string; createdAt: number }>(rows: T[], concept: string): T | null {
   return rows.filter((row) => row.concept === concept).sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
+}
+
+function assertDispatchToken(value: string): void {
+  if (value.length < DISPATCH_TOKEN_MIN_CHARS || value.length > DISPATCH_TOKEN_MAX_CHARS) {
+    throw new Error("invalid render dispatch capability");
+  }
+}
+
+function expectedRenderStage(kind: "draft" | "final"): "drafting" | "rendering" {
+  return kind === "draft" ? "drafting" : "rendering";
+}
+
+function assertClientReferenceKey(value: string | undefined): asserts value is string {
+  if (!value || !value.startsWith("products/client/")) {
+    throw new Error("the approved render plan must use a private client reference image");
+  }
 }
 
 /** The complete private workspace read model. Client components never write directly to Convex. */
@@ -95,6 +113,7 @@ export const createRequest = internalMutation({
     pricePence: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    if (args.productImageKey !== undefined) assertClientReferenceKey(args.productImageKey);
     const now = Date.now();
     const orderId = await ctx.db.insert("clientOrders", {
       buyer: args.buyer,
@@ -165,6 +184,7 @@ export const updateIntake = internalMutation({
 export const setProductReference = internalMutation({
   args: { projectId: v.id("adProjects"), productImageKey: v.string() },
   handler: async (ctx, { projectId, productImageKey }) => {
+    assertClientReferenceKey(productImageKey);
     const project = await ctx.db.get(projectId);
     if (!project) throw new Error("project not found");
     if (!project.orderId) throw new Error("project has no client order");
@@ -198,6 +218,7 @@ export const persistPlan = internalMutation({
     await ctx.db.patch(args.projectId, {
       narrative: args.narrative,
       shots: args.shots,
+      approvedShots: undefined,
       renderPlan: args.renderPlan,
       storyboardVersion,
       approvedPlanVersion: undefined,
@@ -225,7 +246,11 @@ export const approvePlan = internalMutation({
       throw new Error("no complete render plan to approve");
     }
     const now = Date.now();
-    await ctx.db.patch(projectId, { approvedPlanVersion: project.storyboardVersion, lastActivityAt: now });
+    await ctx.db.patch(projectId, {
+      approvedPlanVersion: project.storyboardVersion,
+      approvedShots: project.shots,
+      lastActivityAt: now,
+    });
     await ctx.db.insert("projectMessages", {
       projectId,
       role: "operator",
@@ -239,12 +264,26 @@ export const approvePlan = internalMutation({
 
 /** Atomically admits one eligible render. A duplicate click reuses an active run. */
 export const startRender = internalMutation({
-  args: { projectId: v.id("adProjects"), kind: renderKind },
-  handler: async (ctx, { projectId, kind }) => {
+  args: { projectId: v.id("adProjects"), kind: renderKind, dispatchToken: v.string() },
+  handler: async (ctx, { projectId, kind, dispatchToken }) => {
+    assertDispatchToken(dispatchToken);
     const project = await ctx.db.get(projectId);
     if (!project) throw new Error("project not found");
-    if (!project.renderPlan || !project.storyboardVersion || project.approvedPlanVersion !== project.storyboardVersion) {
+    if (
+      !project.renderPlan ||
+      !project.storyboardVersion ||
+      project.approvedPlanVersion !== project.storyboardVersion ||
+      !(project.approvedShots?.length)
+    ) {
       throw new Error("the current render plan must be explicitly approved");
+    }
+    const order = project.orderId ? await ctx.db.get(project.orderId) : null;
+    assertClientReferenceKey(order?.productImageKey);
+    for (const item of project.approvedShots) {
+      if (item.kind === "card") continue;
+      if (item.imageKey !== order.productImageKey) {
+        throw new Error("the approved storyboard must use the verified client reference image");
+      }
     }
     const jobs = await ctx.db.query("renderJobs").withIndex("by_project", (q) => q.eq("projectId", projectId)).collect();
     const active = jobs.find((job) => job.kind === kind && job.planVersion === project.storyboardVersion && (job.status === "queued" || job.status === "running"));
@@ -270,6 +309,7 @@ export const startRender = internalMutation({
       model: "seedance_2_0",
       creditSource: "higgsfield_subscription",
       status: "queued",
+      dispatchToken,
       createdAt: now,
       updatedAt: now,
     });
@@ -278,24 +318,139 @@ export const startRender = internalMutation({
   },
 });
 
-export const markRenderDispatched = internalMutation({
-  args: { jobId: v.id("renderJobs"), triggerRunId: v.string() },
-  handler: async (ctx, { jobId, triggerRunId }) => {
+/**
+ * Atomically consumes the one-time dispatch capability before a Trigger worker
+ * can read the approved storyboard, touch R2, or reach a renderer. Retrying
+ * the same Trigger run is idempotent; every other run is rejected.
+ */
+export const claimRenderExecution = internalMutation({
+  args: { jobId: v.id("renderJobs"), dispatchToken: v.string(), triggerRunId: v.string() },
+  handler: async (ctx, { jobId, dispatchToken, triggerRunId }) => {
+    assertDispatchToken(dispatchToken);
+    if (!triggerRunId || triggerRunId.length > 256) throw new Error("invalid Trigger run identity");
     const job = await ctx.db.get(jobId);
     if (!job) throw new Error("render job not found");
-    await ctx.db.patch(jobId, { triggerRunId, status: "running", updatedAt: Date.now() });
+
+    if (job.status === "running") {
+      if (job.workerRunId !== triggerRunId) throw new Error("render job is already claimed by another Trigger run");
+    } else {
+      if (job.status !== "queued" || job.dispatchToken !== dispatchToken) {
+        throw new Error("render job dispatch capability is invalid or has expired");
+      }
+      await ctx.db.patch(jobId, {
+        status: "running",
+        workerRunId: triggerRunId,
+        triggerRunId,
+        dispatchToken: undefined,
+        updatedAt: Date.now(),
+      });
+    }
+
+    const project = await ctx.db.get(job.projectId);
+    if (!project) throw new Error("project not found");
+    const order = project.orderId ? await ctx.db.get(project.orderId) : null;
+    if (
+      !project.renderPlan ||
+      project.renderPlan.provider !== "higgsfield" ||
+      project.renderPlan.model !== "seedance_2_0" ||
+      project.renderPlan.creditSource !== "higgsfield_subscription" ||
+      project.renderPlan.fallbackPolicy !== "fail_closed" ||
+      project.storyboardVersion !== job.planVersion ||
+      project.approvedPlanVersion !== job.planVersion ||
+      !project.narrative ||
+      !(project.approvedShots?.length) ||
+      project.stage !== expectedRenderStage(job.kind)
+    ) {
+      throw new Error("render job no longer matches an approved Seedance 2.0 plan");
+    }
+    assertClientReferenceKey(order?.productImageKey);
+    for (const item of project.approvedShots) {
+      if (item.kind === "card") continue;
+      if (item.imageKey !== order.productImageKey) {
+        throw new Error("approved storyboard references an unexpected client image");
+      }
+    }
+
+    return {
+      job: { id: job._id, kind: job.kind, planVersion: job.planVersion },
+      project: {
+        id: project._id,
+        buyer: project.buyer,
+        title: project.title,
+        narrative: project.narrative,
+        shots: project.approvedShots,
+        renderPlan: project.renderPlan,
+      },
+      referenceKey: order.productImageKey,
+    };
+  },
+});
+
+/** Creates the post ledger entry only for the active worker that claimed the job. */
+export const createRenderPost = internalMutation({
+  args: {
+    jobId: v.id("renderJobs"),
+    triggerRunId: v.string(),
+    variantTag: v.string(),
+    concept: v.string(),
+    hookId: v.string(),
+    variantId: v.string(),
+  },
+  handler: async (ctx, { jobId, triggerRunId, variantTag, concept, hookId, variantId }) => {
+    const job = await ctx.db.get(jobId);
+    if (!job || job.status !== "running" || job.workerRunId !== triggerRunId) {
+      throw new Error("only the claimed render worker can create its post");
+    }
+    if (job.postId) {
+      const existing = await ctx.db.get(job.postId);
+      if (!existing || existing.renderJobId !== jobId) throw new Error("render job post binding is invalid");
+      return job.postId;
+    }
+    const project = await ctx.db.get(job.projectId);
+    if (!project?.narrative) throw new Error("render project no longer has a narrative");
+    const postId = await ctx.db.insert("posts", {
+      streamSlug: "client-ads",
+      platform: "instagram",
+      kind: "reel",
+      status: "generating",
+      title: `${project.title} — ${job.kind}`,
+      hook: project.narrative.arc[0]?.beat,
+      caption: project.narrative.corePromise,
+      slides: project.approvedShots?.map((item) => ({ prompt: item.motion, role: item.kind ?? "i2v" })),
+      externalId: triggerRunId,
+      renderJobId: jobId,
+      variantTag,
+      concept,
+      hookId,
+      variantId,
+      createdAt: Date.now(),
+    });
+    await ctx.db.patch(jobId, { postId, updatedAt: Date.now() });
+    return postId;
   },
 });
 
 export const completeRender = internalMutation({
-  args: { jobId: v.id("renderJobs"), postId: v.id("posts"), creditsUsed: v.number() },
-  handler: async (ctx, { jobId, postId, creditsUsed }) => {
+  args: {
+    jobId: v.id("renderJobs"),
+    triggerRunId: v.string(),
+    postId: v.id("posts"),
+    creditsUsed: v.number(),
+    slides: v.array(v.object({ r2Key: v.optional(v.string()), url: v.optional(v.string()), prompt: v.string(), role: v.optional(v.string()) })),
+    qcScore: v.optional(v.number()),
+  },
+  handler: async (ctx, { jobId, triggerRunId, postId, creditsUsed, slides, qcScore }) => {
+    if (!Number.isFinite(creditsUsed) || creditsUsed < 0) throw new Error("invalid Higgsfield credit usage");
     const job = await ctx.db.get(jobId);
-    if (!job) throw new Error("render job not found");
-    const project = await ctx.db.get(job.projectId);
+    if (!job || job.status !== "running" || job.workerRunId !== triggerRunId || job.postId !== postId) {
+      throw new Error("only the claimed render worker can complete this job");
+    }
+    const [project, post] = await Promise.all([ctx.db.get(job.projectId), ctx.db.get(postId)]);
     if (!project) throw new Error("project not found");
+    if (!post || post.renderJobId !== jobId) throw new Error("render result does not belong to this job");
     const now = Date.now();
-    await ctx.db.patch(jobId, { status: "succeeded", postId, creditsUsed, error: undefined, updatedAt: now });
+    await ctx.db.patch(postId, { slides, status: "ready", qcScore, error: undefined });
+    await ctx.db.patch(jobId, { status: "succeeded", creditsUsed, error: undefined, updatedAt: now });
     if (job.kind === "draft") {
       await ctx.db.patch(project._id, { draftPostId: postId, stage: "draft_ready", lastActivityAt: now });
     } else {
@@ -350,17 +505,45 @@ export const markDelivered = internalMutation({
   },
 });
 
+/** Records a failure only from the Trigger run that atomically claimed the job. */
 export const failRender = internalMutation({
-  args: { jobId: v.id("renderJobs"), error: v.string() },
-  handler: async (ctx, { jobId, error }) => {
+  args: { jobId: v.id("renderJobs"), triggerRunId: v.string(), error: v.string() },
+  handler: async (ctx, { jobId, triggerRunId, error }) => {
     const job = await ctx.db.get(jobId);
-    if (!job) return;
+    if (!job || job.status !== "running" || job.workerRunId !== triggerRunId) return { recorded: false };
     const now = Date.now();
-    await ctx.db.patch(jobId, { status: "failed", error: error.slice(0, 1000), updatedAt: now });
+    const message = error.slice(0, 1000);
+    await ctx.db.patch(jobId, { status: "failed", error: message, updatedAt: now });
     const project = await ctx.db.get(job.projectId);
-    if (project && (project.stage === "drafting" || project.stage === "rendering")) {
-      await ctx.db.patch(project._id, { stage: "failed", error: error.slice(0, 1000), lastActivityAt: now });
+    if (project && expectedRenderStage(job.kind) === project.stage) {
+      await ctx.db.patch(project._id, { stage: "failed", error: message, lastActivityAt: now });
     }
+    return { recorded: true };
+  },
+});
+
+/**
+ * The Vercel dispatcher may fail before Trigger accepts the task. Only the
+ * still-queued job holding that one-time capability may be marked failed.
+ */
+export const failQueuedDispatch = internalMutation({
+  args: { jobId: v.id("renderJobs"), dispatchToken: v.string(), error: v.string() },
+  handler: async (ctx, { jobId, dispatchToken, error }) => {
+    const job = await ctx.db.get(jobId);
+    if (!job || job.status !== "queued" || job.dispatchToken !== dispatchToken) return { recorded: false };
+    const now = Date.now();
+    const message = error.slice(0, 1000);
+    await ctx.db.patch(jobId, {
+      status: "failed",
+      dispatchToken: undefined,
+      error: message,
+      updatedAt: now,
+    });
+    const project = await ctx.db.get(job.projectId);
+    if (project && expectedRenderStage(job.kind) === project.stage) {
+      await ctx.db.patch(project._id, { stage: "failed", error: message, lastActivityAt: now });
+    }
+    return { recorded: true };
   },
 });
 

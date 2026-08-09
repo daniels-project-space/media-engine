@@ -1,58 +1,50 @@
-import { logger } from "@trigger.dev/sdk/v3";
-import { higgsBalance, higgsGenerateVideo } from "./higgsfield";
+import { listHiggsfieldMcpTools } from "./higgsfield";
 
 /** The single approved image-to-video model for this workspace. */
-export const CANONICAL_VIDEO_MODEL = "seedance-2" as const;
+export const CANONICAL_VIDEO_MODEL = "seedance_2_0" as const;
 export type VideoModel = typeof CANONICAL_VIDEO_MODEL;
 
-// Call once before a batch to validate the persisted subscription session. The
-// auth helper refreshes only after a rejected access token; eagerly rotating a
-// single-use refresh token here would make concurrent Trigger runs race.
-export async function primeHiggsfield(): Promise<void> {
-  await higgsBalance();
+export const SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE =
+  "Seedance rendering is unavailable until the official MCP tool schema is verified from the linked production session";
+
+/**
+ * Keep the public render admission path closed as well as the worker adapter.
+ * This stops a deployment from creating a render job or dispatching a Trigger
+ * run before the exact billable MCP tool contract has been reviewed.
+ */
+export function assertSeedanceRendererEnabled(): void {
+  throw new Error(SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE);
 }
 
 /**
- * Render a client-approved image with the linked Higgsfield subscription only.
- * There is deliberately no API-key or provider fallback in this module: a failed
- * preflight or render must surface to the operator instead of spending elsewhere.
+ * A link is not permission to guess provider tool names or arguments. The
+ * operator first inspects the authenticated, non-billable MCP tool manifest;
+ * then this adapter is filled with an allowlisted Seedance 2.0 schema only.
+ */
+export async function primeHiggsfield(): Promise<void> {
+  const tools = await listHiggsfieldMcpTools();
+  if (!tools.length) throw new Error("Higgsfield MCP linked successfully but exposed no tools");
+  throw new Error(`${SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE}; no render was submitted`);
+}
+
+/**
+ * Deliberately fail closed until the authenticated MCP manifest gives us the
+ * exact Seedance tool name, inputs, asynchronous result, and poll semantics.
+ * This replaces the retired undocumented FNF REST adapter.
  */
 export async function renderClip(opts: {
   model: VideoModel;
-  /** Retained as a caller-facing reference only; Higgsfield receives imageBytes. */
   imageUrl?: string;
   imageBytes: Buffer;
   imageContentType?: string;
   motion: string;
   durationSeconds?: number;
   aspectRatio?: string;
-  /** Compatibility marker for existing internal callers; all renders are subscription-only. */
   subscriptionOnly?: true;
 }): Promise<{ url: string; provider: "higgsfield"; costPence: 0; credits: number }> {
-  if (opts.model !== CANONICAL_VIDEO_MODEL) {
-    throw new Error(`Only ${CANONICAL_VIDEO_MODEL} is permitted for client rendering`);
-  }
-
-  const duration = opts.durationSeconds ?? 5;
-  if (!Number.isFinite(duration) || duration < 4) {
-    throw new Error(`Seedance 2.0 requires a finite clip duration of at least 4 seconds; received ${duration}`);
-  }
-
-  const availableCredits = await higgsBalance();
-  if (availableCredits <= 0) {
-    throw new Error("Higgsfield subscription credits are unavailable");
-  }
-
-  const { url, credits } = await higgsGenerateVideo({
-    jobSetType: "seedance_2_0",
-    prompt: opts.motion,
-    imageBytes: opts.imageBytes,
-    imageContentType: opts.imageContentType,
-    durationSeconds: duration,
-    aspectRatio: opts.aspectRatio ?? "9:16",
-    availableCredits,
-    requireCreditQuote: true,
-  });
-  logger.log(`clip via Higgsfield Seedance 2.0: ${credits} credits (${availableCredits} available before render)`);
-  return { url, provider: "higgsfield", costPence: 0, credits };
+  void opts;
+  assertSeedanceRendererEnabled();
+  // Keeps the return contract explicit to TypeScript. In practice the assertion
+  // above always throws until a reviewed implementation replaces this adapter.
+  throw new Error(SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE);
 }

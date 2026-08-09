@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
 const shot = v.object({
@@ -23,7 +23,9 @@ const stage = v.union(
   v.literal("failed"),
 );
 
-export const list = query({
+// Retained only for one-time internal migration/forensics. The public Studio
+// surface was retired in favour of the authenticated Work workspace.
+export const list = internalQuery({
   args: {},
   handler: async (ctx) => {
     const projects = await ctx.db.query("adProjects").order("desc").collect();
@@ -40,18 +42,17 @@ export const list = query({
   },
 });
 
-export const get = query({
+export const get = internalQuery({
   args: { id: v.id("adProjects") },
   handler: async (ctx, { id }) => await ctx.db.get(id),
 });
 
-export const create = mutation({
+export const create = internalMutation({
   args: {
     buyer: v.string(),
     title: v.string(),
     brief: v.string(),
     orderId: v.optional(v.id("clientOrders")),
-    musicPrompt: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("adProjects", { ...args, stage: "scripting", createdAt: Date.now() });
@@ -59,7 +60,7 @@ export const create = mutation({
 });
 
 // Save the generated / hand-edited script and move to the review gate.
-export const setScript = mutation({
+export const setScript = internalMutation({
   args: {
     id: v.id("adProjects"),
     shots: v.array(shot),
@@ -71,14 +72,14 @@ export const setScript = mutation({
   },
 });
 
-export const setStage = mutation({
+export const setStage = internalMutation({
   args: { id: v.id("adProjects"), stage, error: v.optional(v.string()) },
   handler: async (ctx, { id, stage: s, error }) => {
     await ctx.db.patch(id, { stage: s, error });
   },
 });
 
-export const attachDraft = mutation({
+export const attachDraft = internalMutation({
   args: { id: v.id("adProjects"), draftPostId: v.id("posts"), shots: v.optional(v.array(shot)) },
   handler: async (ctx, { id, draftPostId, shots }) => {
     const patch: Record<string, unknown> = { draftPostId, stage: "draft_ready" };
@@ -87,14 +88,14 @@ export const attachDraft = mutation({
   },
 });
 
-export const attachFinal = mutation({
+export const attachFinal = internalMutation({
   args: { id: v.id("adProjects"), finalPostId: v.id("posts") },
   handler: async (ctx, { id, finalPostId }) => {
     await ctx.db.patch(id, { finalPostId, stage: "final_ready" });
   },
 });
 
-export const remove = mutation({
+export const remove = internalMutation({
   args: { id: v.id("adProjects") },
   handler: async (ctx, { id }) => {
     await ctx.db.delete(id);

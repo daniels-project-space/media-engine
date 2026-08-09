@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { mutation as retiredMutation } from "./retiredLegacy";
 
 export const list = query({
   args: {},
@@ -20,7 +21,7 @@ export const getBySlug = query({
 });
 
 // Upsert a service by slug — used by the seed script (idempotent).
-export const upsert = mutation({
+export const upsert = retiredMutation({
   args: {
     slug: v.string(),
     active: v.boolean(),
@@ -56,7 +57,7 @@ export const upsert = mutation({
   },
 });
 
-export const remove = mutation({
+export const remove = retiredMutation({
   args: { slug: v.string() },
   handler: async (ctx, { slug }) => {
     const s = await ctx.db.query("services").withIndex("by_slug", (q) => q.eq("slug", slug)).unique();

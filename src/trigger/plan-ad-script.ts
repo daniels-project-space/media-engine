@@ -1,18 +1,15 @@
-import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
+import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { chat, parseJson } from "../lib/llm";
 import { creativeServiceToken } from "../lib/creative-service";
+import { presignedGet } from "../lib/storage";
 
 const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL ?? "https://blissful-sardine-231.convex.cloud";
 
 type Payload = {
   projectId: string;
-  /** A freshly signed client-owned product or approved reference image. */
-  productImageUrl?: string;
-  /** Persisted alongside the signed URL so later render attempts can re-sign it. */
-  productImageKey?: string;
   /** How many image-to-video footage beats to plan (default 3). */
   clipCount?: number;
   /** Seedance clip length for each footage beat (4–12 seconds, default 5). */
@@ -140,23 +137,6 @@ function boundedInteger(value: unknown, fallback: number, min: number, max: numb
   return Math.max(min, Math.min(max, Math.floor(candidate)));
 }
 
-function checkedReferenceUrl(value: string | undefined): string {
-  if (!value) {
-    throw new AbortTaskRunError(
-      "A client-approved product or reference image is required before planning. The subscription-only Seedance 2.0 workflow never creates replacement images.",
-    );
-  }
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "https:") throw new Error("reference image must use HTTPS");
-    return url.toString();
-  } catch (error) {
-    throw new AbortTaskRunError(
-      `The approved reference image URL is invalid: ${error instanceof Error ? error.message : "unknown URL error"}`,
-    );
-  }
-}
-
 function normalizeNarrative(raw: PlanResponse["narrative"], storyboard: PlannedFootageBeat[]): Narrative {
   if (!raw || typeof raw !== "object") throw new Error("creative plan is missing narrative");
   const n = raw as NonNullable<PlanResponse["narrative"]>;
@@ -229,7 +209,6 @@ export const planAdScript = task({
   maxDuration: 120,
   run: async (payload: Payload) => {
     const projectId = payload.projectId as Id<"adProjects">;
-    const referenceUrl = checkedReferenceUrl(payload.productImageUrl);
     const convex = new ConvexHttpClient(CONVEX_URL);
     const serviceToken = await creativeServiceToken();
     const response = await convex.action(api.creativeGateway.getProjectForPlanning, {
@@ -241,6 +220,19 @@ export const planAdScript = task({
       throw new AbortTaskRunError("Creative planning context was malformed. No model call was made.");
     }
     const context = response;
+
+    // The task receives only a project ID. It re-signs the durable key saved by
+    // the private workspace, rather than trusting an arbitrary URL supplied in
+    // a Trigger payload.
+    const referenceKey = typeof context.order?.productImageKey === "string"
+      ? context.order.productImageKey
+      : null;
+    if (!referenceKey) {
+      throw new AbortTaskRunError(
+        "A client-approved product or reference image is required before planning. The subscription-only Seedance 2.0 workflow never creates replacement images.",
+      );
+    }
+    const referenceUrl = await presignedGet(referenceKey, 60 * 60 * 24);
 
     const project = context.project;
     if (project.intakeStatus !== "ready_to_plan" && project.intakeStatus !== "complete") {
@@ -301,7 +293,7 @@ The storyboard array must contain exactly ${clipCount} footage beats. Do not inc
     let narrative: Narrative;
     let footage: Shot[];
     try {
-      const normalized = normalizeStoryboard(plan, clipCount, secondsPerShot, referenceUrl, context.order?.productImageKey ?? payload.productImageKey);
+      const normalized = normalizeStoryboard(plan, clipCount, secondsPerShot, referenceUrl, referenceKey);
       narrative = normalizeNarrative(plan.narrative, normalized.source);
       footage = normalized.shots;
     } catch (error) {

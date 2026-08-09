@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { vaultService } from "@/lib/vault";
 import { requireOperatorOrCron } from "@/lib/operator-auth";
+import { legacyControlPlaneRetired } from "@/lib/legacy-control-plane";
 
 export const maxDuration = 300;
 
@@ -9,6 +10,9 @@ export const maxDuration = 300;
 export async function POST(request: NextRequest) {
   const denied = requireOperatorOrCron(request);
   if (denied) return denied;
+  if (legacyControlPlaneRetired()) {
+    return NextResponse.json({ ok: false, error: "Legacy campaign automation is retired" }, { status: 410 });
+  }
   try {
     const trigger = await vaultService("trigger");
     const key = trigger.TRIGGER_SECRET_KEY_MEDIA_ENGINE;

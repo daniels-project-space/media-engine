@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { mutation } from "./retiredLegacy";
 import { MAXFUSION_PROMPTS } from "./seedData";
 
 const REALISM_SUFFIX =

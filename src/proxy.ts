@@ -3,6 +3,21 @@ import type { NextRequest } from "next/server";
 import { OPERATOR_COOKIE } from "@/lib/operator-auth";
 
 const PUBLIC_PREFIXES = ["/login", "/services", "/f/", "/p/", "/api/auth", "/api/health", "/api/subscribe", "/api/media/"];
+const RETIRED_PRIVATE_PREFIXES = [
+  "/accounts",
+  "/ads",
+  "/analytics",
+  "/campaigns",
+  "/instagram",
+  "/launch",
+  "/leads",
+  "/models",
+  "/personas",
+  "/prompts",
+  "/queue",
+  "/reference",
+  "/stores",
+];
 
 /**
  * This is an optimistic UI gate only. Every sensitive route handler verifies the
@@ -11,6 +26,14 @@ const PUBLIC_PREFIXES = ["/login", "/services", "/f/", "/p/", "/api/auth", "/api
  */
 export function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+  if (pathname.startsWith("/f/") || pathname.startsWith("/p/")) {
+    return NextResponse.redirect(new URL("/services", request.url));
+  }
+  if (RETIRED_PRIVATE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
+    const url = new URL("/work", request.url);
+    url.searchParams.set("notice", "legacy-workflow-retired");
+    return NextResponse.redirect(url);
+  }
   if (PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix))) {
     return NextResponse.next();
   }

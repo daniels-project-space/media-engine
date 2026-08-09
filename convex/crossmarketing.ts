@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation } from "./retiredLegacy";
 import { v } from "convex/values";
 
 // Cross-marketing across the portfolio — bundles, shoutout swaps between owned

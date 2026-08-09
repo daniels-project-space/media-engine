@@ -1,4 +1,4 @@
-import { AbortTaskRunError, logger, task } from "@trigger.dev/sdk/v3";
+import { AbortTaskRunError, logger, task } from "@trigger.dev/sdk";
 
 /**
  * Retained only so a queued legacy Trigger run has a deterministic, safe result.

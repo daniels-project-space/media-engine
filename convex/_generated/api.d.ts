@@ -30,6 +30,7 @@ import type * as playbooks from "../playbooks.js";
 import type * as posts from "../posts.js";
 import type * as products from "../products.js";
 import type * as prompts from "../prompts.js";
+import type * as retiredLegacy from "../retiredLegacy.js";
 import type * as seed from "../seed.js";
 import type * as seedAgency from "../seedAgency.js";
 import type * as seedData from "../seedData.js";
@@ -69,6 +70,7 @@ declare const fullApi: ApiFromModules<{
   posts: typeof posts;
   products: typeof products;
   prompts: typeof prompts;
+  retiredLegacy: typeof retiredLegacy;
   seed: typeof seed;
   seedAgency: typeof seedAgency;
   seedData: typeof seedData;

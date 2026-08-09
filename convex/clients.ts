@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
 const tier = v.union(v.literal("basic"), v.literal("standard"), v.literal("premium"));
@@ -11,7 +11,9 @@ const status = v.union(
   v.literal("cancelled"),
 );
 
-export const list = query({
+// The public Clients area was retired in favour of the password-protected Work
+// workspace. Keep these only as internal migration utilities.
+export const list = internalQuery({
   args: {},
   handler: async (ctx) => {
     const orders = await ctx.db.query("clientOrders").order("desc").collect();
@@ -31,7 +33,7 @@ export const list = query({
   },
 });
 
-export const create = mutation({
+export const create = internalMutation({
   args: {
     buyer: v.string(),
     source: v.string(),
@@ -47,7 +49,7 @@ export const create = mutation({
   },
 });
 
-export const update = mutation({
+export const update = internalMutation({
   args: {
     id: v.id("clientOrders"),
     status: v.optional(status),
@@ -65,7 +67,7 @@ export const update = mutation({
   },
 });
 
-export const remove = mutation({
+export const remove = internalMutation({
   args: { id: v.id("clientOrders") },
   handler: async (ctx, { id }) => {
     await ctx.db.delete(id);
@@ -73,7 +75,7 @@ export const remove = mutation({
 });
 
 // Summary stats for the clients dashboard header.
-export const stats = query({
+export const stats = internalQuery({
   args: {},
   handler: async (ctx) => {
     const orders = await ctx.db.query("clientOrders").collect();

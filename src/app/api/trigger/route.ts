@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { vaultService } from "@/lib/vault";
 import { aiEnabled } from "@/lib/ai-gate";
 import { requireOperator } from "@/lib/operator-auth";
+import { legacyControlPlaneRetired } from "@/lib/legacy-control-plane";
 
 export const maxDuration = 30;
 
@@ -10,6 +11,9 @@ export const maxDuration = 30;
 export async function POST(req: NextRequest) {
   const denied = requireOperator(req);
   if (denied) return denied;
+  if (legacyControlPlaneRetired()) {
+    return NextResponse.json({ error: "Legacy distribution is retired. Use Client Work for approved production." }, { status: 410 });
+  }
   const body = (await req.json()) as {
     action: "generate" | "plan" | "publish" | "short" | "campaign" | "remix";
     postId?: string;

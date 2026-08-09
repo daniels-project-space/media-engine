@@ -1,7 +1,8 @@
-import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
+import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import { vaultService } from "../lib/vault";
+import { legacyWorkflowDisabled } from "./legacy-disabled";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const BATCH = 50;
@@ -20,6 +21,11 @@ export const sendCampaign = task({
   id: "send-campaign",
   maxDuration: 600,
   run: async (payload: Payload) => {
+    if (legacyWorkflowDisabled()) {
+      const result = { deliveryDisabled: true, subject: payload.subject };
+      logger.warn("send-campaign skipped", result);
+      return result;
+    }
     const convex = new ConvexHttpClient(CONVEX_URL);
     const settings = await convex.query(api.settings.all, {});
     const from = payload.from ?? String(settings.emailFrom ?? "Media Engine <onboarding@resend.dev>");

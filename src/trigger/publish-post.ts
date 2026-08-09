@@ -1,8 +1,9 @@
-import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk/v3";
+import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { accountTokenVaultService, vaultService } from "../lib/vault";
+import { legacyWorkflowDisabled } from "./legacy-disabled";
 
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 const IG_BASE = "https://graph.instagram.com/v23.0";
@@ -36,6 +37,11 @@ export const publishPost = task({
   id: "publish-post",
   maxDuration: 600,
   run: async (payload: { postId: string }) => {
+    if (legacyWorkflowDisabled()) {
+      const result = { publishingDisabled: true, postId: payload.postId };
+      logger.warn("publish-post skipped", result);
+      return result;
+    }
     const convex = new ConvexHttpClient(CONVEX_URL);
     const post = await convex.query(api.posts.get, { id: payload.postId as Id<"posts"> });
     if (!post) throw new AbortTaskRunError("post not found");

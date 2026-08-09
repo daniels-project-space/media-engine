@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { repurposeAsset, type RepurposeMode } from "@/lib/integrations/repurpose";
 import { requireOperator } from "@/lib/operator-auth";
+import { legacyControlPlaneRetired } from "@/lib/legacy-control-plane";
 
 export const maxDuration = 60;
 
@@ -9,6 +10,9 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   const denied = requireOperator(req);
   if (denied) return denied;
+  if (legacyControlPlaneRetired()) {
+    return NextResponse.json({ error: "Legacy distribution is retired" }, { status: 410 });
+  }
   const b = (await req.json().catch(() => ({}))) as {
     assetId?: string;
     platform?: string;

@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation } from "./retiredLegacy";
 import { v } from "convex/values";
 
 // DB-driven funnels. `/f/[slug]` renders straight from a row — no page asset is

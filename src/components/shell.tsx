@@ -7,46 +7,26 @@ import { useEffect, useState } from "react";
 type NavigationItem = { href: string; label: string; detail: string };
 type NavigationSection = { label: string; items: NavigationItem[] };
 
-// The navigation mirrors the work rather than the implementation. Older routes
-// remain reachable while their data is migrated, but they no longer compete with
-// the day-to-day client-production path.
+// Navigation is intentionally centred on the client-production workflow. The
+// retired distribution/control-plane routes are not exposed as operator work.
 const NAVIGATION: NavigationSection[] = [
   { label: "Home", items: [{ href: "/", label: "Overview", detail: "Work needing attention" }] },
   {
-    label: "Work",
+    label: "Client desk",
     items: [
-      { href: "/work", label: "Client work", detail: "Requests, plans & delivery" },
-      { href: "/accounts", label: "Clients & brands", detail: "Brand context" },
+      { href: "/work", label: "Requests & delivery", detail: "Intake, plans, renders, handoff" },
     ],
   },
   {
-    label: "Publish",
+    label: "Production",
     items: [
-      { href: "/queue", label: "Review queue", detail: "Approve before publish" },
-      { href: "/personas", label: "Social identities", detail: "Channels & personas" },
-      { href: "/instagram", label: "Channel preview", detail: "Simulated feed view" },
-    ],
-  },
-  {
-    label: "Growth",
-    items: [
-      { href: "/campaigns", label: "Campaigns", detail: "Email & launch plans" },
-      { href: "/leads", label: "Leads", detail: "Inbound pipeline" },
-    ],
-  },
-  {
-    label: "Library",
-    items: [
-      { href: "/ads", label: "Media library", detail: "Rendered work" },
-      { href: "/models", label: "References & models", detail: "Visual inputs" },
-      { href: "/prompts", label: "Prompt library", detail: "Reusable direction" },
+      { href: "/work", label: "Storyboard & render", detail: "Approved client creative only" },
     ],
   },
   {
     label: "System",
     items: [
-      { href: "/analytics", label: "Analytics", detail: "Output & costs" },
-      { href: "/settings", label: "Connections & controls", detail: "Budget, services & safety" },
+      { href: "/settings", label: "Connections & safety", detail: "Higgsfield, policy, service status" },
     ],
   },
 ];
@@ -101,7 +81,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             <span className="grid size-8 place-items-center rounded-sm bg-signal text-xs font-extrabold text-void">ME</span>
             <span>
               <span className="display block text-sm font-extrabold tracking-tight">Media Engine</span>
-              <span className="block text-[10px] text-ink-faint">Marketing operations</span>
+              <span className="block text-[10px] text-ink-faint">Client production desk</span>
             </span>
           </Link>
           <button onClick={() => setNavOpen(false)} className="p-2 text-ink-dim hover:text-ink md:hidden" aria-label="Close navigation">×</button>

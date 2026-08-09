@@ -4,8 +4,8 @@
 
 - Moving scenes use Higgsfield **Seedance 2.0** only.
 - Every moving scene requires an approved client product/reference image.
-- Cards are deterministic Sharp/FFmpeg frames; music and transition SFX use the linked Higgsfield subscription.
-- Input-image quality and final-frame drift are checked. A drifting clip is replaced by a deterministic Ken-Burns treatment of the approved still.
+- Cards are deterministic Sharp/FFmpeg title/end frames; they are not AI-generated footage and consume no provider credits.
+- Input-image quality and final-frame drift are checked. A rejected clip fails the job for operator review; it is never replaced with a non-Seedance motion treatment.
 - No FAL, OpenAI image generation, ElevenLabs, first/last-frame, or lipsync route exists in this task. A missing subscription credit balance or render failure is surfaced to the operator without provider fallback.
 
 The Work API creates this payload after the client has approved a render plan. `subscriptionOnly` must remain `true`; URLs are short-lived signed URLs generated from the retained client asset key.
@@ -14,12 +14,10 @@ The Work API creates this payload after the client has approved a render plan. `
 {
   "title": "Volta earbuds — product-film draft",
   "subscriptionOnly": true,
-  "quick": true,
-  "musicPrompt": "polished, modern product-film atmosphere, no vocals",
   "scenes": [
     {
       "kind": "i2v",
-      "model": "seedance-2",
+      "model": "seedance_2_0",
       "imageUrl": "https://signed-media.example/approved/volta-hero.jpg",
       "intent": "Matte-black earbuds and charging case remain recognisable throughout the shot.",
       "motion": "Slow premium dolly toward the product, restrained teal rim-light reflections, no new objects.",
@@ -27,7 +25,7 @@ The Work API creates this payload after the client has approved a render plan. `
     },
     {
       "kind": "i2v",
-      "model": "seedance-2",
+      "model": "seedance_2_0",
       "imageUrl": "https://signed-media.example/approved/volta-detail.jpg",
       "intent": "Close product detail remains accurate to the approved image.",
       "motion": "Gentle macro orbit, controlled highlight roll across the case, stable logo.",
@@ -35,7 +33,7 @@ The Work API creates this payload after the client has approved a render plan. `
     },
     {
       "kind": "card",
-      "model": "seedance-2",
+      "model": "seedance_2_0",
       "cardTitle": "SOUND THAT MOVES",
       "cardSub": "VOLTA — SHOP NOW",
       "motion": "Hold clean brand end card",

@@ -5,6 +5,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { vaultService } from "@/lib/vault";
 import { syncStore } from "@/lib/orchestrator/store";
 import { requireOperator } from "@/lib/operator-auth";
+import { legacyControlPlaneRetired } from "@/lib/legacy-control-plane";
 
 export const maxDuration = 60;
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -16,6 +17,9 @@ const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 export async function POST(req: NextRequest) {
   const denied = requireOperator(req);
   if (denied) return denied;
+  if (legacyControlPlaneRetired()) {
+    return NextResponse.json({ error: "Legacy commerce sync is retired" }, { status: 410 });
+  }
   const body = (await req.json().catch(() => ({}))) as { domain?: string; name?: string };
   const cx = new ConvexHttpClient(CONVEX_URL);
   let domain = body.domain;
@@ -40,6 +44,9 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const denied = requireOperator(req);
   if (denied) return denied;
+  if (legacyControlPlaneRetired()) {
+    return NextResponse.json({ error: "Legacy commerce sync is retired" }, { status: 410 });
+  }
   const cx = new ConvexHttpClient(CONVEX_URL);
   const stores = await cx.query(api.stores.list, {});
   const withCounts = await Promise.all(

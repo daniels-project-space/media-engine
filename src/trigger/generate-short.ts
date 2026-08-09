@@ -1,4 +1,4 @@
-import { AbortTaskRunError, logger, task } from "@trigger.dev/sdk/v3";
+import { AbortTaskRunError, logger, task } from "@trigger.dev/sdk";
 
 /**
  * Retained only to fail closed for old Trigger runs.

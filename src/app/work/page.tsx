@@ -155,6 +155,11 @@ const MESSAGE_META: Record<ProjectMessage["role"], { label: string; className: s
   system: { label: "System", className: "border-line-2 text-ink-faint" },
 };
 
+// This is deliberately flipped only when the authenticated production MCP
+// manifest has been reviewed and a strict Seedance tool mapping is committed.
+const RENDERING_ENABLED = false;
+const RENDERING_DISABLED_REASON = "Rendering is paused while the production Seedance 2.0 MCP tool schema is verified. No subscription credits can be used yet.";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -472,6 +477,10 @@ export default function WorkPage() {
 
   function render(kind: RenderKind) {
     if (!selected) return;
+    if (!RENDERING_ENABLED) {
+      setError(RENDERING_DISABLED_REASON);
+      return;
+    }
     const label = kind === "draft" ? "draft" : "final";
     void runAction(
       `${selected.project._id}:render-${kind}`,
@@ -495,7 +504,7 @@ export default function WorkPage() {
       <header className="flex flex-col gap-4 border-b border-line pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="mb-2 text-[10px] font-semibold tracking-[0.18em] text-signal uppercase">Work · client production</p>
-          <h1 className="display text-3xl font-extrabold tracking-tight sm:text-4xl">Requests into finished media</h1>
+          <h1 className="display text-3xl font-extrabold tracking-tight sm:text-4xl">Client Desk</h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink-dim">
             Capture the brief, keep the client conversation human-approved, then turn an approved plan into a controlled video render.
           </p>
@@ -813,19 +822,20 @@ function ProjectWorkspace({
             <h3 className="display text-lg font-bold">Production</h3>
             <p className="mt-1 text-xs leading-relaxed text-ink-faint">Rendering only uses Higgsfield subscription credits. If the provider is unavailable, the job stops instead of moving to a paid fallback.</p>
             <div className="mt-4 space-y-2">
-              <ActionButton onClick={() => onRender("draft")} disabled={isBusy || !planApproved || project.stage !== "script_ready"} kind="primary">
+              <ActionButton onClick={() => onRender("draft")} disabled={!RENDERING_ENABLED || isBusy || !planApproved || project.stage !== "script_ready"} kind="primary">
                 {projectBusy("render-draft") ? "Starting draft…" : "Render draft"}
               </ActionButton>
-              <ActionButton onClick={() => onRender("final")} disabled={isBusy || !planApproved || project.stage !== "draft_ready"} kind="primary">
+              <ActionButton onClick={() => onRender("final")} disabled={!RENDERING_ENABLED || isBusy || !planApproved || project.stage !== "draft_ready"} kind="primary">
                 {projectBusy("render-final") ? "Starting final…" : "Render final"}
               </ActionButton>
               {retryKind && (
-                <ActionButton onClick={() => onRender(retryKind)} disabled={isBusy || !planApproved} kind="primary">
+                <ActionButton onClick={() => onRender(retryKind)} disabled={!RENDERING_ENABLED || isBusy || !planApproved} kind="primary">
                   {projectBusy(`render-${retryKind}`) ? "Retrying…" : `Retry ${retryKind}`}
                 </ActionButton>
               )}
             </div>
             {!planApproved && <p className="mt-3 text-xs text-amber">Approve the current plan before using render credits.</p>}
+            {!RENDERING_ENABLED && <p className="mt-3 text-xs leading-relaxed text-amber">{RENDERING_DISABLED_REASON}</p>}
             {planApproved && !draftReady && project.stage !== "drafting" && <p className="mt-3 text-xs text-ink-faint">A draft is the next allowed production step.</p>}
             {draftReady && !finalReady && <p className="mt-3 text-xs text-ink-faint">Review the draft before starting the final.</p>}
             {readyForDelivery && (
