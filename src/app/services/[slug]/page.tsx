@@ -68,9 +68,13 @@ export default async function ServicePage({ params }: { params: Promise<{ slug: 
         </div>
         <div className="relative">
           {media(s.heroClipKey) ? (
-            <video src={media(s.heroClipKey)} autoPlay muted loop playsInline className="w-full rounded-md border border-line-2 aspect-[9/16] max-h-[560px] object-cover mx-auto shadow-2xl" />
+            <div className="service-detail-video-frame">
+              <video src={media(s.heroClipKey)} autoPlay muted loop playsInline preload="metadata" className="service-detail-video-media" aria-label={`${s.name} example`}>
+                Your browser does not support video playback.
+              </video>
+            </div>
           ) : (
-            <div className="aspect-[9/16] max-h-[560px] bg-panel border border-line-2 rounded-md" />
+            <div className="service-detail-video-frame" />
           )}
         </div>
       </section>
@@ -97,10 +101,16 @@ export default async function ServicePage({ params }: { params: Promise<{ slug: 
           {s.gallery.map((g, i) => (
             <div key={i}>
               {media(g.clipKey) ? (
-                <video src={media(g.clipKey)} controls muted playsInline preload="metadata" className="w-full aspect-[9/16] object-cover rounded-sm border border-line-2 bg-panel" />
+                <div className="service-gallery-frame">
+                  <video src={media(g.clipKey)} controls muted playsInline preload="metadata" className="service-gallery-media" aria-label={g.label}>
+                    Your browser does not support video playback.
+                  </video>
+                </div>
               ) : media(g.imageKey) ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={media(g.imageKey)} alt={g.label} className="w-full aspect-[9/16] object-cover rounded-sm border border-line-2" />
+                <div className="service-gallery-frame">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={media(g.imageKey)} alt={g.label} className="service-gallery-media" />
+                </div>
               ) : null}
               <div className="text-[11px] text-ink-faint mt-2">{g.label}</div>
             </div>
