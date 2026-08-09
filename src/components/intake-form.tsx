@@ -17,9 +17,9 @@ export function IntakeForm({ service, cta }: { service: string; cta: string }) {
     if (!form.name || !form.email) return;
     setBusy(true);
     try {
-      const id = await create({ service, ...form });
-      // Kick off the auto-draft reply (fire-and-forget).
-      fetch("/api/leads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "draft", leadId: id }) }).catch(() => {});
+      await create({ service, ...form });
+      // Lead creation stays public, but paid/credentialed AI drafting begins only
+      // after an operator reviews the intake in the private Leads workspace.
       setSent(true);
     } finally {
       setBusy(false);
@@ -30,8 +30,8 @@ export function IntakeForm({ service, cta }: { service: string; cta: string }) {
     return (
       <div className="border border-signal/40 bg-signal/5 p-8 text-center rounded-sm">
         <div className="text-signal text-3xl mb-2">✓</div>
-        <div className="font-bold text-lg mb-1">Got it — you&apos;ll hear from us fast.</div>
-        <p className="text-ink-dim text-sm">We reply within minutes, not days. Check your inbox shortly.</p>
+        <div className="font-bold text-lg mb-1">Got it — we&apos;ll review your request.</div>
+        <p className="text-ink-dim text-sm">A real person will follow up after reviewing the details you shared.</p>
       </div>
     );
   }
@@ -54,7 +54,7 @@ export function IntakeForm({ service, cta }: { service: string; cta: string }) {
       <button disabled={busy} className="w-full bg-signal text-void display font-bold py-4 text-sm tracking-wide rounded-sm hover:brightness-110 transition disabled:opacity-50">
         {busy ? "SENDING…" : cta}
       </button>
-      <p className="text-ink-faint text-[11px] text-center">Free sample concept available · No lock-in · Reply in minutes</p>
+      <p className="text-ink-faint text-[11px] text-center">Free sample concept available · No lock-in · Human-reviewed follow-up</p>
     </form>
   );
 }

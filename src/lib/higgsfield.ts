@@ -4,16 +4,54 @@ const API = "https://fnf.higgsfield.ai/agents";
 const AUTH = "https://fnf-device-auth.higgsfield.ai";
 const UA = "hf-cli/1";
 
-// Higgsfield access tokens expire hourly and refresh tokens rotate (single-use)
-// on refresh. Under concurrent scene rendering, two clips hitting 401 at once
-// must NOT both refresh — the second would burn the token the first just rotated.
-// So refresh is single-flight: concurrent callers await one shared refresh.
+// Higgsfield access tokens expire hourly and refresh tokens rotate (single-use).
+// Calls within a runtime share one refresh; a separate worker recovers from the
+// persisted rotated session instead of needlessly demanding another login.
 let cachedAccess: string | null = null;
 let refreshInFlight: Promise<string | null> | null = null;
 
-async function tokens(): Promise<{ access: string; refresh: string | null }> {
+type HiggsTokens = { access: string | null; refresh: string | null };
+
+function storedSession(raw?: string): HiggsTokens | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as { access_token?: unknown; refresh_token?: unknown };
+    if (typeof value.access_token === "string" && typeof value.refresh_token === "string" && value.access_token && value.refresh_token) {
+      return { access: value.access_token, refresh: value.refresh_token };
+    }
+  } catch {
+    // Fall back to the initial two-secret setup. A malformed session is never
+    // sent to the provider as an authentication credential.
+  }
+  return null;
+}
+
+async function tokens(): Promise<{ access: string | null; refresh: string | null }> {
   const s = await vaultService("higgsfield");
-  return { access: s.HIGGSFIELD_ACCESS_TOKEN, refresh: s.HIGGSFIELD_REFRESH_TOKEN ?? null };
+  // Keep rotating credentials together after the first refresh. That avoids a
+  // cold worker reading an access token from one rotation and a refresh token
+  // from another.
+  const session = storedSession(s.HIGGSFIELD_SESSION);
+  if (session) return session;
+  return {
+    access: s.HIGGSFIELD_ACCESS_TOKEN?.trim() || null,
+    refresh: s.HIGGSFIELD_REFRESH_TOKEN?.trim() || null,
+  };
+}
+
+async function waitForOtherWorkerRefresh(previousRefresh: string): Promise<string | null> {
+  // A different Trigger worker may have consumed the one-time refresh token
+  // milliseconds before this request. Reuse its persisted session rather than
+  // treating a harmless race as an operator re-authentication requirement.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    const latest = await tokens();
+    if (latest.access && latest.refresh && latest.refresh !== previousRefresh) {
+      cachedAccess = latest.access;
+      return latest.access;
+    }
+  }
+  return null;
 }
 
 async function doRefresh(): Promise<string | null> {
@@ -24,11 +62,12 @@ async function doRefresh(): Promise<string | null> {
     headers: { "content-type": "application/json", "user-agent": UA },
     body: JSON.stringify({ refresh_token: rt }),
   });
-  if (!r.ok) return null;
-  const t = (await r.json()) as { access_token: string; refresh_token: string };
-  // Persist the rotated pair so the next cold task starts valid.
-  await vaultSet("higgsfield", "HIGGSFIELD_ACCESS_TOKEN", t.access_token);
-  await vaultSet("higgsfield", "HIGGSFIELD_REFRESH_TOKEN", t.refresh_token);
+  if (!r.ok) return waitForOtherWorkerRefresh(rt);
+  const t = (await r.json()) as { access_token?: string; refresh_token?: string };
+  if (!t.access_token || !t.refresh_token) return null;
+  // Persist the rotated pair as one record before using it. The two initial
+  // setup secrets remain accepted only until this first successful refresh.
+  await vaultSet("higgsfield", "HIGGSFIELD_SESSION", JSON.stringify(t));
   cachedAccess = t.access_token;
   return t.access_token;
 }
@@ -42,21 +81,17 @@ function refreshOnce(): Promise<string | null> {
   return refreshInFlight;
 }
 
-// Proactively refresh + persist a fresh token before a batch of concurrent calls,
-// so the parallel scenes never each trigger a reactive refresh. Safe to call once
-// at task start; no-op-cheap if it fails (falls through to fal downstream).
-export async function higgsEnsureFresh(): Promise<boolean> {
-  const fresh = await refreshOnce();
-  return fresh !== null;
-}
-
 async function authed(
   method: string,
   path: string,
   body?: unknown,
   retried = false,
 ): Promise<Response> {
-  if (!cachedAccess) cachedAccess = (await tokens()).access;
+  if (!cachedAccess) {
+    const stored = await tokens();
+    cachedAccess = stored.access ?? (await refreshOnce());
+    if (!cachedAccess) throw new Error("Higgsfield subscription credentials are not linked");
+  }
   const r = await fetch(`${API}${path}`, {
     method,
     headers: {
@@ -110,18 +145,35 @@ export async function higgsBalance(): Promise<number> {
 export async function higgsCost(jobSetType: string, params: Record<string, unknown>): Promise<number> {
   const r = await authed("POST", "/jobs/cost", { job_set_type: jobSetType, params });
   if (!r.ok) throw new Error(`higgs cost HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  return ((await r.json()) as { credits_exact?: number; credits?: number }).credits_exact
-    ?? ((await r.json()) as { credits: number }).credits;
+  // A Response body can only be consumed once. Reading it twice made every
+  // successful cost quote throw on the fallback expression and hid the exact
+  // credit total needed for a fail-closed subscription render.
+  const body = (await r.json()) as { credits_exact?: number; credits?: number };
+  const credits = body.credits_exact ?? body.credits;
+  if (typeof credits !== "number" || !Number.isFinite(credits) || credits < 0) {
+    throw new Error(`higgs cost returned no valid credit quote for ${jobSetType}`);
+  }
+  return credits;
+}
+
+function supportedImageType(value?: string): "image/png" | "image/jpeg" | "image/webp" {
+  if (value === "image/jpeg" || value === "image/jpg") return "image/jpeg";
+  if (value === "image/webp") return "image/webp";
+  return "image/png";
 }
 
 // Uploads image bytes to Higgsfield, returns a media-input id usable as input_image.
-export async function higgsUploadImage(bytes: Buffer): Promise<string> {
-  const r = await authed("POST", "/uploads?type=image", { filename: "scene.png", content_type: "image/png" });
+// Client reference images can be JPEG/WebP as well as PNG; declaring PNG for
+// every byte stream caused some providers to reject otherwise valid uploads.
+export async function higgsUploadImage(bytes: Buffer, contentType?: string): Promise<string> {
+  const type = supportedImageType(contentType);
+  const extension = type === "image/jpeg" ? "jpg" : type === "image/webp" ? "webp" : "png";
+  const r = await authed("POST", "/uploads?type=image", { filename: `scene.${extension}`, content_type: type });
   if (!r.ok) throw new Error(`higgs upload-slot HTTP ${r.status}`);
   const slot = (await r.json()) as { id: string; upload_url: string };
   const put = await fetch(slot.upload_url, {
     method: "PUT",
-    headers: { "content-type": "image/png" },
+    headers: { "content-type": type },
     body: new Uint8Array(bytes),
   });
   if (!put.ok) throw new Error(`higgs upload PUT HTTP ${put.status}`);
@@ -133,11 +185,16 @@ export async function higgsGenerateVideo(opts: {
   jobSetType: string;
   prompt: string;
   imageBytes: Buffer;
+  imageContentType?: string;
   durationSeconds?: number;
   aspectRatio?: string;
   extraParams?: Record<string, unknown>;
+  /** Fail before submitting when the account cannot cover a quoted render. */
+  availableCredits?: number;
+  /** Canonical subscription renders must have a reliable credit quote. */
+  requireCreditQuote?: boolean;
 }): Promise<{ url: string; credits: number }> {
-  const uploadId = await higgsUploadImage(opts.imageBytes);
+  const uploadId = await higgsUploadImage(opts.imageBytes, opts.imageContentType);
   const params: Record<string, unknown> = {
     prompt: opts.prompt,
     duration: opts.durationSeconds ?? 5,
@@ -146,7 +203,16 @@ export async function higgsGenerateVideo(opts: {
     ...opts.extraParams,
   };
 
-  const credits = await higgsCost(opts.jobSetType, params).catch(() => 0);
+  // Legacy renders may tolerate a missing quote, but a subscription-only render
+  // must never submit a job whose credit use cannot be preflighted.
+  const credits = opts.requireCreditQuote
+    ? await higgsCost(opts.jobSetType, params)
+    : await higgsCost(opts.jobSetType, params).catch(() => 0);
+  if (opts.availableCredits !== undefined && credits > opts.availableCredits) {
+    throw new Error(
+      `higgs subscription has ${opts.availableCredits} credits but ${opts.jobSetType} needs ${credits}`,
+    );
+  }
 
   const sub = await authed("POST", "/jobs", { job_set_type: opts.jobSetType, params });
   if (!sub.ok) throw new Error(`higgs submit HTTP ${sub.status}: ${(await sub.text()).slice(0, 300)}`);
@@ -155,7 +221,7 @@ export async function higgsGenerateVideo(opts: {
   if (!jobId) throw new Error("higgs submit returned no job id");
 
   // ~5min ceiling: HF clips normally finish in under a minute, so a longer wait
-  // means the job is stuck — bail and let the router fall back to fal. Also bail
+  // means the job is stuck — fail closed. Also bail
   // fast if auth breaks mid-poll (repeated non-ok) instead of grinding the full 5min.
   let authFails = 0;
   for (let i = 0; i < 60; i++) {

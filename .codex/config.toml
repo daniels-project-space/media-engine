@@ -1,0 +1,63 @@
+[mcp_servers.convex]
+command = "npx"
+args = ["--no-install", "convex", "mcp", "start", "--project-dir", "/home/ubuntu/media-engine"]
+cwd = "/home/ubuntu/media-engine"
+enabled_tools = [
+  "status",
+  "functionSpec",
+  "insights",
+  "logs",
+  "tables",
+  "envGet",
+  "envList",
+  "data",
+]
+default_tools_approval_mode = "approve"
+startup_timeout_sec = 15
+tool_timeout_sec = 60
+
+[mcp_servers.trigger]
+command = "npx"
+args = [
+  "--offline",
+  "-y",
+  "trigger.dev@4.5.4",
+  "mcp",
+  "--readonly",
+  "--dev-only",
+  "--project-ref",
+  "proj_snvnjoxqowcfsutewkzz",
+  "--skip-telemetry",
+  "--log-level",
+  "error",
+]
+cwd = "/home/ubuntu/media-engine"
+enabled_tools = [
+  "search_docs",
+  "get_current_worker",
+  "get_task_schema",
+  "list_runs",
+  "get_run_details",
+  "get_span_details",
+  "wait_for_run_to_complete",
+  "list_deploys",
+  "get_query_schema",
+  "query",
+  "list_dashboards",
+  "run_dashboard_query",
+  "dev_server_status",
+]
+default_tools_approval_mode = "approve"
+startup_timeout_sec = 30
+tool_timeout_sec = 90
+
+# Official Higgsfield remote MCP. OAuth is intentionally required: render tools
+# can spend account credits, so they must never start silently with a bearer token
+# embedded in the project config. Run `codex mcp login higgsfield` once to link
+# the authorised Higgsfield account.
+[mcp_servers.higgsfield]
+url = "https://mcp.higgsfield.ai/mcp"
+auth = "oauth"
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+default_tools_approval_mode = "prompt"

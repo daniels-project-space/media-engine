@@ -4,7 +4,13 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { useEffect, useState } from "react";
 
-type ServiceStatus = { service: string; label: string; role: string; present: boolean; state?: "paused" };
+type ServiceStatus = {
+  service: string;
+  label: string;
+  role: string;
+  present: boolean;
+  status: "configured" | "missing" | "disabled";
+};
 
 export default function Settings() {
   const settings = useQuery(api.settings.all);
@@ -12,30 +18,44 @@ export default function Settings() {
   const accounts = useQuery(api.accounts.list);
   const contacts = useQuery(api.email.contacts, {});
   const setSetting = useMutation(api.settings.set);
-  const setAutonomy = useMutation(api.streams.setAutonomy);
   const [services, setServices] = useState<ServiceStatus[] | null>(null);
-  const [capInput, setCapInput] = useState<string>("");
+  const [servicesError, setServicesError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/services")
-      .then((r) => r.json())
-      .then((d) => setServices(d.services))
-      .catch(() => setServices([]));
+    let cancelled = false;
+    const checkServices = async () => {
+      try {
+        const response = await fetch("/api/services", { credentials: "same-origin", cache: "no-store" });
+        const data = (await response.json().catch(() => null)) as { services?: ServiceStatus[]; error?: string } | null;
+        if (!response.ok || !Array.isArray(data?.services)) {
+          throw new Error(data?.error ?? "The private service-status API is unavailable.");
+        }
+        if (!cancelled) {
+          setServices(data.services);
+          setServicesError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setServices(null);
+          setServicesError(error instanceof Error ? error.message : "The private service-status API is unavailable.");
+        }
+      }
+    };
+    const timer = window.setTimeout(() => void checkServices(), 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, []);
-
-  useEffect(() => {
-    if (settings && capInput === "") {
-      setCapInput(String(Number(settings.dailyCapPence ?? 500) / 100));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings]);
 
   if (settings === undefined || streams === undefined) {
     return <div className="text-ink-faint text-xs tracking-widest">Loading…</div>;
   }
 
   const adsEnabled = Boolean(settings.adsEnabled ?? false);
-  const aiOn = settings.aiEnabled === true; // default OFF; only explicit true enables generation
+  const aiOn = settings.aiEnabled !== false; // default ON
+  const higgsfield = services?.find((service) => service.service === "higgsfield");
+  const otherServices = services?.filter((service) => service.service !== "higgsfield") ?? [];
 
   return (
     <div className="max-w-3xl">
@@ -86,11 +106,11 @@ export default function Settings() {
       })()}
 
       <section className={`border p-5 mb-6 rise ${aiOn ? "border-line bg-panel" : "border-onair/50 bg-onair/5"}`}>
-        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">AI / LLM (CODEX CLI SUBSCRIPTION)</h2>
+        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">AI / LLM (CLAUDE SUBSCRIPTION)</h2>
         <p className="text-ink-faint text-[11px] mb-4">
-          Master kill switch for subscription-authenticated Codex CLI reasoning — script planning, caption
-          variants, and drafting. Image generation is permanently paused until an approved equal-quality
-          provider is configured; use approved source images for video renders.
+          Master kill switch for all Claude LLM calls (via your subscription) — script planning, caption
+          variants, vision QC, and lead/client reply drafting. Off = no LLM calls (renders and drafts fall
+          back or pause). Turning it back on resumes normal operation.
         </p>
         <button
           onClick={() => setSetting({ key: "aiEnabled", value: !aiOn })}
@@ -103,33 +123,11 @@ export default function Settings() {
       </section>
 
       <section className="border border-line bg-panel p-5 mb-6 rise">
-        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">DAILY GENERATION BUDGET</h2>
-        <p className="text-ink-faint text-[11px] mb-4">
-          Hard cap for image/video generation per day. Jobs refuse to start once the cap is hit.
+        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">GENERATION POLICY</h2>
+        <p className="text-ink-faint text-[11px] leading-relaxed">
+          Social image/video jobs are paused. OpenAI, fal.ai, ElevenLabs, and generic social Seedance jobs cannot consume credits.
+          The only billable media path is an approved client render in Work, using Higgsfield Seedance 2.0 subscription credits.
         </p>
-        <div className="flex items-center gap-3">
-          <span className="text-ink-dim text-sm">£</span>
-          <input
-            value={capInput}
-            onChange={(e) => setCapInput(e.target.value)}
-            className="bg-panel-2 border border-line-2 px-3 py-2 text-sm w-24 tabular-nums"
-            inputMode="decimal"
-          />
-          <button
-            onClick={() => {
-              const pounds = parseFloat(capInput);
-              if (!isNaN(pounds) && pounds > 0) {
-                setSetting({ key: "dailyCapPence", value: Math.round(pounds * 100) });
-              }
-            }}
-            className="px-4 py-2 bg-signal text-void display font-bold text-xs hover:brightness-110 transition"
-          >
-            SAVE
-          </button>
-          <span className="text-[10px] text-ink-faint">
-            current: £{(Number(settings.dailyCapPence ?? 500) / 100).toFixed(2)}/day
-          </span>
-        </div>
       </section>
 
       <section className="border border-line bg-panel p-5 mb-6 rise">
@@ -153,8 +151,8 @@ export default function Settings() {
       <section className="border border-line bg-panel p-5 mb-6 rise">
         <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">STREAM AUTONOMY</h2>
         <p className="text-ink-faint text-[11px] mb-4">
-          «Needs approval» = posts wait in the Approval Queue for you. «Fully automatic» = posts
-          publish on schedule without review (once accounts are linked).
+          Social automation is paused. Existing planning, posts, and account data remain visible for review,
+          but this app will not automatically render, approve, or publish social posts.
         </p>
         <div className="divide-y divide-line border border-line">
           {streams.map((s) => (
@@ -163,16 +161,9 @@ export default function Settings() {
                 <div className="text-xs font-bold">{s.name}</div>
                 <div className="text-[10px] text-ink-faint">{s.goal}</div>
               </div>
-              <button
-                onClick={() => setAutonomy({ id: s._id, autonomy: s.autonomy === "auto" ? "approve" : "auto" })}
-                className={`px-3 py-1.5 border text-[10px] tracking-widest transition shrink-0 ${
-                  s.autonomy === "auto"
-                    ? "border-signal text-signal"
-                    : "border-amber text-amber"
-                }`}
-              >
-                {s.autonomy === "auto" ? "FULLY AUTOMATIC" : "NEEDS APPROVAL"}
-              </button>
+              <span className="px-3 py-1.5 border border-line-2 text-[10px] tracking-widest text-ink-faint shrink-0">
+                AUTOMATION PAUSED
+              </span>
             </div>
           ))}
         </div>
@@ -208,16 +199,70 @@ export default function Settings() {
         </p>
       </section>
 
+      <section className="border border-signal/35 bg-panel p-5 mb-6 rise">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+          <div>
+            <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">HIGGSFIELD · SEEDANCE 2.0</h2>
+            <p className="text-ink-faint text-[11px] leading-relaxed max-w-2xl">
+              The only approved client-render path: Higgsfield subscription credits, Seedance 2.0, and no paid fallback.
+            </p>
+          </div>
+          <span
+            className={`border px-2 py-1 text-[10px] tracking-widest ${
+              services === null
+                ? "border-line-2 text-ink-faint"
+                : higgsfield?.status === "configured"
+                  ? "border-signal/60 text-signal"
+                  : "border-onair/60 text-onair"
+            }`}
+          >
+            {services === null
+              ? "CHECKING VAULT STATUS"
+              : higgsfield?.status === "configured"
+                ? "PRODUCTION TOKEN PAIR CONFIGURED"
+                : "PRODUCTION TOKEN PAIR MISSING"}
+          </span>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="border border-line bg-panel-2/40 p-4">
+            <h3 className="text-[10px] tracking-[0.18em] text-ink-dim mb-2">CODEX DESKTOP MCP AUTH</h3>
+            <ol className="list-decimal pl-4 space-y-2 text-[11px] leading-relaxed text-ink-dim">
+              <li>Open Codex Desktop <span className="text-ink">Settings → MCP servers → Higgsfield</span>.</li>
+              <li>Select <span className="text-ink">Authenticate</span> and approve the Higgsfield browser flow.</li>
+              <li>Use the official setup page if you need to return to the provider&apos;s MCP instructions.</li>
+            </ol>
+            <a href="https://higgsfield.ai/mcp" target="_blank" rel="noreferrer" className="inline-block mt-3 text-xs font-semibold text-signal hover:underline">
+              Open official Higgsfield MCP setup →
+            </a>
+            <p className="mt-3 text-[10px] leading-relaxed text-ink-faint">
+              This OAuth grant belongs to this Codex Desktop installation. Codex maintains it after approval; authenticate again only if Higgsfield revokes or invalidates the grant.
+            </p>
+          </div>
+
+          <div className="border border-line bg-panel-2/40 p-4">
+            <h3 className="text-[10px] tracking-[0.18em] text-ink-dim mb-2">PRODUCTION RENDER CONNECTION</h3>
+            <p className="text-[11px] leading-relaxed text-ink-dim">
+              The deployed media engine cannot reuse Desktop OAuth. It uses a separate secure <span className="text-ink">higgsfield</span> vault entry containing <span className="text-ink">HIGGSFIELD_ACCESS_TOKEN</span> and <span className="text-ink">HIGGSFIELD_REFRESH_TOKEN</span>.
+            </p>
+            <p className="mt-3 text-[11px] leading-relaxed text-ink-dim">
+              The access token expires and the server rotates the refresh token. This status confirms that both required vault values are configured; it does not run a billable render or expose either credential.
+            </p>
+            {servicesError && <p className="mt-3 text-[10px] leading-relaxed text-onair">Status unavailable: {servicesError}</p>}
+          </div>
+        </div>
+      </section>
+
       <section className="border border-line bg-panel p-5 rise">
-        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">CONNECTED SERVICES</h2>
+        <h2 className="text-[11px] tracking-[0.3em] text-signal mb-1">OTHER SERVICE STATUS</h2>
         <p className="text-ink-faint text-[11px] mb-4">
-          Credentials live in the central vault — never in this app. Green = key present.
+          Credential values remain in the central vault. Green means the required vault values are configured, not that a live provider call was made.
         </p>
         {services === null ? (
-          <div className="text-ink-faint text-xs">Checking…</div>
+          <div className="text-ink-faint text-xs">{servicesError ? "Status unavailable — check operator access and service configuration." : "Checking private service status…"}</div>
         ) : (
           <div className="divide-y divide-line border border-line">
-            {services.map((s) => (
+            {otherServices.map((s) => (
               <div key={s.service} className="flex items-center justify-between px-4 py-2.5 bg-panel-2/40">
                 <div>
                   <span className="text-xs font-bold">{s.label}</span>
@@ -225,11 +270,11 @@ export default function Settings() {
                 </div>
                 <span
                   className={`flex items-center gap-1.5 text-[10px] tracking-widest ${
-                    s.state === "paused" ? "text-amber" : s.present ? "text-signal" : "text-onair"
+                    s.status === "configured" ? "text-signal" : s.status === "disabled" ? "text-amber" : "text-onair"
                   }`}
                 >
-                  <span className={`size-1.5 rounded-full ${s.state === "paused" ? "bg-amber" : s.present ? "bg-signal" : "bg-onair"}`} />
-                  {s.state === "paused" ? "PAUSED" : s.present ? "CONNECTED" : "MISSING"}
+                  <span className={`size-1.5 rounded-full ${s.status === "configured" ? "bg-signal" : s.status === "disabled" ? "bg-amber" : "bg-onair"}`} />
+                  {s.status === "configured" ? "CONFIGURED" : s.status === "disabled" ? "DISABLED BY POLICY" : "MISSING"}
                 </span>
               </div>
             ))}

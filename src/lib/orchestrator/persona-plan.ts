@@ -9,9 +9,9 @@ const CONVEX_URL =
 
 // Persona content pipeline — plans a run of Instagram carousels for one influencer
 // persona and writes them as scheduled `planned` posts. Faithful port of the
-// plan-week task, now on the subscription-authenticated Codex CLI instead of
-// the dead OpenRouter path. Prompts are scene-only; the persona GLOBAL LOCK is
-// injected at generation time by generate-carousel.
+// plan-week task, now on the subscription (Claude Sonnet via llm.ts) instead of
+// the dead OpenRouter path. It creates review-only copy and scene briefs; social
+// media rendering is deliberately disabled by generation policy.
 
 export type PlannedPost = {
   dayOffset: number;

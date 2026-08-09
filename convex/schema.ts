@@ -18,6 +18,43 @@ export const postStatus = v.union(
   v.literal("failed"),
 );
 
+const projectShot = v.object({
+  id: v.optional(v.string()),
+  kind: v.optional(v.string()), // "card" for a deterministic end-card
+  beat: v.optional(v.string()),
+  imagePrompt: v.optional(v.string()),
+  imageUrl: v.optional(v.string()), // client-provided or approved reference image
+  imageKey: v.optional(v.string()), // R2 key of an approved reference frame
+  motion: v.string(),
+  audioCue: v.optional(v.string()),
+  seconds: v.number(),
+  onText: v.optional(v.string()),
+  cardTitle: v.optional(v.string()),
+  cardSub: v.optional(v.string()),
+});
+
+const projectNarrative = v.object({
+  audience: v.string(),
+  objective: v.string(),
+  corePromise: v.string(),
+  insight: v.string(),
+  arc: v.array(v.object({ beat: v.string(), purpose: v.string() })),
+  voiceover: v.optional(v.string()),
+  cta: v.string(),
+});
+
+const projectRenderPlan = v.object({
+  provider: v.literal("higgsfield"),
+  model: v.literal("seedance_2_0"),
+  creditSource: v.literal("higgsfield_subscription"),
+  aspectRatio: v.union(v.literal("9:16"), v.literal("16:9"), v.literal("1:1")),
+  durationSeconds: v.number(),
+  audioStrategy: v.string(),
+  referencePolicy: v.string(),
+  fallbackPolicy: v.literal("fail_closed"),
+  providerInstructions: v.array(v.string()),
+});
+
 export default defineSchema({
   streams: defineTable({
     slug: v.string(),
@@ -155,6 +192,7 @@ export default defineSchema({
     status: v.union(
       v.literal("new"),
       v.literal("in_progress"),
+      v.literal("ready_for_delivery"),
       v.literal("delivered"),
       v.literal("revision"),
       v.literal("complete"),
@@ -176,6 +214,7 @@ export default defineSchema({
     title: v.string(),
     brief: v.string(),
     orderId: v.optional(v.id("clientOrders")),
+    source: v.optional(v.union(v.literal("fiverr"), v.literal("direct"))),
     stage: v.union(
       v.literal("scripting"),
       v.literal("script_ready"),
@@ -185,21 +224,20 @@ export default defineSchema({
       v.literal("final_ready"),
       v.literal("failed"),
     ),
-    shots: v.optional(
-      v.array(
-        v.object({
-          kind: v.optional(v.string()), // "card" for the brand end-card
-          imagePrompt: v.optional(v.string()),
-          imageUrl: v.optional(v.string()), // real product / reference image
-          imageKey: v.optional(v.string()), // R2 key of the approved draft image (reused in 4K)
-          motion: v.string(),
-          seconds: v.number(),
-          onText: v.optional(v.string()),
-          cardTitle: v.optional(v.string()),
-          cardSub: v.optional(v.string()),
-        }),
-      ),
+    // The canonical, reviewable creative plan. Every final render uses the
+    // version that was approved before dispatch; it never regenerates a vague
+    // brief directly into a paid job.
+    intakeStatus: v.optional(
+      v.union(v.literal("collecting"), v.literal("needs_reply"), v.literal("ready_to_plan"), v.literal("complete")),
     ),
+    intakeSummary: v.optional(v.string()),
+    missingFields: v.optional(v.array(v.string())),
+    narrative: v.optional(projectNarrative),
+    shots: v.optional(v.array(projectShot)),
+    storyboardVersion: v.optional(v.number()),
+    renderPlan: v.optional(projectRenderPlan),
+    approvedPlanVersion: v.optional(v.number()),
+    lastActivityAt: v.optional(v.number()),
     hook: v.optional(v.string()),
     caption: v.optional(v.string()),
     musicPrompt: v.optional(v.string()),
@@ -207,7 +245,41 @@ export default defineSchema({
     finalPostId: v.optional(v.id("posts")),
     error: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_stage", ["stage"]),
+  }).index("by_stage", ["stage"]).index("by_order", ["orderId"]),
+
+  // Persisted marketplace/direct-client dialogue. On Fiverr these are drafts
+  // for a human to send manually; the application never auto-messages buyers.
+  projectMessages: defineTable({
+    projectId: v.id("adProjects"),
+    role: v.union(v.literal("buyer"), v.literal("operator"), v.literal("assistant"), v.literal("system")),
+    body: v.string(),
+    status: v.union(v.literal("received"), v.literal("draft"), v.literal("approved"), v.literal("sent")),
+    createdAt: v.number(),
+  })
+    .index("by_project_created", ["projectId", "createdAt"])
+    .index("by_project_status", ["projectId", "status"]),
+
+  // A durable render ledger makes paid work idempotent and joins a Trigger run
+  // to its approved plan, output post and client delivery status.
+  renderJobs: defineTable({
+    projectId: v.id("adProjects"),
+    planVersion: v.number(),
+    kind: v.union(v.literal("draft"), v.literal("final")),
+    idempotencyKey: v.string(),
+    provider: v.literal("higgsfield"),
+    model: v.literal("seedance_2_0"),
+    creditSource: v.literal("higgsfield_subscription"),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("cancelled")),
+    triggerRunId: v.optional(v.string()),
+    postId: v.optional(v.id("posts")),
+    creditsUsed: v.optional(v.number()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_idempotency", ["idempotencyKey"])
+    .index("by_status", ["status"]),
 
   // Productized services — one record per service, drives its public landing page.
   services: defineTable({

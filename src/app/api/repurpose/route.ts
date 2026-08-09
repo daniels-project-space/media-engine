@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { repurposeAsset, type RepurposeMode } from "@/lib/integrations/repurpose";
+import { requireOperator } from "@/lib/operator-auth";
 
 export const maxDuration = 60;
 
 // Reuse a marketing asset — hand to an influencer, or repurpose (cameo/reframe)
 // and post to TikTok/Reels. Records lineage. Gated (dry-run unless live).
 export async function POST(req: NextRequest) {
+  const denied = requireOperator(req);
+  if (denied) return denied;
   const b = (await req.json().catch(() => ({}))) as {
     assetId?: string;
     platform?: string;

@@ -1,13 +1,16 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../convex/_generated/api";
+import { requireOperator } from "@/lib/operator-auth";
 
 export const maxDuration = 20;
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 
 // Engine health — no LLM spend. Codex work runs only in the pinned Trigger
 // worker, never in this Vercel route, so this reports configuration not auth.
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const denied = requireOperator(request);
+  if (denied) return denied;
   const cx = new ConvexHttpClient(CONVEX_URL);
   const out: Record<string, unknown> = { ok: false, at: new Date().toISOString() };
 
@@ -30,6 +33,8 @@ export async function GET() {
     const byStatus: Record<string, number> = {};
     for (const c of campaigns) byStatus[c.status] = (byStatus[c.status] ?? 0) + 1;
     out.campaigns = { total: campaigns.length, byStatus };
+    // Failure detail can contain provider paths, account handles and container
+    // diagnostics. It is now visible only to a signed-in operator.
     out.recentFailures = [
       ...failedPosts.slice(0, 5).map((p) => ({ kind: "post", title: p.title, error: p.error })),
       ...campaigns.filter((c) => c.status === "failed").slice(0, 5).map((c) => ({ kind: "campaign", name: c.name, error: c.error })),

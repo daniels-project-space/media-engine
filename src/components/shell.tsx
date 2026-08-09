@@ -4,145 +4,145 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
-const NAV_GROUPS: { section: string; items: { href: string; code: string; label: string; hint: string }[] }[] = [
+type NavigationItem = { href: string; label: string; detail: string };
+type NavigationSection = { label: string; items: NavigationItem[] };
+
+// The navigation mirrors the work rather than the implementation. Older routes
+// remain reachable while their data is migrated, but they no longer compete with
+// the day-to-day client-production path.
+const NAVIGATION: NavigationSection[] = [
+  { label: "Home", items: [{ href: "/", label: "Overview", detail: "Work needing attention" }] },
   {
-    section: "Overview",
-    items: [{ href: "/", code: "MC", label: "Dashboard", hint: "streams & spend" }],
-  },
-  {
-    section: "Ad Agency",
+    label: "Work",
     items: [
-      { href: "/accounts", code: "AC", label: "Accounts", hint: "clients & brand kits" },
-      { href: "/launch", code: "GO", label: "Launch", hint: "brief → full campaign" },
-      { href: "/campaigns", code: "CM", label: "Campaigns", hint: "plans & pacing" },
-      { href: "/stores", code: "SH", label: "Stores", hint: "shopify products" },
-      { href: "/models", code: "ML", label: "Models & LoRAs", hint: "visual registry" },
-      { href: "/capabilities", code: "CP", label: "Capabilities", hint: "what it can do" },
+      { href: "/work", label: "Client work", detail: "Requests, plans & delivery" },
+      { href: "/accounts", label: "Clients & brands", detail: "Brand context" },
     ],
   },
   {
-    section: "Instagram Girls",
+    label: "Publish",
     items: [
-      { href: "/personas", code: "IG", label: "Personas", hint: "AI models & feeds" },
-      { href: "/instagram", code: "PH", label: "Phone Viewer", hint: "live IG emulator" },
-      { href: "/queue", code: "AQ", label: "Review & Publish", hint: "approve posts" },
+      { href: "/queue", label: "Review queue", detail: "Approve before publish" },
+      { href: "/personas", label: "Social identities", detail: "Channels & personas" },
+      { href: "/instagram", label: "Channel preview", detail: "Simulated feed view" },
     ],
   },
   {
-    section: "Ads Studio",
+    label: "Growth",
     items: [
-      { href: "/clients", code: "CO", label: "Client Orders", hint: "Fiverr agency" },
-      { href: "/studio", code: "AS", label: "Ad Studio", hint: "script→draft→4K" },
-      { href: "/ads", code: "AD", label: "Ad Portfolio", hint: "rendered work" },
-      { href: "/reference", code: "RF", label: "Reference Board", hint: "quality benchmarks" },
+      { href: "/campaigns", label: "Campaigns", detail: "Email & launch plans" },
+      { href: "/leads", label: "Leads", detail: "Inbound pipeline" },
     ],
   },
   {
-    section: "Sales",
+    label: "Library",
     items: [
-      { href: "/leads", code: "LD", label: "Leads", hint: "inbound pipeline" },
-      { href: "/services", code: "SV", label: "Service Pages", hint: "public landing pages" },
+      { href: "/ads", label: "Media library", detail: "Rendered work" },
+      { href: "/models", label: "References & models", detail: "Visual inputs" },
+      { href: "/prompts", label: "Prompt library", detail: "Reusable direction" },
     ],
   },
   {
-    section: "System",
+    label: "System",
     items: [
-      { href: "/analytics", code: "AN", label: "Analytics", hint: "output & costs" },
-      { href: "/prompts", code: "PL", label: "Prompt Library", hint: "templates" },
-      { href: "/settings", code: "ST", label: "Settings", hint: "budget & services" },
+      { href: "/analytics", label: "Analytics", detail: "Output & costs" },
+      { href: "/settings", label: "Connections & controls", detail: "Budget, services & safety" },
     ],
   },
 ];
 
-function Timecode() {
-  const [tc, setTc] = useState("--:--:--:--");
-  useEffect(() => {
-    const id = setInterval(() => {
-      const d = new Date();
-      const ff = String(Math.floor((d.getMilliseconds() / 1000) * 24)).padStart(2, "0");
-      setTc(
-        `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(
-          d.getSeconds(),
-        ).padStart(2, "0")}:${ff}`,
-      );
-    }, 120);
-    return () => clearInterval(id);
-  }, []);
-  return <span className="tabular-nums text-ink-dim text-xs tracking-widest">{tc}</span>;
+type HealthState = "checking" | "ready" | "attention" | "unavailable";
+
+function Status({ state }: { state: HealthState }) {
+  const content = {
+    checking: { label: "Checking system", dot: "bg-amber" },
+    ready: { label: "System ready", dot: "bg-signal" },
+    attention: { label: "Needs attention", dot: "bg-onair" },
+    unavailable: { label: "Status unavailable", dot: "bg-ink-faint" },
+  }[state];
+  return (
+    <span className="flex items-center gap-2 text-xs text-ink-dim">
+      <span className={`size-2 rounded-full ${content.dot}`} aria-hidden />
+      {content.label}
+    </span>
+  );
 }
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  // Public pages (link-in-bio, service landing pages) render without engine chrome.
-  if (path.startsWith("/p/") || path.startsWith("/services") || path.startsWith("/f/")) return <>{children}</>;
+  const [navOpen, setNavOpen] = useState(false);
+  const [health, setHealth] = useState<HealthState>("checking");
+  const publicPage = path === "/login" || path.startsWith("/p/") || path.startsWith("/services") || path.startsWith("/f/");
+
+  useEffect(() => {
+    if (publicPage) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const response = await fetch("/api/health", { credentials: "same-origin", cache: "no-store" });
+        const data = (await response.json().catch(() => ({}))) as { ok?: boolean };
+        if (!cancelled) setHealth(response.ok && data.ok ? "ready" : response.status === 401 || response.status === 503 ? "unavailable" : "attention");
+      } catch {
+        if (!cancelled) setHealth("unavailable");
+      }
+    };
+    void check();
+    return () => { cancelled = true; };
+  }, [publicPage]);
+
+  if (publicPage) return <>{children}</>;
+
   return (
-    <div className="flex min-h-screen">
-      <aside className="w-16 md:w-56 shrink-0 border-r border-line bg-panel/60 flex flex-col">
-        <div className="h-16 flex items-center gap-3 px-4 border-b border-line">
-          <div className="size-8 shrink-0 bg-signal text-void display font-extrabold grid place-items-center text-sm">
-            ME
-          </div>
-          <div className="hidden md:block leading-none">
-            <div className="display font-extrabold tracking-tight text-sm">MEDIA ENGINE</div>
-            <div className="text-[10px] text-ink-faint tracking-[0.25em] mt-1">MASTER CONTROL</div>
-          </div>
+    <div className="min-h-screen bg-void md:flex">
+      {navOpen && <button aria-label="Close navigation" onClick={() => setNavOpen(false)} className="fixed inset-0 z-30 bg-black/60 md:hidden" />}
+      <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-line bg-panel shadow-2xl transition-transform md:static md:translate-x-0 md:shadow-none ${navOpen ? "translate-x-0" : "-translate-x-full"}`}>
+        <div className="flex h-16 items-center justify-between border-b border-line px-5">
+          <Link href="/" className="flex items-center gap-3" onClick={() => setNavOpen(false)}>
+            <span className="grid size-8 place-items-center rounded-sm bg-signal text-xs font-extrabold text-void">ME</span>
+            <span>
+              <span className="display block text-sm font-extrabold tracking-tight">Media Engine</span>
+              <span className="block text-[10px] text-ink-faint">Marketing operations</span>
+            </span>
+          </Link>
+          <button onClick={() => setNavOpen(false)} className="p-2 text-ink-dim hover:text-ink md:hidden" aria-label="Close navigation">×</button>
         </div>
-        <nav className="flex-1 py-3 overflow-y-auto">
-          {NAV_GROUPS.map((group) => (
-            <div key={group.section} className="mb-2">
-              <div className="hidden md:block px-4 pt-3 pb-1 text-[9px] tracking-[0.25em] text-ink-faint uppercase">
-                {group.section}
-              </div>
-              {group.items.map((n) => {
-                const active = n.href === "/" ? path === "/" : path.startsWith(n.href);
-                return (
-                  <Link
-                    key={n.href}
-                    href={n.href}
-                    className={`flex items-center gap-3 px-4 py-2.5 text-xs tracking-wide border-l-2 transition-colors ${
-                      active
-                        ? "border-signal text-ink bg-panel-2"
-                        : "border-transparent text-ink-dim hover:text-ink hover:bg-panel-2/50"
-                    }`}
-                  >
-                    <span
-                      className={`size-7 shrink-0 grid place-items-center border text-[10px] font-bold ${
-                        active ? "border-signal text-signal" : "border-line-2 text-ink-faint"
-                      }`}
+        <nav className="flex-1 overflow-y-auto px-3 py-4" aria-label="Main navigation">
+          {NAVIGATION.map((section) => (
+            <section key={section.label} className="mb-5">
+              <h2 className="px-2 pb-1 text-[10px] font-semibold tracking-[0.13em] text-ink-faint uppercase">{section.label}</h2>
+              <div className="space-y-0.5">
+                {section.items.map((item) => {
+                  const active = item.href === "/" ? path === "/" : path === item.href || path.startsWith(`${item.href}/`);
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={() => setNavOpen(false)}
+                      className={`block rounded-sm px-3 py-2.5 transition ${active ? "bg-signal/10 text-signal" : "text-ink-dim hover:bg-panel-2 hover:text-ink"}`}
                     >
-                      {n.code}
-                    </span>
-                    <span className="hidden md:block leading-tight">
-                      {n.label}
-                      <span className="block text-[9px] text-ink-faint normal-case tracking-normal">
-                        {n.hint}
-                      </span>
-                    </span>
-                  </Link>
-                );
-              })}
-            </div>
+                      <span className="block text-sm font-medium">{item.label}</span>
+                      <span className={`mt-0.5 block text-[11px] ${active ? "text-signal/75" : "text-ink-faint"}`}>{item.detail}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </section>
           ))}
         </nav>
-        <div className="hidden md:block px-4 py-4 border-t border-line text-[10px] text-ink-faint leading-relaxed">
-          CH-04 · daniels-project-space
-          <br />
-          convex · vercel · trigger · r2
+        <div className="border-t border-line px-5 py-4">
+          <p className="text-[11px] leading-relaxed text-ink-faint">Private actions require an operator session. Paid renders remain approval-gated.</p>
         </div>
       </aside>
 
-      <div className="flex-1 min-w-0 flex flex-col">
-        <header className="h-16 shrink-0 border-b border-line bg-panel/40 flex items-center justify-between px-6">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-line bg-panel/70 px-4 sm:px-6">
           <div className="flex items-center gap-3">
-            <span className="size-2 rounded-full bg-signal led-live" />
-            <span className="text-[11px] tracking-[0.3em] text-ink-dim">ENGINE ONLINE</span>
-            <span className="hidden lg:inline text-[10px] text-ink-faint">
-              — generates content, you approve, it publishes
-            </span>
+            <button onClick={() => setNavOpen(true)} className="rounded-sm border border-line-2 px-2.5 py-1.5 text-xs text-ink-dim hover:border-scope hover:text-scope md:hidden" aria-label="Open navigation">Menu</button>
+            <Status state={health} />
           </div>
-          <Timecode />
+          <Link href="/work" className="rounded-sm border border-signal/60 px-3 py-1.5 text-xs font-semibold text-signal transition hover:bg-signal hover:text-void">New client work</Link>
         </header>
-        <main className="flex-1 p-6 md:p-8">{children}</main>
+        <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   );

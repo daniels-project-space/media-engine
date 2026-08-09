@@ -66,7 +66,7 @@ export default function Queue() {
     <div className="max-w-5xl">
       <h1 className="display font-extrabold text-4xl tracking-tight mb-2 rise">APPROVAL QUEUE</h1>
       <p className="text-ink-dim text-xs tracking-wider mb-6 rise">
-        EVERY POST&apos;S LIFECYCLE: PLANNED → GENERATED → AWAITING YOUR APPROVAL → PUBLISHED
+        EXISTING POSTS STAY REVIEWABLE. NEW SOCIAL IMAGE/VIDEO GENERATION IS DISABLED; CLIENT RENDERS START IN WORK.
       </p>
 
       <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">

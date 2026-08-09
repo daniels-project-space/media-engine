@@ -82,22 +82,25 @@ export async function vaultSet(
 ): Promise<void> {
   const vaultToken = process.env.VAULT_ACCESS_TOKEN;
   if (!vaultToken) throw new Error("VAULT_ACCESS_TOKEN is not configured");
+  if (!value) throw new Error(`vault ${service}/${keyName}: refusing to store an empty value`);
   const listRes = await fetch(`${VAULT_URL}/api/query`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path: "secrets:listByService", args: { service, vaultToken }, format: "json" }),
   });
+  if (!listRes.ok) throw new Error(`vault ${service}: list failed with HTTP ${listRes.status}`);
   const { value: rows } = (await listRes.json()) as { value: { _id: string; keyName: string }[] };
   for (const row of rows ?? []) {
     if (row.keyName === keyName) {
-      await fetch(`${VAULT_URL}/api/mutation`, {
+      const deleteRes = await fetch(`${VAULT_URL}/api/mutation`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ path: "secrets:deleteOne", args: { id: row._id, vaultToken }, format: "json" }),
       });
+      if (!deleteRes.ok) throw new Error(`vault ${service}/${keyName}: delete failed with HTTP ${deleteRes.status}`);
     }
   }
-  await fetch(`${VAULT_URL}/api/mutation`, {
+  const insertRes = await fetch(`${VAULT_URL}/api/mutation`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -106,4 +109,5 @@ export async function vaultSet(
       format: "json",
     }),
   });
+  if (!insertRes.ok) throw new Error(`vault ${service}/${keyName}: insert failed with HTTP ${insertRes.status}`);
 }

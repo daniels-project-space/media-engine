@@ -13,6 +13,8 @@ import type * as analytics from "../analytics.js";
 import type * as assets from "../assets.js";
 import type * as campaigns from "../campaigns.js";
 import type * as clients from "../clients.js";
+import type * as creative from "../creative.js";
+import type * as creativeGateway from "../creativeGateway.js";
 import type * as crm from "../crm.js";
 import type * as crossmarketing from "../crossmarketing.js";
 import type * as discounts from "../discounts.js";
@@ -50,6 +52,8 @@ declare const fullApi: ApiFromModules<{
   assets: typeof assets;
   campaigns: typeof campaigns;
   clients: typeof clients;
+  creative: typeof creative;
+  creativeGateway: typeof creativeGateway;
   crm: typeof crm;
   crossmarketing: typeof crossmarketing;
   discounts: typeof discounts;

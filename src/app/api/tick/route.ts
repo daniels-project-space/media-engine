@@ -1,11 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { vaultService } from "@/lib/vault";
+import { requireOperatorOrCron } from "@/lib/operator-auth";
 
 export const maxDuration = 300;
 
 // Autonomy heartbeat — enqueue durable work. The Vercel route never starts a
 // local model process; subscription Codex CLI work belongs in Trigger.
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const denied = requireOperatorOrCron(request);
+  if (denied) return denied;
   try {
     const trigger = await vaultService("trigger");
     const key = trigger.TRIGGER_SECRET_KEY_MEDIA_ENGINE;
@@ -23,6 +26,6 @@ export async function POST() {
   }
 }
 
-export async function GET() {
-  return POST();
+export async function GET(request: NextRequest) {
+  return POST(request);
 }

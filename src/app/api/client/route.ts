@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { understand } from "@/lib/orchestrator/understand";
+import { requireOperator } from "@/lib/operator-auth";
 
 export const maxDuration = 120;
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -11,6 +12,8 @@ const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
 // LLM), then best-effort enriches the brand kit from its website/brief via
 // understand(). GET lists clients.
 export async function POST(req: NextRequest) {
+  const denied = requireOperator(req);
+  if (denied) return denied;
   const b = (await req.json().catch(() => ({}))) as {
     name?: string;
     website?: string;
@@ -61,7 +64,9 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ clientId, enriched });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const denied = requireOperator(req);
+  if (denied) return denied;
   const cx = new ConvexHttpClient(CONVEX_URL);
   const clients = await cx.query(api.crm.list, {});
   return NextResponse.json({ clients });

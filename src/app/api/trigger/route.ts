@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { vaultService } from "@/lib/vault";
 import { aiEnabled } from "@/lib/ai-gate";
-import { IMAGE_WORKFLOW_PAUSED_REASON } from "@/lib/image-workflow";
+import { requireOperator } from "@/lib/operator-auth";
 
 export const maxDuration = 30;
 
-// Server-side bridge: UI buttons -> Trigger.dev task runs.
-// Body: { action: "generate", postId } | { action: "plan", personaId, days?, postsPerDay? }
+// Server-side bridge for non-rendering social operations. All billable media
+// rendering enters through /api/work, after client-plan approval.
 export async function POST(req: NextRequest) {
+  const denied = requireOperator(req);
+  if (denied) return denied;
   const body = (await req.json()) as {
     action: "generate" | "plan" | "publish" | "short" | "campaign" | "remix";
     postId?: string;
@@ -22,11 +24,17 @@ export async function POST(req: NextRequest) {
     tag?: string;
   };
 
-  if (body.action === "generate") {
-    return NextResponse.json({ error: IMAGE_WORKFLOW_PAUSED_REASON }, { status: 503 });
+  if (body.action === "generate" || body.action === "short") {
+    return NextResponse.json(
+      {
+        error:
+          "Social media rendering is disabled by generation policy. Existing social plans remain reviewable; create approved client video in Work with Higgsfield Seedance 2.0.",
+      },
+      { status: 410 },
+    );
   }
   if (body.action === "plan" && !(await aiEnabled())) {
-    return NextResponse.json({ error: "AI generation is paused" }, { status: 503 });
+    return NextResponse.json({ error: "AI planning is paused" }, { status: 503 });
   }
 
   let taskId: string;
@@ -37,14 +45,6 @@ export async function POST(req: NextRequest) {
   } else if (body.action === "publish" && body.postId) {
     taskId = "publish-post";
     payload = { postId: body.postId };
-  } else if (body.action === "short" && body.imageUrl && body.streamSlug && body.title) {
-    taskId = "generate-short";
-    payload = {
-      imageUrl: body.imageUrl,
-      streamSlug: body.streamSlug,
-      personaId: body.personaId,
-      title: body.title,
-    };
   } else if (body.action === "campaign" && body.subject && body.html) {
     taskId = "send-campaign";
     payload = { subject: body.subject, html: body.html, tag: body.tag };

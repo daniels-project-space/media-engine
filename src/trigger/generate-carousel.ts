@@ -1,13 +1,20 @@
-import { task, AbortTaskRunError } from "@trigger.dev/sdk/v3";
-import { IMAGE_WORKFLOW_PAUSED_REASON } from "../lib/image-workflow";
+import { AbortTaskRunError, logger, task } from "@trigger.dev/sdk/v3";
 
-// Keep the established Trigger task ID so existing callers fail visibly rather
-// than becoming an unknown task. No vault lookup, provider request, storage
-// write, status mutation, or spend row can occur on this path.
+/**
+ * Retained only so a queued legacy Trigger run has a deterministic, safe result.
+ *
+ * Social image rendering formerly used OpenAI. The media engine's generation
+ * policy now permits billable rendering only from the approved Work flow, which
+ * creates a Higgsfield Seedance 2.0 client-render plan. Do not reintroduce an
+ * image provider or a fallback here.
+ */
 export const generateCarousel = task({
   id: "generate-carousel",
   maxDuration: 60,
   run: async () => {
-    throw new AbortTaskRunError(IMAGE_WORKFLOW_PAUSED_REASON);
+    const reason =
+      "Social carousel rendering is retired by generation policy. Existing social plans and posts remain available for review; create approved client video in Work using Higgsfield Seedance 2.0.";
+    logger.warn(reason);
+    throw new AbortTaskRunError(reason);
   },
 });

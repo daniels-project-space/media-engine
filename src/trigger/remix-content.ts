@@ -13,7 +13,6 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { chat } from "../lib/llm";
 import { aiEnabled } from "../lib/ai-gate";
 import { putObject, presignedGet } from "../lib/storage";
-import { higgsGenerateAudio } from "../lib/higgsfield";
 
 const exec = promisify(execFile);
 const CONVEX_URL = "https://blissful-sardine-231.convex.cloud";
@@ -35,10 +34,6 @@ type Payload = {
   publish?: boolean; // if true, mark remixes approved (autopilot then posts them)
 };
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 async function streamTo(url: string, out: string) {
   const r = await fetch(url);
   if (!r.ok || !r.body) throw new Error(`download HTTP ${r.status}`);
@@ -53,6 +48,17 @@ export const remixContent = task({
   maxDuration: 1800,
   machine: "large-1x",
   run: async (payload: Payload) => {
+    if (payload.freshMusic) {
+      throw new AbortTaskRunError(
+        "Fresh music generation is disabled. Remix can only reframe existing approved media without consuming Higgsfield credits.",
+      );
+    }
+    if (payload.publish) {
+      throw new AbortTaskRunError(
+        "Automatic publishing is disabled. Review remixed posts and publish them through the operator UI.",
+      );
+    }
+
     const convex = new ConvexHttpClient(CONVEX_URL);
     const source = await convex.query(api.posts.get, { id: payload.sourcePostId as Id<"posts"> });
     if (!source) throw new AbortTaskRunError("source post not found");
@@ -93,26 +99,14 @@ export const remixContent = task({
       await streamTo(await presignedGet(slides[0].r2Key!), srcVideo);
     }
 
-    // Optional fresh music bed for video remixes.
-    let musicPath: string | null = null;
-    if (isVideo && payload.freshMusic) {
-      const m = await higgsGenerateAudio("sonilo_music", "fresh upbeat social-ad music bed, glossy driving, no vocals", 8);
-      if (m) { musicPath = path.join(dir, "m.mp3"); await streamTo(m, musicPath); }
-    }
-
     const created: string[] = [];
-    let idx = 0;
     for (const fmt of formats) {
       const F = FORMATS[fmt];
       let outKey: string;
       if (isVideo && srcVideo) {
         const out = path.join(dir, `${fmt}.mp4`);
         const vf = `scale=${F.w}:${F.h}:force_original_aspect_ratio=increase,crop=${F.w}:${F.h},fps=30,setsar=1,format=yuv420p`;
-        if (musicPath) {
-          await exec(FFMPEG, ["-y", "-i", srcVideo, "-i", musicPath, "-vf", vf, "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac", "-shortest", "-movflags", "+faststart", out]);
-        } else {
-          await exec(FFMPEG, ["-y", "-i", srcVideo, "-vf", vf, "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "copy", "-movflags", "+faststart", out]);
-        }
+        await exec(FFMPEG, ["-y", "-i", srcVideo, "-vf", vf, "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "copy", "-movflags", "+faststart", out]);
         outKey = `posts/remix-${source._id}/${fmt}.mp4`;
         await putObject(outKey, await readFile(out), "video/mp4");
       } else {
@@ -128,7 +122,6 @@ export const remixContent = task({
 
       // Cross each format with each caption variant.
       for (const cap of captions) {
-        idx++;
         const platform = fmt === "wide" ? "youtube" : "instagram";
         const kind = isVideo ? (fmt === "reel" ? "reel" : "image") : "image";
         const postId = (await convex.mutation(api.posts.create, {
@@ -145,12 +138,10 @@ export const remixContent = task({
           id: postId,
           slides: [{ r2Key: outKey, url, prompt: `remix ${fmt}`, role: isVideo ? "video" : undefined }],
         });
-        if (payload.publish) await convex.mutation(api.posts.approve, { id: postId });
         created.push(postId);
       }
     }
 
-    if (musicPath) await convex.mutation(api.spend.log, { day: today(), service: "higgsfield", model: "remix music", costPence: 0, ref: source._id });
     logger.log("remix done", { formats: formats.length, captions: captions.length, created: created.length });
     return { source: source._id, created: created.length, formats, captions: captions.length };
   },

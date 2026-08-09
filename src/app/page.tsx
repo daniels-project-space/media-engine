@@ -1,168 +1,316 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
-import { api } from "../../convex/_generated/api";
 import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-const DAILY_CAP_PENCE = 500;
-
-const KIND_META: Record<string, { ch: string; accent: string }> = {
-  persona_growth: { ch: "CH 01", accent: "text-signal" },
-  product_ads: { ch: "CH 02", accent: "text-amber" },
-  shorts: { ch: "CH 03", accent: "text-scope" },
-  email: { ch: "CH 04", accent: "text-onair" },
+type Project = {
+  _id: string;
+  buyer: string;
+  title: string;
+  stage: string;
+  storyboardVersion?: number;
+  approvedPlanVersion?: number;
+  error?: string;
+  lastActivityAt?: number;
 };
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
+type RenderJob = {
+  _id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  kind: "draft" | "final";
+  updatedAt: number;
+  error?: string;
+};
+
+type WorkspaceProject = {
+  project: Project;
+  renderJobs: RenderJob[];
+};
+
+type OperationsCounts = {
+  needsApproval: number;
+  activeRenders: number;
+  readyDelivery: number;
+  failed: number;
+};
+
+type FocusItem = {
+  id: string;
+  title: string;
+  buyer: string;
+  reason: string;
+  tone: "approval" | "rendering" | "delivery" | "failed";
+  timestamp?: number;
+};
+
+const CATEGORY_CARDS = [
+  { href: "/work", label: "Work", description: "Requests, client context, narrative plans, and delivery." },
+  { href: "/queue", label: "Publish", description: "Review the publishing queue and channel-ready media." },
+  { href: "/campaigns", label: "Growth", description: "Campaigns, leads, email, and launch activity." },
+  { href: "/ads", label: "Library", description: "Rendered media, reusable references, and visual inputs." },
+  { href: "/settings", label: "System", description: "Connections, budgets, safeguards, and service health." },
+] as const;
+
+const TONE_META: Record<FocusItem["tone"], { label: string; className: string }> = {
+  approval: { label: "Approval", className: "border-amber/60 text-amber" },
+  rendering: { label: "Rendering", className: "border-scope/60 text-scope" },
+  delivery: { label: "Delivery", className: "border-signal/60 text-signal" },
+  failed: { label: "Attention", className: "border-onair/60 text-onair" },
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
-function VuMeter({ pence }: { pence: number }) {
-  const segments = 24;
-  const lit = Math.min(segments, Math.round((pence / DAILY_CAP_PENCE) * segments));
-  return (
-    <div className="flex gap-[3px] items-end">
-      {Array.from({ length: segments }, (_, i) => {
-        const hot = i >= segments - 5;
-        const on = i < lit;
-        return (
-          <div
-            key={i}
-            className={`w-[7px] vu-fill ${on ? (hot ? "bg-onair" : "bg-signal") : "bg-line"}`}
-            style={{ height: `${10 + i * 1.1}px`, animationDelay: `${i * 25}ms` }}
-          />
-        );
-      })}
-    </div>
-  );
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
-export default function Dashboard() {
-  const streams = useQuery(api.streams.list);
-  const counts = useQuery(api.posts.counts);
-  const spend = useQuery(api.spend.forDay, { day: today() });
-  const seed = useMutation(api.seed.run);
-  const setStatus = useMutation(api.streams.setStatus);
-  const setAutonomy = useMutation(api.streams.setAutonomy);
+function errorMessage(value: unknown, fallback: string): string {
+  if (isRecord(value)) {
+    return stringValue(value.error) ?? stringValue(value.message) ?? fallback;
+  }
+  return fallback;
+}
 
-  if (streams === undefined) {
-    return <div className="text-ink-faint text-xs tracking-widest">Loading…</div>;
+async function readJson(response: Response): Promise<unknown> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const body = await response.text();
+    throw new Error(body ? `Unexpected response: ${body.slice(0, 160)}` : `Request failed (${response.status})`);
+  }
+  return response.json();
+}
+
+function timeLabel(timestamp?: number): string {
+  if (!timestamp) return "No activity timestamp";
+  const elapsed = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 1) return "Updated just now";
+  if (minutes < 60) return `Updated ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Updated ${hours}h ago`;
+  return `Updated ${Math.floor(hours / 24)}d ago`;
+}
+
+function operationsFrom(projects: WorkspaceProject[]): { counts: OperationsCounts; focus: FocusItem[] } {
+  const focus: FocusItem[] = [];
+  let needsApproval = 0;
+  let activeRenders = 0;
+  let readyDelivery = 0;
+  let failed = 0;
+
+  for (const item of projects) {
+    const { project, renderJobs } = item;
+    const hasFailedJob = renderJobs.some((job) => job.status === "failed");
+    const hasActiveJob = renderJobs.some((job) => job.status === "queued" || job.status === "running");
+    const planNeedsApproval = project.stage === "script_ready" && project.storyboardVersion !== project.approvedPlanVersion;
+    const draftNeedsReview = project.stage === "draft_ready";
+
+    if (project.stage === "failed" || hasFailedJob) {
+      failed += 1;
+      focus.push({
+        id: project._id,
+        title: project.title,
+        buyer: project.buyer,
+        reason: project.error ?? renderJobs.find((job) => job.status === "failed")?.error ?? "A render needs investigation before it can continue.",
+        tone: "failed",
+        timestamp: project.lastActivityAt ?? renderJobs[0]?.updatedAt,
+      });
+      continue;
+    }
+
+    if (hasActiveJob || project.stage === "drafting" || project.stage === "rendering") {
+      activeRenders += 1;
+      const job = renderJobs.find((entry) => entry.status === "running" || entry.status === "queued");
+      focus.push({
+        id: project._id,
+        title: project.title,
+        buyer: project.buyer,
+        reason: job ? `${job.kind === "draft" ? "Draft" : "Final"} render is ${job.status}.` : "A render is in progress.",
+        tone: "rendering",
+        timestamp: job?.updatedAt ?? project.lastActivityAt,
+      });
+      continue;
+    }
+
+    if (planNeedsApproval || draftNeedsReview) {
+      needsApproval += 1;
+      focus.push({
+        id: project._id,
+        title: project.title,
+        buyer: project.buyer,
+        reason: planNeedsApproval ? `Plan v${project.storyboardVersion} needs approval before any render uses credits.` : "Review the draft before beginning the final render.",
+        tone: "approval",
+        timestamp: project.lastActivityAt,
+      });
+      continue;
+    }
+
+    if (project.stage === "final_ready") {
+      readyDelivery += 1;
+      focus.push({
+        id: project._id,
+        title: project.title,
+        buyer: project.buyer,
+        reason: "Final render is ready for client delivery.",
+        tone: "delivery",
+        timestamp: project.lastActivityAt,
+      });
+    }
   }
 
-  if (streams.length === 0) {
-    return (
-      <div className="max-w-md mx-auto mt-24 text-center rise">
-        <div className="display font-extrabold text-3xl mb-3">NO SIGNAL</div>
-        <p className="text-ink-dim text-sm mb-6 leading-relaxed">
-          Engine database is empty. Seed the four launch streams, the Elara + Kira personas and
-          the prompt library.
-        </p>
-        <button
-          onClick={() => seed({})}
-          className="bg-signal text-void display font-bold px-6 py-3 text-sm hover:brightness-110 transition"
-        >
-          INITIALIZE ENGINE
-        </button>
-      </div>
-    );
-  }
+  const priority: Record<FocusItem["tone"], number> = { failed: 0, approval: 1, rendering: 2, delivery: 3 };
+  focus.sort((left, right) => priority[left.tone] - priority[right.tone] || (right.timestamp ?? 0) - (left.timestamp ?? 0));
+  return { counts: { needsApproval, activeRenders, readyDelivery, failed }, focus };
+}
 
-  const ready = counts?.byStatus?.ready ?? 0;
-  const published = counts?.byStatus?.published ?? 0;
-  const failed = counts?.byStatus?.failed ?? 0;
-  const pence = spend?.totalPence ?? 0;
+export default function OperationsOverview() {
+  const [projects, setProjects] = useState<WorkspaceProject[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+
+  const loadOperations = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
+    try {
+      const response = await fetch("/api/work", { credentials: "same-origin", cache: "no-store" });
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(errorMessage(payload, `Unable to load operations (${response.status})`));
+      if (!isRecord(payload) || !Array.isArray(payload.projects)) throw new Error("The workspace returned an invalid operations response.");
+      setProjects(payload.projects as WorkspaceProject[]);
+      setLastUpdated(Date.now());
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to load current operations.");
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadOperations(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadOperations]);
+
+  const overview = useMemo(() => operationsFrom(projects ?? []), [projects]);
+  const shouldPoll = overview.counts.activeRenders > 0;
+
+  useEffect(() => {
+    if (!shouldPoll) return;
+    const timer = window.setInterval(() => void loadOperations(true), 5000);
+    return () => window.clearInterval(timer);
+  }, [loadOperations, shouldPoll]);
+
+  const summaryCards = [
+    { label: "Needs approval", value: overview.counts.needsApproval, href: "/work", tone: "text-amber", description: "Plans and drafts waiting for your decision" },
+    { label: "Active renders", value: overview.counts.activeRenders, href: "/work", tone: "text-scope", description: "Queued or running Higgsfield jobs" },
+    { label: "Ready to deliver", value: overview.counts.readyDelivery, href: "/work", tone: "text-signal", description: "Final client work ready to hand over" },
+    { label: "Failed", value: overview.counts.failed, href: "/work", tone: overview.counts.failed > 0 ? "text-onair" : "text-ink-faint", description: "Jobs that need a real fix before retrying" },
+  ];
 
   return (
-    <div className="max-w-6xl">
-      <div className="flex flex-wrap items-end justify-between gap-6 mb-10 rise">
+    <div className="mx-auto max-w-[1360px] space-y-7">
+      <header className="flex flex-col gap-4 border-b border-line pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="display font-extrabold text-4xl tracking-tight leading-none">
-            DASHBOARD
-          </h1>
-          <p className="text-ink-dim text-xs mt-2 tracking-wider">
-            {streams.length} CONTENT STREAMS · {counts?.total ?? 0} POSTS TOTAL — A STREAM IS ONE
-            MARKETING PIPELINE (E.G. «GROW @ELARAVOSS»)
-          </p>
+          <p className="mb-2 text-[10px] font-semibold tracking-[0.18em] text-signal uppercase">Home · operations overview</p>
+          <h1 className="display text-3xl font-extrabold tracking-tight sm:text-4xl">What needs your attention</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink-dim">A short, factual view of client work. Counts come from the protected work pipeline—not from sample data or inferred channel status.</p>
         </div>
-        <div className="flex items-end gap-10">
-          <div>
-            <div className="text-[10px] text-ink-faint tracking-[0.25em] mb-2">
-              GEN SPEND TODAY — £{(pence / 100).toFixed(2)} / £{DAILY_CAP_PENCE / 100}
+        <div className="flex items-center gap-3">
+          {lastUpdated && !error && <span className="text-xs text-ink-faint">Data refreshed {timeLabel(lastUpdated).replace("Updated ", "")}</span>}
+          <button onClick={() => void loadOperations()} disabled={loading} className="border border-line-2 bg-panel px-3 py-2 text-[11px] font-semibold tracking-wide text-ink-dim transition hover:border-scope hover:text-scope disabled:opacity-45">{loading ? "Refreshing…" : "Refresh"}</button>
+        </div>
+      </header>
+
+      {error && (
+        <section className="border border-onair/60 bg-onair/5 p-4" role="alert">
+          <p className="text-sm font-semibold text-onair">Operations data is unavailable</p>
+          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-ink-dim">{error}</p>
+          <p className="mt-3 text-xs leading-relaxed text-ink-faint">Check the private operator session and the media-engine service configuration. This page will not claim the system is healthy until the protected API returns real data.</p>
+        </section>
+      )}
+
+      <section aria-label="Client work status">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="display text-xl font-bold">Client work</h2>
+          {loading && projects === null && <span className="text-xs text-ink-faint">Loading protected workspace…</span>}
+        </div>
+        <div className="grid gap-px border border-line bg-line sm:grid-cols-2 xl:grid-cols-4">
+          {summaryCards.map((card) => (
+            <Link key={card.label} href={card.href} className="bg-panel p-5 transition hover:bg-panel-2">
+              <div className={`display text-3xl font-extrabold tabular-nums ${projects === null ? "text-ink-faint" : card.tone}`}>{projects === null ? "—" : card.value}</div>
+              <h3 className="mt-2 text-sm font-semibold text-ink">{card.label}</h3>
+              <p className="mt-1 text-xs leading-relaxed text-ink-faint">{card.description}</p>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)]">
+        <article className="border border-line bg-panel">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line p-4 sm:p-5">
+            <div>
+              <h2 className="display text-xl font-bold">Focus list</h2>
+              <p className="mt-1 text-xs leading-relaxed text-ink-faint">Failed work is shown first, then approvals, active renders, and ready deliveries.</p>
             </div>
-            <VuMeter pence={pence} />
+            <Link href="/work" className="border border-signal/60 px-3 py-2 text-[11px] font-semibold tracking-wide text-signal transition hover:bg-signal hover:text-void">Open client work</Link>
           </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-px bg-line border border-line mb-10 rise" style={{ animationDelay: "80ms" }}>
-        {[
-          { label: "AWAITING APPROVAL", value: ready, href: "/queue", tone: "text-amber" },
-          { label: "PUBLISHED", value: published, href: "/queue", tone: "text-signal" },
-          { label: "FAILED", value: failed, href: "/queue", tone: failed > 0 ? "text-onair" : "text-ink-faint" },
-        ].map((s) => (
-          <Link key={s.label} href={s.href} className="bg-panel p-5 hover:bg-panel-2 transition-colors">
-            <div className={`display font-extrabold text-3xl tabular-nums ${s.tone}`}>{s.value}</div>
-            <div className="text-[10px] text-ink-faint tracking-[0.2em] mt-1">{s.label}</div>
-          </Link>
-        ))}
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        {streams.map((s, i) => {
-          const meta = KIND_META[s.kind] ?? KIND_META.persona_growth;
-          const live = s.status === "active";
-          return (
-            <div
-              key={s._id}
-              className="border border-line bg-panel p-5 tile-hover rise"
-              style={{ animationDelay: `${120 + i * 70}ms` }}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <span className={`text-[10px] tracking-[0.3em] ${meta.accent}`}>{meta.ch}</span>
-                <span className="flex items-center gap-2">
-                  <span
-                    className={`size-2 rounded-full ${
-                      live ? "bg-onair led-live" : s.status === "paused" ? "bg-amber" : "bg-line-2"
-                    }`}
-                  />
-                  <span className="text-[10px] tracking-[0.25em] text-ink-dim uppercase">
-                    {live ? "ON AIR" : s.status}
-                  </span>
-                </span>
-              </div>
-              <h2 className="display font-bold text-xl mb-1">{s.name}</h2>
-              <p className="text-ink-dim text-xs leading-relaxed mb-4">{s.goal}</p>
-              <div className="flex items-center justify-between border-t border-line pt-3">
-                <span className="text-[10px] text-ink-faint tracking-wider">
-                  {counts?.byStream?.[s.slug] ?? 0} posts ·{" "}
-                  <button
-                    onClick={() =>
-                      setAutonomy({ id: s._id, autonomy: s.autonomy === "auto" ? "approve" : "auto" })
-                    }
-                    title="Click to switch. Needs approval = posts wait for you in the queue. Fully automatic = publishes without review."
-                    className={`uppercase tracking-widest hover:underline ${
-                      s.autonomy === "auto" ? "text-signal" : "text-amber"
-                    }`}
-                  >
-                    {s.autonomy === "auto" ? "FULLY AUTOMATIC" : "NEEDS APPROVAL"}
-                  </button>
-                </span>
-                <button
-                  onClick={() => setStatus({ id: s._id, status: live ? "paused" : "active" })}
-                  title={live ? "Pause this stream — it stops planning and posting." : "Activate this stream — it starts planning and posting on schedule."}
-                  className={`text-[10px] tracking-[0.2em] px-3 py-1.5 border transition ${
-                    live
-                      ? "border-onair text-onair hover:bg-onair hover:text-void"
-                      : "border-line-2 text-ink-dim hover:border-signal hover:text-signal"
-                  }`}
-                >
-                  {live ? "PAUSE STREAM" : "ACTIVATE STREAM"}
-                </button>
-              </div>
+          {projects === null && !error ? (
+            <div className="p-5 text-sm text-ink-faint">Loading focus items…</div>
+          ) : overview.focus.length === 0 ? (
+            <div className="p-5 text-sm leading-relaxed text-ink-faint">No client work currently needs an action. New requests will appear here once they enter the private work pipeline.</div>
+          ) : (
+            <div className="divide-y divide-line">
+              {overview.focus.slice(0, 8).map((item) => {
+                const meta = TONE_META[item.tone];
+                return (
+                  <Link key={item.id} href="/work" className="block p-4 transition hover:bg-panel-2/70 sm:p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="truncate text-sm font-semibold text-ink">{item.title}</h3>
+                          <span className={`border px-1.5 py-0.5 text-[9px] font-semibold tracking-wide uppercase ${meta.className}`}>{meta.label}</span>
+                        </div>
+                        <p className="mt-1 text-xs text-ink-dim">{item.buyer}</p>
+                        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-dim">{item.reason}</p>
+                      </div>
+                      <span className="shrink-0 text-[10px] text-ink-faint">{timeLabel(item.timestamp)}</span>
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
-          );
-        })}
-      </div>
+          )}
+        </article>
+
+        <aside className="border border-line bg-panel p-4 sm:p-5">
+          <h2 className="display text-xl font-bold">Generation policy</h2>
+          <p className="mt-2 text-sm leading-relaxed text-ink-dim">Client renders are approval-gated and use only the configured Higgsfield subscription connection.</p>
+          <dl className="mt-4 space-y-3 border-t border-line pt-4 text-xs">
+            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Provider</dt><dd className="text-right text-ink">Higgsfield</dd></div>
+            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Model</dt><dd className="text-right text-ink">Seedance 2.0</dd></div>
+            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Credits</dt><dd className="text-right text-ink">Subscription only</dd></div>
+            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Fallback</dt><dd className="text-right text-amber">Fail closed</dd></div>
+          </dl>
+          <Link href="/settings" className="mt-5 inline-block text-xs font-semibold text-signal hover:underline">Review connections and safeguards →</Link>
+        </aside>
+      </section>
+
+      <section>
+        <div className="mb-3">
+          <h2 className="display text-xl font-bold">Go to</h2>
+          <p className="mt-1 text-xs text-ink-faint">The rest of the engine is grouped by the job you are doing, not by its underlying implementation.</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          {CATEGORY_CARDS.map((card) => (
+            <Link key={card.href} href={card.href} className="border border-line bg-panel p-4 transition hover:border-scope hover:bg-panel-2">
+              <h3 className="display text-lg font-bold text-ink">{card.label}</h3>
+              <p className="mt-2 text-xs leading-relaxed text-ink-faint">{card.description}</p>
+            </Link>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

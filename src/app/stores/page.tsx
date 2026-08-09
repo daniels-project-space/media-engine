@@ -7,6 +7,12 @@ import { useEffect, useState } from "react";
 
 type Store = { _id: string; domain: string; name?: string; products: number; lastSyncedAt?: number };
 
+async function fetchStores(): Promise<Store[]> {
+  const r = await fetch("/api/store");
+  const j = await r.json();
+  return j.stores ?? [];
+}
+
 export default function Stores() {
   const [stores, setStores] = useState<Store[] | null>(null);
   const [domain, setDomain] = useState("");
@@ -14,12 +20,11 @@ export default function Stores() {
   const [msg, setMsg] = useState<string | null>(null);
 
   async function load() {
-    const r = await fetch("/api/store");
-    const j = await r.json();
-    setStores(j.stores ?? []);
+    setStores(await fetchStores());
   }
+
   useEffect(() => {
-    load();
+    void fetchStores().then((nextStores) => setStores(nextStores));
   }, []);
 
   async function connect() {

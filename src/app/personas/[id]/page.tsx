@@ -41,7 +41,8 @@ export default function PersonaProfile({ params }: { params: Promise<{ id: strin
     setNotice(null);
     try {
       const r = await fetch("/api/trigger", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      setNotice(r.ok ? "Job started — results appear here automatically." : "Error starting job.");
+      const data = (await r.json().catch(() => null)) as { error?: string } | null;
+      setNotice(r.ok ? "Planning started — posts will remain review-only." : data?.error ?? "Error starting job.");
     } finally {
       setBusy(null);
     }
@@ -51,7 +52,6 @@ export default function PersonaProfile({ params }: { params: Promise<{ id: strin
   if (!persona) return <div className="text-ink-dim text-sm">Not found. <Link href="/personas" className="text-scope underline">Back</Link></div>;
 
   const withMedia = posts.filter((p) => (p.slides ?? []).some((s) => slideSrc(s as Slide)));
-  const published = withMedia.filter((p) => p.status === "published" || p.status === "approved" || p.status === "ready");
   const planned = posts.filter((p) => p.status === "planned" && p.scheduledAt);
   const initials = persona.name.split(" ").map((w) => w[0]).join("");
   const igHandle = persona.handle.replace("@", "");
@@ -125,7 +125,7 @@ export default function PersonaProfile({ params }: { params: Promise<{ id: strin
       {/* FEED — IG 3-up grid, click for phone preview */}
       {tab === "feed" && (
         withMedia.length === 0 ? (
-          <Empty text="No posts yet — hit PLAN NEXT 7 DAYS, then Generate from the Schedule tab." />
+          <Empty text="No posts yet — use PLAN NEXT 7 DAYS to create review-only copy and schedules. Social media rendering is disabled." />
         ) : (
           <div className="grid grid-cols-3 gap-1">
             {withMedia.map((p) => {
@@ -164,11 +164,9 @@ export default function PersonaProfile({ params }: { params: Promise<{ id: strin
                   <div key={p._id} className="p-4 border-b border-line last:border-b-0">
                     <div className="text-xs font-bold mb-1">{p.hook ?? p.title}</div>
                     <div className="text-[10px] text-ink-faint mb-3">{(p.slides ?? []).length} slides · {p.kind}</div>
-                    <div className="flex gap-2">
-                      <button onClick={() => callTrigger({ action: "generate", postId: p._id }, p._id)} disabled={busy !== null} className="px-3 py-1.5 border border-signal text-signal text-[10px] tracking-widest hover:bg-signal hover:text-void transition disabled:opacity-50">
-                        {busy === p._id ? "STARTING…" : "GENERATE"}
-                      </button>
-                      <button onClick={() => removePost({ id: p._id })} className="px-3 py-1.5 border border-line-2 text-ink-faint text-[10px] tracking-widest hover:border-onair hover:text-onair transition">DROP</button>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] leading-relaxed text-amber">MEDIA RENDERING PAUSED — plan and copy are preserved for review.</span>
+                      <button onClick={() => removePost({ id: p._id })} className="px-3 py-1.5 border border-line-2 text-ink-faint text-[10px] tracking-widest hover:border-onair hover:text-onair transition shrink-0">DROP</button>
                     </div>
                   </div>
                 ))}

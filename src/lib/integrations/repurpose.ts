@@ -13,8 +13,8 @@ const CONVEX_URL =
 // Asset repurposing — the "reuse a marketing image so an influencer posts it, or
 // repurpose it with a cameo and upload to TikTok" flows. Records lineage
 // (original → derived → placement). We do NOT render here: cameo/reframe emit a
-// derived-asset PLAN + a gated placement; the actual pixels are produced later by
-// the (gated) generation pipeline. Distribution is dry-run unless liveMode.
+// derived-asset plan only. No social renderer is attached under the current
+// generation policy. Distribution is dry-run unless liveMode.
 
 export type RepurposeMode = "influencer" | "cameo" | "reframe";
 export type RepurposeInput = {
@@ -78,8 +78,8 @@ export async function repurposeAsset(input: RepurposeInput): Promise<{ ok: boole
     return { ok: true, detail: `${live ? "" : "[dry-run] "}influencer pack ready for ${input.platform}`, placementId, brief };
   }
 
-  // cameo / reframe → register a DERIVED asset (a plan; pixels rendered later) +
-  // lineage edge + a gated placement. No rendering happens here.
+  // cameo / reframe → register a DERIVED asset plan + lineage edge + a gated
+  // placement. No rendering happens here.
   const derivedAssetId = await cx.mutation(api.assets.register, {
     kind: asset.kind === "image" ? "image" : "video",
     source: "derived",
@@ -114,7 +114,7 @@ export async function repurposeAsset(input: RepurposeInput): Promise<{ ok: boole
   });
   return {
     ok: res.ok,
-    detail: `${input.mode} → ${input.platform} (${targetAspect}); render pending (gated: Higgsfield Soul-ID / fal face-swap for cameo, ffmpeg/AutoFlip for reframe). ${res.detail}`,
+    detail: `${input.mode} → ${input.platform} (${targetAspect}); no renderer is attached by the current generation policy. ${res.detail}`,
     derivedAssetId,
     placementId,
   };
