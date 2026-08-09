@@ -1,0 +1,9 @@
+# Local agent/editor state and generated deployment artifacts are not runtime
+# inputs. Keeping them out of uploads prevents accidental source or metadata
+# leakage from a developer workspace.
+.agents/
+.serena/
+.trigger/
+graphify-out/
+.next/
+*.log
