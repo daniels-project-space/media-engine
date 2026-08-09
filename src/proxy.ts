@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { OPERATOR_COOKIE } from "@/lib/operator-auth";
 
-const PUBLIC_PREFIXES = ["/login", "/services", "/f/", "/p/", "/api/auth", "/api/health", "/api/subscribe", "/api/media/"];
 const RETIRED_PRIVATE_PREFIXES = [
   "/accounts",
   "/ads",
@@ -19,27 +17,18 @@ const RETIRED_PRIVATE_PREFIXES = [
   "/stores",
 ];
 
-/**
- * This is an optimistic UI gate only. Every sensitive route handler verifies the
- * signed cookie again through requireOperator(); Proxy must stay cheap and never
- * become the sole authorization check.
- */
+/** Keeps retired legacy navigation out of the active client-production app. */
 export function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+  if (pathname === "/login" || pathname.startsWith("/login/")) {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
   if (pathname.startsWith("/f/") || pathname.startsWith("/p/")) {
     return NextResponse.redirect(new URL("/services", request.url));
   }
   if (RETIRED_PRIVATE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
     const url = new URL("/work", request.url);
     url.searchParams.set("notice", "legacy-workflow-retired");
-    return NextResponse.redirect(url);
-  }
-  if (PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix))) {
-    return NextResponse.next();
-  }
-  if (!request.cookies.get(OPERATOR_COOKIE)?.value) {
-    const url = new URL("/login", request.url);
-    url.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(url);
   }
   return NextResponse.next();

@@ -52,7 +52,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const [navOpen, setNavOpen] = useState(false);
   const [health, setHealth] = useState<HealthState>("checking");
-  const publicPage = path === "/login" || path.startsWith("/p/") || path.startsWith("/services") || path.startsWith("/f/");
+  const publicPage = path.startsWith("/p/") || path.startsWith("/services") || path.startsWith("/f/");
 
   useEffect(() => {
     if (publicPage) return;

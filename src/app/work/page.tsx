@@ -528,7 +528,7 @@ export default function WorkPage() {
             <h2 className="display text-lg font-bold">New request</h2>
             <p className="mt-1 text-xs text-ink-faint">Start a direct request or log a Fiverr order. Nothing is sent or rendered from this form.</p>
           </div>
-          <span className="border border-line-2 px-2 py-1 text-[10px] tracking-wide text-ink-faint uppercase">Private workspace</span>
+          <span className="border border-line-2 px-2 py-1 text-[10px] tracking-wide text-ink-faint uppercase">Client workspace</span>
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="text-xs text-ink-dim">Buyer / brand

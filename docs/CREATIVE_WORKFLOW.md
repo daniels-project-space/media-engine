@@ -47,8 +47,8 @@ invalidates the grant; no OAuth integration can safely promise otherwise.
 
 ### Deployed renderer
 
-Desktop OAuth is intentionally not copied into Vercel or Trigger. Sign in to
-the private production app, open **Settings**, and choose **Connect Higgsfield
+Desktop OAuth is intentionally not copied into Vercel or Trigger. Open the
+production app, open **Settings**, and choose **Connect Higgsfield
 to this production app**. That starts a separate authorization-code + PKCE
 flow for `https://mcp.higgsfield.ai/mcp`, using the canonical production HTTPS
 callback only.
@@ -65,11 +65,9 @@ The Vercel and Trigger runtimes also need `VAULT_ACCESS_TOKEN` with permission
 to read and update that `higgsfield` vault entry; without it, rendering fails
 closed instead of falling back to another paid provider.
 
-Before enabling the private workspace in production, configure these shared
+Before enabling the production renderer connection, configure these shared
 secrets without committing them to source:
 
-- `MEDIA_ENGINE_OPERATOR_PASSWORD` and `MEDIA_ENGINE_SESSION_SECRET` in the
-  hosting environment
 - `HIGGSFIELD_OAUTH_COOKIE_SECRET` and `MEDIA_ENGINE_PUBLIC_ORIGIN` in the
   hosting environment; the latter must be the canonical production HTTPS origin
 - `MEDIA_ENGINE_CONVEX_SERVICE_TOKEN` in the hosting environment or the
@@ -79,7 +77,7 @@ secrets without committing them to source:
 - `VAULT_ACCESS_TOKEN` in both the hosting and Trigger environments so the
   renderer can rotate its Higgsfield session
 
-Every private route and the Convex creative gateway fail closed when these are
+The renderer connection and Convex creative gateway fail closed when these are
 missing. The System page reports configuration state only; it never exposes a
 credential or starts a billable test render.
 

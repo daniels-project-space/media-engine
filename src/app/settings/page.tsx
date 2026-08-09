@@ -101,7 +101,7 @@ export default function Settings() {
         <h2 className="mb-1 text-[11px] tracking-[0.3em] text-signal">SERVICE STATUS</h2>
         <p className="mb-4 text-[11px] text-ink-faint">Values remain in the central Vault. This page only reports safe configuration status.</p>
         {services === null ? (
-          <div className="text-xs text-ink-faint">{error ? "Status unavailable — check operator access and service configuration." : "Checking private service status…"}</div>
+          <div className="text-xs text-ink-faint">{error ? "Status unavailable — check service configuration." : "Checking service status…"}</div>
         ) : (
           <div className="divide-y divide-line border border-line">
             {otherServices.map((service) => (
