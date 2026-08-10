@@ -1,8 +1,9 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 export const OPERATOR_SESSION_COOKIE = "media_engine_operator_session";
 const OPERATOR_SESSION_TTL_SECONDS = 8 * 60 * 60;
+const OPERATOR_ACCESS_CODE_TTL_SECONDS = 10 * 60;
 
 function equal(left: string, right: string): boolean {
   const a = Buffer.from(left);
@@ -17,6 +18,10 @@ function operatorToken(): string | null {
 
 function sessionSignature(expiresAt: number, token: string): string {
   return createHmac("sha256", token).update(`media-engine-operator-session:${expiresAt}`).digest("base64url");
+}
+
+function accessCodeSignature(expiresAt: number, nonce: string, token: string): string {
+  return createHmac("sha256", token).update(`media-engine-operator-access:${expiresAt}:${nonce}`).digest("base64url");
 }
 
 function operatorSessionValid(value: string | undefined, token: string): boolean {
@@ -50,6 +55,30 @@ export function createOperatorSession(): string | null {
   if (!token) return null;
   const expiresAt = Math.floor(Date.now() / 1000) + OPERATOR_SESSION_TTL_SECONDS;
   return `${expiresAt}.${sessionSignature(expiresAt, token)}`;
+}
+
+/**
+ * Creates a short-lived, passwordless owner-access code. It is minted only by
+ * a trusted server caller holding the long-lived operator token, then consumed
+ * by `/operator/access` from the URL fragment so it is never sent in a URL.
+ */
+export function createOperatorAccessCode(): string | null {
+  const token = operatorToken();
+  if (!token) return null;
+  const expiresAt = Math.floor(Date.now() / 1000) + OPERATOR_ACCESS_CODE_TTL_SECONDS;
+  const nonce = randomUUID();
+  return `v1.${expiresAt}.${nonce}.${accessCodeSignature(expiresAt, nonce, token)}`;
+}
+
+/** Validates a short-lived owner-access code without ever accepting it as a general API credential. */
+export function verifyOperatorAccessCode(value: string | undefined): boolean {
+  const token = operatorToken();
+  if (!token || !value) return false;
+  const [version, expiresRaw, nonce, signature, extra] = value.split(".");
+  if (version !== "v1" || !expiresRaw || !nonce || !signature || extra) return false;
+  const expiresAt = Number(expiresRaw);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) return false;
+  return equal(signature, accessCodeSignature(expiresAt, nonce, token));
 }
 
 export function operatorSessionCookie(value: string, maxAge = OPERATOR_SESSION_TTL_SECONDS) {
