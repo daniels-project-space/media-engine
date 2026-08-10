@@ -3,7 +3,8 @@ import type { NextRequest } from "next/server";
 
 // This is deliberately duplicated instead of importing operator-auth: proxy
 // only performs a cheap optimistic redirect and must not bundle node:crypto.
-// Every private route independently verifies this signed HttpOnly cookie.
+// The public overview is deliberately open; private client work independently
+// verifies the signed HttpOnly cookie at its API boundary.
 const OPERATOR_SESSION_COOKIE = "media_engine_operator_session";
 
 const RETIRED_PRIVATE_PREFIXES = [
@@ -27,17 +28,18 @@ export function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   if (pathname === "/operator/access" || pathname.startsWith("/operator/access/")) return NextResponse.next();
   if (pathname.startsWith("/api/")) return NextResponse.next();
+  if (pathname === "/" || pathname === "/control" || pathname.startsWith("/control/")) return NextResponse.next();
   if (pathname.startsWith("/f/") || pathname.startsWith("/p/")) {
     return NextResponse.redirect(new URL("/services", request.url));
   }
   if (pathname === "/services" || pathname.startsWith("/services/")) return NextResponse.next();
   if (RETIRED_PRIVATE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
-    const url = new URL("/work", request.url);
+    const url = new URL("/control", request.url);
     url.searchParams.set("notice", "legacy-workflow-retired");
     return NextResponse.redirect(url);
   }
   if (!request.cookies.get(OPERATOR_SESSION_COOKIE)?.value) {
-    return NextResponse.redirect(new URL("/operator/access", request.url));
+    return NextResponse.redirect(new URL("/control", request.url));
   }
   return NextResponse.next();
 }

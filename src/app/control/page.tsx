@@ -175,7 +175,7 @@ export default function ControlPage() {
           <p className="mb-2 text-[10px] font-semibold tracking-[0.18em] text-signal uppercase">Media Engine · governed operations</p>
           <h1 className="display text-3xl font-extrabold tracking-tight sm:text-4xl">Control Center</h1>
           <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-dim">
-            One protected view of connected organizations, received work, approval decisions, and the action ledger. It reports recorded state only—never inferred performance or simulated automation.
+            An open, live overview of connected organizations, received work, approval decisions, and the action ledger. It reports recorded state only—never inferred performance or simulated automation.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -194,7 +194,7 @@ export default function ControlPage() {
           <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">No fallback counts are shown while the server-only gateway is unavailable.</p>
         </section>
       ) : loading && !dashboard ? (
-        <section className="border border-line bg-panel p-5 text-sm text-ink-faint" aria-live="polite">Reading the protected action ledger…</section>
+        <section className="border border-line bg-panel p-5 text-sm text-ink-faint" aria-live="polite">Reading the action ledger…</section>
       ) : dashboard ? (
         <>
           <section className="grid gap-px overflow-hidden border border-line bg-line sm:grid-cols-2 xl:grid-cols-4">

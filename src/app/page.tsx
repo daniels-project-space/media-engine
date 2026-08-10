@@ -213,7 +213,7 @@ export default function OperationsOverview() {
         <div>
           <p className="mb-2 text-[10px] font-semibold tracking-[0.18em] text-signal uppercase">Home · operations overview</p>
           <h1 className="display text-3xl font-extrabold tracking-tight sm:text-4xl">What needs your attention</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink-dim">A short, factual view of client work. Counts come from the protected work pipeline—not from sample data or inferred channel status.</p>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink-dim">A short, factual view of client work. Public visitors see live, redacted operating status; private client detail stays inside the client desk.</p>
         </div>
         <div className="flex items-center gap-3">
           {lastUpdated && !error && <span className="text-xs text-ink-faint">Data refreshed {timeLabel(lastUpdated).replace("Updated ", "")}</span>}
@@ -225,14 +225,14 @@ export default function OperationsOverview() {
         <section className="border border-onair/60 bg-onair/5 p-4" role="alert">
           <p className="text-sm font-semibold text-onair">Operations data is unavailable</p>
           <p className="mt-1 max-w-3xl text-sm leading-relaxed text-ink-dim">{error}</p>
-          <p className="mt-3 text-xs leading-relaxed text-ink-faint">Check the private operator session and the media-engine service configuration. This page will not claim the system is healthy until the protected API returns real data.</p>
+          <p className="mt-3 text-xs leading-relaxed text-ink-faint">Check the Media Engine service configuration. This page will not claim the system is healthy until the server returns real data.</p>
         </section>
       )}
 
       <section aria-label="Client work status">
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="display text-xl font-bold">Client work</h2>
-          {loading && projects === null && <span className="text-xs text-ink-faint">Loading protected workspace…</span>}
+          {loading && projects === null && <span className="text-xs text-ink-faint">Loading live workspace status…</span>}
         </div>
         <div className="grid gap-px border border-line bg-line sm:grid-cols-2 xl:grid-cols-4">
           {summaryCards.map((card) => (
@@ -257,7 +257,7 @@ export default function OperationsOverview() {
           {projects === null && !error ? (
             <div className="p-5 text-sm text-ink-faint">Loading focus items…</div>
           ) : overview.focus.length === 0 ? (
-            <div className="p-5 text-sm leading-relaxed text-ink-faint">No client work currently needs an action. New requests will appear here once they enter the private work pipeline.</div>
+            <div className="p-5 text-sm leading-relaxed text-ink-faint">No client work currently needs an action. New requests will appear here as they enter the governed work pipeline.</div>
           ) : (
             <div className="divide-y divide-line">
               {overview.focus.slice(0, 8).map((item) => {

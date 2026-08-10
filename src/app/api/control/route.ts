@@ -1,7 +1,6 @@
 import { ConvexHttpClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
-import { NextRequest, NextResponse } from "next/server";
-import { requireOperator } from "@/lib/operator-auth";
+import { NextResponse } from "next/server";
 import { creativeServiceToken } from "@/lib/creative-service";
 
 export const runtime = "nodejs";
@@ -259,16 +258,55 @@ function hasNoOrganizations(value: unknown): boolean {
   return isRecord(value) && Array.isArray(value.organizations) && value.organizations.length === 0;
 }
 
+function publicItem(item: DashboardItem, collection: "organization" | "connection" | "approval" | "action" | "intake", index: number): DashboardItem {
+  const provider = item.provider;
+  const base = {
+    id: `public-${collection}-${index + 1}`,
+    status: item.status,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    expiresAt: item.expiresAt,
+  };
+
+  if (collection === "organization") {
+    return { ...base, title: "Operating scope" };
+  }
+  if (collection === "connection") {
+    return {
+      ...base,
+      title: provider ? `${provider} connection` : "Provider connection",
+      provider,
+      capabilities: item.capabilities,
+    };
+  }
+  if (collection === "approval") {
+    return { ...base, title: "Approval required", risk: item.risk };
+  }
+  if (collection === "action") {
+    return { ...base, title: provider ? `${provider} action` : "Agency action", provider, risk: item.risk };
+  }
+  return { ...base, title: "New client intake", provider };
+}
+
+function publicDashboard(value: unknown): Dashboard {
+  const dashboard = normalizeDashboard(value);
+  return {
+    organizations: dashboard.organizations.map((item, index) => publicItem(item, "organization", index)),
+    connections: dashboard.connections.map((item, index) => publicItem(item, "connection", index)),
+    approvals: dashboard.approvals.map((item, index) => publicItem(item, "approval", index)),
+    actions: dashboard.actions.map((item, index) => publicItem(item, "action", index)),
+    intakes: dashboard.intakes.map((item, index) => publicItem(item, "intake", index)),
+    fetchedAt: dashboard.fetchedAt,
+  };
+}
+
 /**
- * Read-only, operator-only view of the future governed control plane. The
+ * Read-only public overview of the governed control plane. The
  * function reference is intentionally string-based until Convex codegen has
  * the new gateway module; this route still fails closed if that gateway is not
  * deployed. The service token never crosses this server boundary.
  */
-export async function GET(request: NextRequest) {
-  const denied = requireOperator(request);
-  if (denied) return denied;
-
+export async function GET() {
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim();
   if (!convexUrl) {
     return NextResponse.json({ error: "Control Center is not configured yet." }, { status: 503 });
@@ -285,13 +323,13 @@ export async function GET(request: NextRequest) {
       await convex.action(BOOTSTRAP_CONTROL_ORGANIZATION, { serviceToken });
       data = await convex.action(CONTROL_DASHBOARD, { serviceToken });
     }
-    return NextResponse.json(normalizeDashboard(data), {
-      headers: { "Cache-Control": "private, no-store" },
+    return NextResponse.json(publicDashboard(data), {
+      headers: { "Cache-Control": "no-store" },
     });
   } catch {
     return NextResponse.json(
-      { error: "Control Center is unavailable until its protected gateway is configured." },
-      { status: 503, headers: { "Cache-Control": "private, no-store" } },
+      { error: "Control Center is unavailable until its server-side gateway is configured." },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
     );
   }
 }

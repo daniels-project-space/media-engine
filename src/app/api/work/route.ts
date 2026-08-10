@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
-import { requireOperator } from "@/lib/operator-auth";
+import { hasOperatorSession, requireOperator } from "@/lib/operator-auth";
 import { creativeServiceToken } from "@/lib/creative-service";
 import { vaultService } from "@/lib/vault";
 import { chatJson } from "@/lib/llm";
@@ -61,6 +61,26 @@ type IntakeAssessment = {
   nextQuestion?: string;
 };
 
+type PublicWorkspaceProject = {
+  project: {
+    _id: string;
+    buyer: string;
+    title: string;
+    stage: string;
+    storyboardVersion?: number;
+    approvedPlanVersion?: number;
+    error?: string;
+    lastActivityAt?: number;
+  };
+  renderJobs: {
+    _id: string;
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+    kind: "draft" | "final";
+    updatedAt: number;
+    error?: string;
+  }[];
+};
+
 const REQUIRED_FIELDS = ["goal", "target audience", "key benefit", "delivery format"] as const;
 
 function requiredText(value: unknown, label: string, max: number): string {
@@ -78,6 +98,57 @@ function optionalText(value: unknown, max: number): string | undefined {
 
 function asProjectId(value: unknown): Id<"adProjects"> {
   return requiredText(value, "projectId", 128) as Id<"adProjects">;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isRenderStatus(value: unknown): value is PublicWorkspaceProject["renderJobs"][number]["status"] {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled";
+}
+
+function isRenderKind(value: unknown): value is PublicWorkspaceProject["renderJobs"][number]["kind"] {
+  return value === "draft" || value === "final";
+}
+
+function publicWorkspace(value: unknown): PublicWorkspaceProject[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item, projectIndex) => {
+    if (!isRecord(item) || !isRecord(item.project)) return [];
+    const project = item.project;
+    const stage = typeof project.stage === "string" ? project.stage : "unknown";
+    const renderJobs = Array.isArray(item.renderJobs)
+      ? item.renderJobs.flatMap((job, jobIndex) => {
+        if (!isRecord(job)) return [];
+        const status = job.status;
+        const kind = job.kind;
+        const updatedAt = finiteNumber(job.updatedAt);
+        if (!isRenderStatus(status) || !isRenderKind(kind) || updatedAt === undefined) return [];
+        return [{ _id: `public-render-${projectIndex + 1}-${jobIndex + 1}`, status, kind, updatedAt }];
+      })
+      : [];
+    const failed = stage === "failed" || renderJobs.some((job) => job.status === "failed");
+
+    return [{
+      project: {
+        _id: `public-project-${projectIndex + 1}`,
+        buyer: "Private client",
+        title: "Client production",
+        stage,
+        storyboardVersion: finiteNumber(project.storyboardVersion),
+        approvedPlanVersion: finiteNumber(project.approvedPlanVersion),
+        error: failed ? "This work item requires an operator review." : undefined,
+        lastActivityAt: finiteNumber(project.lastActivityAt),
+      },
+      renderJobs,
+    }];
+  });
 }
 
 async function serviceClient() {
@@ -145,12 +216,13 @@ async function appendMessage(
 }
 
 export async function GET(request: NextRequest) {
-  const denied = requireOperator(request);
-  if (denied) return denied;
   try {
     const { convex, serviceToken } = await serviceClient();
     const projects = await convex.action(api.creativeGateway.listWorkspace, { serviceToken });
-    return NextResponse.json({ projects });
+    return NextResponse.json(
+      { projects: hasOperatorSession(request) ? projects : publicWorkspace(projects) },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } catch (error) {
     console.error("work workspace unavailable", error);
     return NextResponse.json({ error: "Creative workspace is not configured yet." }, { status: 503 });

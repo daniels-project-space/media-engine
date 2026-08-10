@@ -81,6 +81,16 @@ export function verifyOperatorAccessCode(value: string | undefined): boolean {
   return equal(signature, accessCodeSignature(expiresAt, nonce, token));
 }
 
+/**
+ * Returns whether this request is an authenticated owner session without
+ * turning a public read route into a private one. Public dashboards use this
+ * to decide whether to include private client detail.
+ */
+export function hasOperatorSession(request: NextRequest): boolean {
+  const token = operatorToken();
+  return Boolean(token && operatorSessionValid(request.cookies.get(OPERATOR_SESSION_COOKIE)?.value, token));
+}
+
 export function operatorSessionCookie(value: string, maxAge = OPERATOR_SESSION_TTL_SECONDS) {
   return {
     name: OPERATOR_SESSION_COOKIE,
@@ -111,7 +121,7 @@ export function verifyOperatorActivation(request: NextRequest): NextResponse | n
 export function requireOperator(request: NextRequest): NextResponse | null {
   const token = operatorToken();
   if (!token) return operatorUnavailable();
-  if (operatorSessionValid(request.cookies.get(OPERATOR_SESSION_COOKIE)?.value, token)) return null;
+  if (hasOperatorSession(request)) return null;
   return NextResponse.json({ error: "Operator session required" }, { status: 401 });
 }
 
@@ -122,8 +132,7 @@ export function requireOperator(request: NextRequest): NextResponse | null {
  */
 export function requireOperatorOrCron(request: NextRequest): NextResponse | null {
   const expected = process.env.MEDIA_ENGINE_CRON_SECRET;
-  const token = operatorToken();
-  if (token && operatorSessionValid(request.cookies.get(OPERATOR_SESSION_COOKIE)?.value, token)) return null;
+  if (hasOperatorSession(request)) return null;
   const supplied = bearer(request);
   if (!expected || expected.length < 32) {
     return NextResponse.json(
