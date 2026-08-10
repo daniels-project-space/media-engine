@@ -1,6 +1,21 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
 import { ffmpeg, additionalFiles, syncEnvVars } from "@trigger.dev/build/extensions/core";
 
+function triggerRuntimeEnvironment(): Record<string, string> | undefined {
+  const keys = [
+    "VAULT_ACCESS_TOKEN",
+    "FORM_SEVEN_OUTBOX_DRAIN_URL",
+    "FORM_SEVEN_OUTBOX_DRAIN_TOKEN",
+  ] as const;
+  const values = Object.fromEntries(
+    keys.flatMap((key) => {
+      const value = process.env[key];
+      return value ? [[key, value]] : [];
+    }),
+  );
+  return Object.keys(values).length ? values : undefined;
+}
+
 export default defineConfig({
   // Hardcoded on purpose: env-fallback once deployed music-house tasks to a phantom project.
   project: "proj_snvnjoxqowcfsutewkzz",
@@ -17,9 +32,7 @@ export default defineConfig({
     extensions: [
       ffmpeg({ version: "7" }),
       additionalFiles({ files: ["./assets/brand.ttf"] }),
-      syncEnvVars(() => process.env.VAULT_ACCESS_TOKEN
-        ? { VAULT_ACCESS_TOKEN: process.env.VAULT_ACCESS_TOKEN }
-        : undefined),
+      syncEnvVars(triggerRuntimeEnvironment),
     ],
   },
 });

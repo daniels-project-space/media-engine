@@ -1,5 +1,6 @@
-import { internalMutation, internalQuery } from "./_generated/server";
+import { internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 
 const tier = v.union(v.literal("basic"), v.literal("standard"), v.literal("premium"));
 const messageRole = v.union(v.literal("buyer"), v.literal("operator"), v.literal("assistant"), v.literal("system"));
@@ -8,6 +9,16 @@ const intakeStatus = v.union(v.literal("collecting"), v.literal("needs_reply"), 
 const renderKind = v.union(v.literal("draft"), v.literal("final"));
 const DISPATCH_TOKEN_MIN_CHARS = 43; // 32 random bytes encoded as base64url
 const DISPATCH_TOKEN_MAX_CHARS = 128;
+const DEFAULT_MEDIA_ENGINE_ORGANIZATION = {
+  slug: "media-engine",
+  name: "Media Engine",
+  kind: "agency" as const,
+  status: "active" as const,
+};
+const PLAN_APPROVAL_RESOURCE_TYPE = "ad_project_plan";
+const PLAN_APPROVAL_ACTION_KIND = "render_plan_approval";
+const RENDER_ACTION_KIND = "higgsfield_seedance_render";
+const MODERATE_RISK = "moderate" as const;
 
 const shot = v.object({
   id: v.optional(v.string()),
@@ -66,6 +77,100 @@ function assertClientReferenceKey(value: string | undefined): asserts value is s
   }
 }
 
+/**
+ * Control-plane snapshots are stored alongside their deterministic fingerprint.
+ * The full snapshot comparison below is the authority; the fingerprint makes
+ * accidental drift obvious in list views and action receipts without exposing
+ * a client brief to a provider.
+ */
+function stableSerialize(value: unknown): string {
+  if (value === undefined) return '"__undefined__"';
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((item) => stableSerialize(item)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
+    .join(",")}}`;
+}
+
+function snapshotHash(value: unknown): string {
+  const serialized = stableSerialize(value);
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < serialized.length; index += 1) {
+    const code = serialized.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193);
+    second = Math.imul(second ^ code, 0x85ebca6b);
+  }
+  return `stable-v1:${(first >>> 0).toString(16).padStart(8, "0")}${(second >>> 0).toString(16).padStart(8, "0")}:${serialized.length}`;
+}
+
+function makePlanSnapshot(
+  projectId: Id<"adProjects">,
+  planVersion: number,
+  narrativeValue: unknown,
+  shotsValue: unknown,
+  renderPlanValue: unknown,
+) {
+  return {
+    resourceType: PLAN_APPROVAL_RESOURCE_TYPE,
+    resourceId: String(projectId),
+    planVersion,
+    plan: {
+      narrative: narrativeValue,
+      shots: shotsValue,
+      renderPlan: renderPlanValue,
+    },
+  };
+}
+
+function hasMatchingSnapshot(snapshot: unknown, storedHash: string, expected: unknown): boolean {
+  return storedHash === snapshotHash(expected) && stableSerialize(snapshot) === stableSerialize(expected);
+}
+
+async function ensureDefaultMediaEngineOrganization(ctx: MutationCtx, now: number): Promise<Id<"organizations">> {
+  const existing = await ctx.db
+    .query("organizations")
+    .withIndex("by_slug", (q) => q.eq("slug", DEFAULT_MEDIA_ENGINE_ORGANIZATION.slug))
+    .first();
+  if (existing) return existing._id;
+  return await ctx.db.insert("organizations", { ...DEFAULT_MEDIA_ENGINE_ORGANIZATION, createdAt: now, updatedAt: now });
+}
+
+async function ensureProjectOrganization(
+  ctx: MutationCtx,
+  project: { _id: Id<"adProjects">; organizationId?: Id<"organizations"> },
+  order: { _id: Id<"clientOrders">; organizationId?: Id<"organizations"> } | null,
+  now: number,
+): Promise<Id<"organizations">> {
+  const organizationId = project.organizationId ?? order?.organizationId ?? (await ensureDefaultMediaEngineOrganization(ctx, now));
+  if (project.organizationId !== organizationId) await ctx.db.patch(project._id, { organizationId });
+  if (order && order.organizationId !== organizationId) await ctx.db.patch(order._id, { organizationId });
+  return organizationId;
+}
+
+async function findPlanApproval(
+  ctx: MutationCtx,
+  organizationId: Id<"organizations">,
+  projectId: Id<"adProjects">,
+  planVersion: number,
+  status: "pending" | "approved",
+) {
+  const approvals = await ctx.db
+    .query("approvalRequests")
+    .withIndex("by_resource", (q) =>
+      q.eq("resourceType", PLAN_APPROVAL_RESOURCE_TYPE).eq("resourceId", String(projectId)).eq("planVersion", planVersion),
+    )
+    .collect();
+  return approvals
+    .filter(
+      (approval) =>
+        approval.organizationId === organizationId && approval.actionKind === PLAN_APPROVAL_ACTION_KIND && approval.status === status,
+    )
+    .sort((left, right) => right.requestedAt - left.requestedAt)[0] ?? null;
+}
+
 /** The complete private workspace read model. Client components never write directly to Convex. */
 export const listWorkspace = internalQuery({
   args: {},
@@ -115,7 +220,9 @@ export const createRequest = internalMutation({
   handler: async (ctx, args) => {
     if (args.productImageKey !== undefined) assertClientReferenceKey(args.productImageKey);
     const now = Date.now();
+    const organizationId = await ensureDefaultMediaEngineOrganization(ctx, now);
     const orderId = await ctx.db.insert("clientOrders", {
+      organizationId,
       buyer: args.buyer,
       source: args.source,
       tier: args.tier,
@@ -126,6 +233,7 @@ export const createRequest = internalMutation({
       createdAt: now,
     });
     const projectId = await ctx.db.insert("adProjects", {
+      organizationId,
       buyer: args.buyer,
       title: args.title,
       brief: args.brief,
@@ -214,7 +322,27 @@ export const persistPlan = internalMutation({
       throw new Error("intake is not complete");
     }
     const now = Date.now();
+    const order = project.orderId ? await ctx.db.get(project.orderId) : null;
+    const organizationId = await ensureProjectOrganization(ctx, project, order, now);
     const storyboardVersion = (project.storyboardVersion ?? 0) + 1;
+    const approvalSnapshot = makePlanSnapshot(args.projectId, storyboardVersion, args.narrative, args.shots, args.renderPlan);
+
+    // Versions are immutable. Keep superseded requests as an audit trail but
+    // prevent an old pending plan from being approved after a revision exists.
+    const priorApprovals = await ctx.db
+      .query("approvalRequests")
+      .withIndex("by_resource", (q) => q.eq("resourceType", PLAN_APPROVAL_RESOURCE_TYPE).eq("resourceId", String(args.projectId)))
+      .collect();
+    for (const approval of priorApprovals) {
+      if (approval.status === "pending" && approval.actionKind === PLAN_APPROVAL_ACTION_KIND) {
+        await ctx.db.patch(approval._id, {
+          status: "cancelled",
+          decidedAt: now,
+          decidedBy: "media-engine:creative-planner",
+        });
+      }
+    }
+
     await ctx.db.patch(args.projectId, {
       narrative: args.narrative,
       shots: args.shots,
@@ -226,6 +354,19 @@ export const persistPlan = internalMutation({
       stage: "script_ready",
       error: undefined,
       lastActivityAt: now,
+    });
+    await ctx.db.insert("approvalRequests", {
+      organizationId,
+      resourceType: PLAN_APPROVAL_RESOURCE_TYPE,
+      resourceId: String(args.projectId),
+      planVersion: storyboardVersion,
+      actionKind: PLAN_APPROVAL_ACTION_KIND,
+      snapshotHash: snapshotHash(approvalSnapshot),
+      snapshot: approvalSnapshot,
+      riskClass: MODERATE_RISK,
+      status: "pending",
+      requestedAt: now,
+      requestedBy: "media-engine:creative-planner",
     });
     await ctx.db.insert("projectMessages", {
       projectId: args.projectId,
@@ -246,10 +387,42 @@ export const approvePlan = internalMutation({
       throw new Error("no complete render plan to approve");
     }
     const now = Date.now();
+    const order = project.orderId ? await ctx.db.get(project.orderId) : null;
+    const organizationId = await ensureProjectOrganization(ctx, project, order, now);
+    const approvalSnapshot = makePlanSnapshot(
+      projectId,
+      project.storyboardVersion,
+      project.narrative,
+      project.shots,
+      project.renderPlan,
+    );
+    // The UI intentionally submits only a project ID. Resolve the exact
+    // current-version pending record here instead of letting a caller select a
+    // stale approval ID or silently approve mutable project fields.
+    const pendingApproval = await findPlanApproval(ctx, organizationId, projectId, project.storyboardVersion, "pending");
+    if (!pendingApproval) {
+      const approvedApproval = await findPlanApproval(ctx, organizationId, projectId, project.storyboardVersion, "approved");
+      if (
+        project.approvedPlanVersion === project.storyboardVersion &&
+        approvedApproval &&
+        hasMatchingSnapshot(approvedApproval.snapshot, approvedApproval.snapshotHash, approvalSnapshot)
+      ) {
+        return project.storyboardVersion;
+      }
+      throw new Error("the current render plan has no matching pending approval record");
+    }
+    if (!hasMatchingSnapshot(pendingApproval.snapshot, pendingApproval.snapshotHash, approvalSnapshot)) {
+      throw new Error("the current render plan approval record does not match its immutable snapshot");
+    }
     await ctx.db.patch(projectId, {
       approvedPlanVersion: project.storyboardVersion,
       approvedShots: project.shots,
       lastActivityAt: now,
+    });
+    await ctx.db.patch(pendingApproval._id, {
+      status: "approved",
+      decidedAt: now,
+      decidedBy: "media-engine:operator",
     });
     await ctx.db.insert("projectMessages", {
       projectId,
@@ -300,11 +473,53 @@ export const startRender = internalMutation({
     }
     const attempt = jobs.filter((job) => job.kind === kind && job.planVersion === project.storyboardVersion).length + 1;
     const now = Date.now();
+    const organizationId = await ensureProjectOrganization(ctx, project, order, now);
+    const approvalSnapshot = makePlanSnapshot(
+      projectId,
+      project.storyboardVersion,
+      project.narrative,
+      project.approvedShots,
+      project.renderPlan,
+    );
+    const approval = await findPlanApproval(ctx, organizationId, projectId, project.storyboardVersion, "approved");
+    if (!approval || !hasMatchingSnapshot(approval.snapshot, approval.snapshotHash, approvalSnapshot)) {
+      throw new Error("the current render plan must have a matching approved control-plane record");
+    }
+    const idempotencyKey = `${projectId}:${project.storyboardVersion}:${kind}:${attempt}`;
+    // Keep the ledger payload deliberately metadata-only. The immutable plan
+    // snapshot remains on the approval record; the action ledger must not
+    // duplicate the client brief or private R2 reference key.
+    const actionPayload = {
+      resourceType: PLAN_APPROVAL_RESOURCE_TYPE,
+      resourceId: String(projectId),
+      planVersion: project.storyboardVersion,
+      renderKind: kind,
+      provider: "higgsfield",
+      model: "seedance_2_0",
+      creditSource: "higgsfield_subscription",
+    };
+    // Insert the control-plane action before the durable render job. Convex
+    // mutations are atomic, so a failure cannot leave one record without the
+    // other and Trigger never receives a paid-dispatch capability first.
+    const actionId = await ctx.db.insert("actionLedger", {
+      organizationId,
+      approvalId: approval._id,
+      actionKind: RENDER_ACTION_KIND,
+      riskClass: MODERATE_RISK,
+      status: "queued",
+      idempotencyKey,
+      payloadHash: snapshotHash(actionPayload),
+      payloadSnapshot: actionPayload,
+      createdAt: now,
+      updatedAt: now,
+    });
     const jobId = await ctx.db.insert("renderJobs", {
       projectId,
       planVersion: project.storyboardVersion,
       kind,
-      idempotencyKey: `${projectId}:${project.storyboardVersion}:${kind}:${attempt}`,
+      approvalId: approval._id,
+      actionId,
+      idempotencyKey,
       provider: "higgsfield",
       model: "seedance_2_0",
       creditSource: "higgsfield_subscription",
@@ -313,6 +528,7 @@ export const startRender = internalMutation({
       createdAt: now,
       updatedAt: now,
     });
+    await ctx.db.patch(actionId, { renderJobId: jobId, updatedAt: now });
     await ctx.db.patch(projectId, { stage: kind === "draft" ? "drafting" : "rendering", error: undefined, lastActivityAt: now });
     return { jobId, reused: false };
   },
@@ -331,19 +547,11 @@ export const claimRenderExecution = internalMutation({
     const job = await ctx.db.get(jobId);
     if (!job) throw new Error("render job not found");
 
-    if (job.status === "running") {
+    const isRetryForSameWorker = job.status === "running";
+    if (isRetryForSameWorker) {
       if (job.workerRunId !== triggerRunId) throw new Error("render job is already claimed by another Trigger run");
-    } else {
-      if (job.status !== "queued" || job.dispatchToken !== dispatchToken) {
-        throw new Error("render job dispatch capability is invalid or has expired");
-      }
-      await ctx.db.patch(jobId, {
-        status: "running",
-        workerRunId: triggerRunId,
-        triggerRunId,
-        dispatchToken: undefined,
-        updatedAt: Date.now(),
-      });
+    } else if (job.status !== "queued" || job.dispatchToken !== dispatchToken) {
+      throw new Error("render job dispatch capability is invalid or has expired");
     }
 
     const project = await ctx.db.get(job.projectId);
@@ -369,6 +577,67 @@ export const claimRenderExecution = internalMutation({
       if (item.imageKey !== order.productImageKey) {
         throw new Error("approved storyboard references an unexpected client image");
       }
+    }
+
+    // Pre-control-plane jobs remain readable during cutover, but every newly
+    // admitted job has both links and must still agree with its frozen plan and
+    // queued ledger action before a worker can reach the renderer.
+    if (job.actionId || job.approvalId) {
+      if (!job.actionId || !job.approvalId) throw new Error("render job control-plane linkage is incomplete");
+      const [approval, action] = await Promise.all([ctx.db.get(job.approvalId), ctx.db.get(job.actionId)]);
+      const organizationId = project.organizationId ?? order?.organizationId;
+      if (!organizationId || !approval || !action) throw new Error("render job control-plane records are missing");
+      const approvalSnapshot = makePlanSnapshot(
+        project._id,
+        job.planVersion,
+        project.narrative,
+        project.approvedShots,
+        project.renderPlan,
+      );
+      const actionPayload = {
+        resourceType: PLAN_APPROVAL_RESOURCE_TYPE,
+        resourceId: String(project._id),
+        planVersion: job.planVersion,
+        renderKind: job.kind,
+        provider: job.provider,
+        model: job.model,
+        creditSource: job.creditSource,
+      };
+      if (
+        approval.organizationId !== organizationId ||
+        approval.status !== "approved" ||
+        approval.actionKind !== PLAN_APPROVAL_ACTION_KIND ||
+        approval.resourceType !== PLAN_APPROVAL_RESOURCE_TYPE ||
+        approval.resourceId !== String(project._id) ||
+        approval.planVersion !== job.planVersion ||
+        !hasMatchingSnapshot(approval.snapshot, approval.snapshotHash, approvalSnapshot) ||
+        action.organizationId !== organizationId ||
+        action.approvalId !== approval._id ||
+        action.renderJobId !== job._id ||
+        action.actionKind !== RENDER_ACTION_KIND ||
+        action.idempotencyKey !== job.idempotencyKey ||
+        !hasMatchingSnapshot(action.payloadSnapshot, action.payloadHash, actionPayload) ||
+        (action.status !== "queued" && action.status !== "running") ||
+        (action.status === "running" && action.triggerRunId !== triggerRunId)
+      ) {
+        throw new Error("render job no longer matches its approved control-plane action");
+      }
+      if (action.status === "queued") {
+        await ctx.db.patch(action._id, { status: "running", triggerRunId, updatedAt: Date.now() });
+      }
+    }
+
+    // Validate every plan and control-plane link before consuming the one-time
+    // capability. A bad record can therefore be retried or cancelled instead
+    // of being stranded in running state without a worker execution context.
+    if (!isRetryForSameWorker) {
+      await ctx.db.patch(jobId, {
+        status: "running",
+        workerRunId: triggerRunId,
+        triggerRunId,
+        dispatchToken: undefined,
+        updatedAt: Date.now(),
+      });
     }
 
     return {
@@ -448,9 +717,31 @@ export const completeRender = internalMutation({
     const [project, post] = await Promise.all([ctx.db.get(job.projectId), ctx.db.get(postId)]);
     if (!project) throw new Error("project not found");
     if (!post || post.renderJobId !== jobId) throw new Error("render result does not belong to this job");
+    const action = job.actionId ? await ctx.db.get(job.actionId) : null;
+    if (
+      job.actionId &&
+      (!action || action.renderJobId !== jobId || action.status !== "running" || action.triggerRunId !== triggerRunId)
+    ) {
+      throw new Error("render action ledger is not owned by this active worker");
+    }
     const now = Date.now();
     await ctx.db.patch(postId, { slides, status: "ready", qcScore, error: undefined });
     await ctx.db.patch(jobId, { status: "succeeded", creditsUsed, error: undefined, updatedAt: now });
+    if (action) {
+      await ctx.db.patch(action._id, {
+        status: "succeeded",
+        triggerRunId,
+        providerReceipt: {
+          provider: job.provider,
+          model: job.model,
+          creditSource: job.creditSource,
+          creditsUsed,
+          renderJobId: String(jobId),
+          postId: String(postId),
+        },
+        updatedAt: now,
+      });
+    }
     if (job.kind === "draft") {
       await ctx.db.patch(project._id, { draftPostId: postId, stage: "draft_ready", lastActivityAt: now });
     } else {
@@ -514,6 +805,12 @@ export const failRender = internalMutation({
     const now = Date.now();
     const message = error.slice(0, 1000);
     await ctx.db.patch(jobId, { status: "failed", error: message, updatedAt: now });
+    if (job.actionId) {
+      const action = await ctx.db.get(job.actionId);
+      if (action && action.renderJobId === jobId) {
+        await ctx.db.patch(action._id, { status: "failed", triggerRunId, error: message, updatedAt: now });
+      }
+    }
     const project = await ctx.db.get(job.projectId);
     if (project && expectedRenderStage(job.kind) === project.stage) {
       await ctx.db.patch(project._id, { stage: "failed", error: message, lastActivityAt: now });
@@ -539,6 +836,12 @@ export const failQueuedDispatch = internalMutation({
       error: message,
       updatedAt: now,
     });
+    if (job.actionId) {
+      const action = await ctx.db.get(job.actionId);
+      if (action && action.renderJobId === jobId) {
+        await ctx.db.patch(action._id, { status: "failed", error: message, updatedAt: now });
+      }
+    }
     const project = await ctx.db.get(job.projectId);
     if (project && expectedRenderStage(job.kind) === project.stage) {
       await ctx.db.patch(project._id, { stage: "failed", error: message, lastActivityAt: now });

@@ -8,9 +8,16 @@ type NavigationItem = { href: string; label: string; detail: string };
 type NavigationSection = { label: string; items: NavigationItem[] };
 
 // Navigation is intentionally centred on the client-production workflow. The
-// retired distribution/control-plane routes are not exposed as operator work.
+// retired distribution routes remain absent; Control Center is the separate,
+// governed replacement for the legacy control plane.
 const NAVIGATION: NavigationSection[] = [
   { label: "Home", items: [{ href: "/", label: "Overview", detail: "Work needing attention" }] },
+  {
+    label: "Control center",
+    items: [
+      { href: "/control", label: "Agency control", detail: "Connections, approvals, intake, action ledger" },
+    ],
+  },
   {
     label: "Client desk",
     items: [

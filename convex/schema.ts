@@ -189,6 +189,9 @@ export default defineSchema({
   clientOrders: defineTable({
     buyer: v.string(),
     source: v.string(), // "fiverr" | "direct" | ...
+    // New control-plane ownership. Existing orders intentionally remain valid
+    // without it; new governed work is attached to an organization.
+    organizationId: v.optional(v.id("organizations")),
     tier: v.union(v.literal("basic"), v.literal("standard"), v.literal("premium")),
     brief: v.string(),
     productImageKey: v.optional(v.string()), // R2 key of the client's product image
@@ -216,6 +219,9 @@ export default defineSchema({
     buyer: v.string(),
     title: v.string(),
     brief: v.string(),
+    // Additive ownership link for the governed control plane. This is optional
+    // so historical projects require no migration or destructive rewrite.
+    organizationId: v.optional(v.id("organizations")),
     orderId: v.optional(v.id("clientOrders")),
     source: v.optional(v.union(v.literal("fiverr"), v.literal("direct"))),
     stage: v.union(
@@ -270,6 +276,10 @@ export default defineSchema({
   // to its approved plan, output post and client delivery status.
   renderJobs: defineTable({
     projectId: v.id("adProjects"),
+    // A governed render is linked to both its immutable approval snapshot and
+    // the durable action ledger row that admits its paid side effect.
+    approvalId: v.optional(v.id("approvalRequests")),
+    actionId: v.optional(v.id("actionLedger")),
     planVersion: v.number(),
     kind: v.union(v.literal("draft"), v.literal("final")),
     idempotencyKey: v.string(),
@@ -775,4 +785,236 @@ export default defineSchema({
   })
     .index("by_slug", ["slug"])
     .index("by_status", ["status"]),
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GOVERNED CONTROL PLANE — the private coordination substrate for the
+  // portfolio. These records are additive: they do not revive the retired
+  // campaign plane and never store provider credentials or OAuth material.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  organizations: defineTable({
+    slug: v.string(),
+    name: v.string(),
+    kind: v.union(
+      v.literal("agency"),
+      v.literal("portfolio"),
+      v.literal("client"),
+      v.literal("partner"),
+    ),
+    status: v.union(v.literal("active"), v.literal("inactive"), v.literal("archived")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_slug", ["slug"]),
+
+  // Connection metadata only. Tokens, refresh credentials, webhooks secrets,
+  // and provider API keys live in the server vault boundary, never in Convex.
+  integrationConnections: defineTable({
+    organizationId: v.id("organizations"),
+    provider: v.string(),
+    externalAccountId: v.optional(v.string()),
+    displayName: v.optional(v.string()),
+    status: v.union(
+      v.literal("disconnected"),
+      v.literal("pending"),
+      v.literal("connected"),
+      v.literal("degraded"),
+      v.literal("revoked"),
+    ),
+    health: v.union(v.literal("unknown"), v.literal("healthy"), v.literal("degraded"), v.literal("unhealthy")),
+    capabilities: v.array(v.string()),
+    scopes: v.array(v.string()),
+    lastCheckedAt: v.optional(v.number()),
+    lastSyncedAt: v.optional(v.number()),
+    failureMessage: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_organization_provider", ["organizationId", "provider"])
+    .index("by_provider_external", ["provider", "externalAccountId"])
+    .index("by_status", ["status"]),
+
+  // Idempotent receipt ledger for signed server-to-server integrations. It
+  // stores delivery metadata and a body digest, not raw secrets or files.
+  eventReceipts: defineTable({
+    organizationId: v.id("organizations"),
+    source: v.string(),
+    eventId: v.string(),
+    eventType: v.string(),
+    payloadHash: v.string(),
+    status: v.union(
+      v.literal("received"),
+      v.literal("accepted"),
+      v.literal("rejected"),
+      v.literal("processed"),
+    ),
+    occurredAt: v.optional(v.number()),
+    receivedAt: v.number(),
+    processedAt: v.optional(v.number()),
+    rejectionReason: v.optional(v.string()),
+  })
+    .index("by_source_event", ["source", "eventId"])
+    .index("by_organization_received", ["organizationId", "receivedAt"])
+    .index("by_received", ["receivedAt"])
+    .index("by_status_received", ["status", "receivedAt"]),
+
+  // FORM / SEVEN's signed outbox records a safe brief here after signature and
+  // replay checks. The source app keeps raw uploads; this record contains only
+  // the information needed for operator qualification and downstream work.
+  formSevenIntakes: defineTable({
+    organizationId: v.id("organizations"),
+    eventReceiptId: v.id("eventReceipts"),
+    externalIntakeId: v.string(),
+    eventType: v.union(
+      v.literal("form_seven.free_video_brief.created"),
+      v.literal("form_seven.service_inquiry.created"),
+    ),
+    status: v.union(
+      v.literal("received"),
+      v.literal("qualifying"),
+      v.literal("qualified"),
+      v.literal("rejected"),
+      v.literal("converted"),
+      v.literal("archived"),
+    ),
+    contactName: v.optional(v.string()),
+    contactEmail: v.optional(v.string()),
+    contactPhone: v.optional(v.string()),
+    businessName: v.optional(v.string()),
+    businessType: v.optional(v.string()),
+    websiteUrl: v.optional(v.string()),
+    selectedService: v.optional(v.string()),
+    briefDescription: v.optional(v.string()),
+    referenceCount: v.number(),
+    marketingOptIn: v.boolean(),
+    receivedAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_event_receipt", ["eventReceiptId"])
+    .index("by_organization_status", ["organizationId", "status"])
+    .index("by_organization_received", ["organizationId", "receivedAt"])
+    .index("by_received", ["receivedAt"])
+    .index("by_external_intake", ["organizationId", "externalIntakeId"]),
+
+  // Artifact declarations arrive without a storage key. Only a reviewed,
+  // server-side copy may receive an approved private `products/client/` key.
+  intakeArtifacts: defineTable({
+    intakeId: v.id("formSevenIntakes"),
+    kind: v.union(
+      v.literal("image"),
+      v.literal("video"),
+      v.literal("document"),
+      v.literal("pdf"),
+      v.literal("website"),
+      v.literal("other"),
+    ),
+    status: v.union(
+      v.literal("declared"),
+      v.literal("pending_review"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("revoked"),
+    ),
+    sourceLabel: v.optional(v.string()),
+    sourceUrl: v.optional(v.string()),
+    sourceDigest: v.optional(v.string()),
+    contentType: v.optional(v.string()),
+    byteSize: v.optional(v.number()),
+    approvedObjectKey: v.optional(v.string()),
+    reviewedAt: v.optional(v.number()),
+    reviewedBy: v.optional(v.string()),
+    rejectionReason: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_intake", ["intakeId"])
+    .index("by_intake_status", ["intakeId", "status"]),
+
+  // Immutable approval snapshots make consequential work explainable and
+  // revocable. The caller must create a new record for a new plan version.
+  approvalRequests: defineTable({
+    organizationId: v.id("organizations"),
+    resourceType: v.string(),
+    resourceId: v.string(),
+    planVersion: v.optional(v.number()),
+    actionKind: v.string(),
+    snapshotHash: v.string(),
+    snapshot: v.any(),
+    riskClass: v.union(v.literal("low"), v.literal("moderate"), v.literal("high"), v.literal("financial")),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("expired"),
+      v.literal("cancelled"),
+    ),
+    requestedAt: v.number(),
+    requestedBy: v.string(),
+    decidedAt: v.optional(v.number()),
+    decidedBy: v.optional(v.string()),
+    denialReason: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
+  })
+    .index("by_resource", ["resourceType", "resourceId", "planVersion"])
+    .index("by_organization_status", ["organizationId", "status"])
+    .index("by_status", ["status"]),
+
+  // Every external side effect gets a durable, idempotent action row before it
+  // is dispatched. Provider receipts are sanitized metadata, never credentials.
+  actionLedger: defineTable({
+    organizationId: v.id("organizations"),
+    connectionId: v.optional(v.id("integrationConnections")),
+    approvalId: v.optional(v.id("approvalRequests")),
+    renderJobId: v.optional(v.id("renderJobs")),
+    actionKind: v.string(),
+    riskClass: v.union(v.literal("low"), v.literal("moderate"), v.literal("high"), v.literal("financial")),
+    status: v.union(
+      v.literal("admitted"),
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("succeeded"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+      v.literal("blocked"),
+    ),
+    idempotencyKey: v.string(),
+    payloadHash: v.string(),
+    payloadSnapshot: v.optional(v.any()),
+    estimatedCostMinor: v.optional(v.number()),
+    reservedCostMinor: v.optional(v.number()),
+    actualCostMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    providerReceipt: v.optional(v.any()),
+    triggerRunId: v.optional(v.string()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_idempotency", ["idempotencyKey"])
+    .index("by_render_job", ["renderJobId"])
+    .index("by_approval", ["approvalId"])
+    .index("by_organization_created", ["organizationId", "createdAt"])
+    .index("by_status", ["status"]),
+
+  // Spend is reserved before a financial side effect and reconciled from the
+  // action ledger afterwards. Amounts are integer minor currency units.
+  budgetEnvelopes: defineTable({
+    organizationId: v.id("organizations"),
+    connectionId: v.optional(v.id("integrationConnections")),
+    name: v.string(),
+    scopeType: v.string(),
+    scopeId: v.optional(v.string()),
+    currency: v.string(),
+    hardLimitMinor: v.number(),
+    reservedMinor: v.number(),
+    spentMinor: v.number(),
+    status: v.union(v.literal("active"), v.literal("paused"), v.literal("closed")),
+    periodStartAt: v.number(),
+    periodEndAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organization_status", ["organizationId", "status"])
+    .index("by_status", ["status"])
+    .index("by_scope", ["organizationId", "scopeType", "scopeId"]),
 });
