@@ -38,7 +38,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ key: string
     const denied = requireOperator(req);
     if (denied) return denied;
   }
-  const allowed = ["creative/", "posts/", "demo/", "buildout/", "reference/"];
+  // Creator renders are server-produced outputs. They remain operator-gated
+  // above, but need the stable media proxy so a selected review candidate can
+  // appear in the promotion desk without leaking a provider's temporary URL.
+  const allowed = ["creative/", "posts/", "demo/", "buildout/", "reference/", "creator-renders/"];
   if (!allowed.some((prefix) => objectKey.startsWith(prefix))) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }

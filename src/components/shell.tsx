@@ -31,6 +31,12 @@ const NAVIGATION: NavigationSection[] = [
     ],
   },
   {
+    label: "Creator promotion",
+    items: [
+      { href: "/creator-promotions", label: "Promotion desk", detail: "Personas, owned accounts, calendar, funnel, inbox drafts" },
+    ],
+  },
+  {
     label: "System",
     items: [
       { href: "/settings", label: "Connections & safety", detail: "Higgsfield, policy, service status" },

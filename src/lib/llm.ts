@@ -17,6 +17,20 @@ export type ChatOpts = {
   maxTokens?: number;
 };
 
+/**
+ * Secret-safe availability state for server-only generation callers. This is
+ * deliberately not an API-key health check: the approved runtime uses only a
+ * ChatGPT subscription-authenticated Codex CLI worker.
+ */
+export type ChatModelHealth = {
+  status: "ready" | "paused" | "unavailable";
+  canGenerate: boolean;
+  model: typeof MODEL;
+  authentication: "chatgpt_subscription";
+  missing: readonly string[];
+  notes: readonly string[];
+};
+
 const run = promisify(execFile);
 const CODEX_STATUS_TIMEOUT_MS = 10_000;
 
@@ -76,6 +90,45 @@ async function requireChatGptLogin(cli: string): Promise<void> {
     // same fail-closed result below.
   }
   throw new Error("Codex CLI requires a ChatGPT subscription login; API-key and access-token authentication are disabled");
+}
+
+/**
+ * Performs the same fail-closed gates as `chat` without submitting a prompt.
+ * Consumers may expose this structural result to operators because it never
+ * contains credentials, paths, command output, or provider error detail.
+ */
+export async function checkChatModelHealth(): Promise<ChatModelHealth> {
+  if (!(await aiEnabled())) {
+    return {
+      status: "paused",
+      canGenerate: false,
+      model: MODEL,
+      authentication: "chatgpt_subscription",
+      missing: ["Global AI enablement"],
+      notes: ["Generation is paused. No model request can be made until the server-side AI setting is enabled."],
+    };
+  }
+
+  try {
+    await requireChatGptLogin(process.env.CODEX_CLI ?? "codex");
+    return {
+      status: "ready",
+      canGenerate: true,
+      model: MODEL,
+      authentication: "chatgpt_subscription",
+      missing: [],
+      notes: ["Draft generation runs only on the server and never uses browser or API-key credentials."],
+    };
+  } catch {
+    return {
+      status: "unavailable",
+      canGenerate: false,
+      model: MODEL,
+      authentication: "chatgpt_subscription",
+      missing: ["Server ChatGPT subscription worker"],
+      notes: ["Generation is fail-closed until the server worker is available."],
+    };
+  }
 }
 
 export async function chat(opts: ChatOpts): Promise<string> {

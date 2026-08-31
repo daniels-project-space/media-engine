@@ -6,6 +6,39 @@ function triggerRuntimeEnvironment(): Record<string, string> | undefined {
     "VAULT_ACCESS_TOKEN",
     "FORM_SEVEN_OUTBOX_DRAIN_URL",
     "FORM_SEVEN_OUTBOX_DRAIN_TOKEN",
+    // Non-secret creator-renderer configuration only. Provider API keys stay
+    // in the vault and are resolved inside the dedicated worker.
+    "NOVITA_SERVER_TOKEN_RESOLVER",
+    "NOVITA_SOURCE_ASSET_RESOLVER",
+    "NOVITA_APPROVED_DISPATCHER",
+    "LTX_SERVER_TOKEN_RESOLVER",
+    "LTX_SOURCE_ASSET_RESOLVER",
+    "LTX_APPROVED_DISPATCHER",
+    // Fal native Z-Image Turbo LoRA render integration identifiers. These are
+    // non-secret gates; FAL_KEY stays server-only in the Fal vault.
+    "FAL_SERVER_TOKEN_RESOLVER",
+    "FAL_SOURCE_ASSET_RESOLVER",
+    "FAL_APPROVED_DISPATCHER",
+    // Meta dispatch accepts only existing official Professional-account
+    // connections. Its access token is resolved inside the worker from the
+    // server vault; neither token nor OAuth client secret is synced to Trigger.
+    "META_GRAPH_API_VERSION",
+    "META_ACCESS_TOKEN_RESOLVER",
+    "CREATOR_META_INSTAGRAM_PUBLISH_ENABLED",
+    // Separate fail-closed gate for normal-window customer replies. It does
+    // not enable publishing, account creation, scheduling, or bulk messaging.
+    "CREATOR_META_INSTAGRAM_REPLY_ENABLED",
+    // Postiz credentials stay in the fixed server-only `postiz` Vault bucket.
+    // Trigger receives only the non-secret dispatch gate/resolver declaration.
+    "POSTIZ_APPROVED_DISPATCHER",
+    "POSTIZ_API_KEY_RESOLVER",
+    "CREATOR_POSTIZ_SCHEDULE_ENABLED",
+    "CREATOR_NOVITA_MODEL",
+    "CREATOR_LTX_MODEL",
+    "CREATOR_LTX_RESOLUTION",
+    // Explicit non-secret production gate for the paid Fal LoRA trainer.
+    // FAL_KEY remains server-only in the `fal` vault and is never synced.
+    "CREATOR_LORA_TRAINING_ENABLED",
   ] as const;
   const values = Object.fromEntries(
     keys.flatMap((key) => {
