@@ -12,7 +12,7 @@ export const RENDER_ENGINE_PROJECT_VIDEO = {
 } as const;
 
 export const RENDER_ENGINE_AD_INCOMPATIBLE_MESSAGE =
-  "Render Engine project API currently accepts only five-second MiniMax H3 text-to-video prompts; approved Media Engine ads require the client's reference image, Seedance 2.0, and 4–15 second image-to-video clips. No render was submitted.";
+  "Render Engine GPU jobs currently accept five-second MiniMax H3 text-to-video prompts, and its hosted Seedance routes are also text-to-video; approved Media Engine ads require the client's reference image, Seedance 2.0, and 4–15 second image-to-video clips. No render was submitted.";
 
 /** Called at both public admission and worker execution boundaries. */
 export function assertRenderEngineCanRenderApprovedAd(): void {
