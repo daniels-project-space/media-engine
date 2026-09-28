@@ -48,6 +48,19 @@ test("an existing completed claim is read without another paid submission", () =
   assert.equal(calls, 1);
 }));
 
+test("lost submit acknowledgement polls the same claim without another POST", () => withConfig(async () => {
+  let gets = 0;
+  let posts = 0;
+  const result = await generateCreatorImage(input, async (_url, options) => {
+    if (options.method === "POST") { posts++; throw new Error("connection closed after dispatch"); }
+    gets++;
+    return gets === 1 ? new Response("", { status: 404 }) : Response.json({ status: "complete", receipt });
+  }, async () => {});
+  assert.equal(result.output.key, receipt.output.key);
+  assert.equal(posts, 1);
+  assert.equal(gets, 2);
+}));
+
 test("foreign output and unapproved image route fail closed", () => withConfig(async () => {
   await assert.rejects(generateCreatorImage(input, async () => Response.json({ status: "complete", receipt: {
     ...receipt, output: { ...receipt.output, bucket: "render-engine" },

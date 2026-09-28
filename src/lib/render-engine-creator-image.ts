@@ -58,7 +58,8 @@ export async function generateCreatorImage(input: {
   prompt: string;
   aspectRatio: "9:16" | "4:5";
   referenceImages: { mimeType: "image/png" | "image/jpeg" | "image/webp"; base64: string }[];
-}, fetcher: typeof fetch = fetch): Promise<Receipt> {
+}, fetcher: typeof fetch = fetch, pause: (milliseconds: number) => Promise<void> =
+  (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))): Promise<Receipt> {
   if (!KEY.test(input.idempotencyKey) || input.referenceImages.length > 5) throw new Error("Invalid creator image request");
   const token = await capability();
   const url = new URL("/client/hosted-generations", origin());
@@ -72,24 +73,30 @@ export async function generateCreatorImage(input: {
     if (state.status !== "running" && state.status !== "uncertain") throw new Error(`Render Engine image request is ${state.status ?? "invalid"}; no resubmission`);
   } else if (status.status === 404) {
     // The only submission point. An ambiguous POST is never repeated.
-    const submission = await fetcher(new URL("/client/hosted-generations", origin()), {
-      method: "POST", headers: { ...headers, "content-type": "application/json" }, cache: "no-store",
-      signal: AbortSignal.timeout(120_000),
-      body: JSON.stringify({ projectName: PROJECT, idempotencyKey: input.idempotencyKey, allowPaidDispatch: true,
-        input: { model: "nano-banana-pro", prompt: input.prompt, resolution: "2K", aspectRatio: input.aspectRatio,
-          referenceImages: input.referenceImages } }),
-    });
-    if (submission.ok && submission.status !== 202) return parseReceipt(await submission.json(), input.referenceImages.length);
-    if (submission.status !== 202 && submission.status !== 502 && submission.status !== 504) {
+    let submission: Response | undefined;
+    try {
+      submission = await fetcher(new URL("/client/hosted-generations", origin()), {
+        method: "POST", headers: { ...headers, "content-type": "application/json" }, cache: "no-store",
+        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify({ projectName: PROJECT, idempotencyKey: input.idempotencyKey, allowPaidDispatch: true,
+          input: { model: "nano-banana-pro", prompt: input.prompt, resolution: "2K", aspectRatio: input.aspectRatio,
+            referenceImages: input.referenceImages } }),
+      });
+    } catch {
+      // A lost acknowledgement may follow a paid dispatch. Poll the same
+      // claim; never issue a second POST under a new attempt automatically.
+    }
+    if (submission?.ok && submission.status !== 202) return parseReceipt(await submission.json(), input.referenceImages.length);
+    if (submission && submission.status !== 202 && submission.status !== 502 && submission.status !== 504) {
       throw new Error(`Render Engine image admission returned HTTP ${submission.status}`);
     }
   } else {
     throw new Error(`Render Engine image status returned HTTP ${status.status}`);
   }
   for (let attempt = 0; attempt < 60; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await pause(5_000);
     const polled = await fetcher(url, { method: "GET", headers, cache: "no-store", signal: AbortSignal.timeout(10_000) });
-    if (!polled.ok) throw new Error(`Render Engine image status returned HTTP ${polled.status}`);
+    if (!polled.ok) throw new Error(`Render Engine image status returned HTTP ${polled.status}; inspect idempotency key ${input.idempotencyKey} before retrying`);
     const state = await polled.json() as { status?: string; receipt?: unknown };
     if (state.status === "complete") return parseReceipt(state.receipt, input.referenceImages.length);
     if (state.status !== "running" && state.status !== "uncertain") throw new Error(`Render Engine image request is ${state.status ?? "invalid"}`);
