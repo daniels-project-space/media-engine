@@ -3,7 +3,6 @@ import { makeFunctionReference } from "convex/server";
 import { NextRequest, NextResponse } from "next/server";
 import {
   checkAllCreatorPromotionProviders,
-  checkAllCreatorRendererProviders,
   checkMetaInstagramApprovedDispatchHealth,
   discoverPostizChannels,
 } from "@/lib/creator-promotion";
@@ -22,6 +21,21 @@ const MAX_TEXT = 4_000;
 const MIN_PLAN_ITEMS = 3;
 const DEFAULT_PLAN_ITEMS = 5;
 const MAX_PLAN_ITEMS = 7;
+
+function renderEngineHealth() {
+  const configured = Boolean(process.env.RENDER_ENGINE_PROJECT_API_URL &&
+    (process.env.RENDER_ENGINE_PROJECT_TOKEN || process.env.VAULT_ACCESS_TOKEN));
+  return { render_engine: {
+    provider: "render_engine" as const,
+    status: configured ? "ready" as const : "not_configured" as const,
+    canResolveServerCredentials: configured,
+    canResolveApprovedSourceAssets: true,
+    canDispatchApprovedActions: configured,
+    missing: configured ? [] : ["RENDER_ENGINE_PROJECT_API_URL and project capability"],
+    invalid: [],
+    notes: ["Static configuration only; project enrollment, Final profile, and R2 receipt are checked at dispatch."],
+  } };
+}
 
 const LIST_WORKSPACE = makeFunctionReference<"action", { serviceToken: string }, unknown>(
   "creatorPromotionsGateway:listWorkspace",
@@ -220,7 +234,7 @@ type PlanItem = {
   prompt: string;
   promptStyle?: string;
   referenceNotes?: string;
-  renderProvider: "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned";
+  renderProvider: "render_engine" | "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned";
 };
 
 type CadenceProfile = "balanced" | "growth" | "story_led" | "conversion";
@@ -623,13 +637,14 @@ function creatorRenderCandidateStatus(value: unknown): "pending" | "selected" | 
   return value === "selected" || value === "rejected" ? value : "pending";
 }
 
-function renderProviderValue(value: unknown): "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned" {
-  return value === "novita" || value === "ltx" || value === "fal_z_image_turbo_lora" ? value : "unassigned";
+function renderProviderValue(value: unknown): "render_engine" | "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned" {
+  return value === "render_engine" || value === "novita" || value === "ltx" || value === "fal_z_image_turbo_lora" ? value : "unassigned";
 }
 
 function creatorRenderMediaUrl(key: unknown): string | undefined {
   const value = stringValue(key, 1_000);
-  if (!value || !value.startsWith("creator-renders/") || value.includes("..") || value.includes("\\")) return undefined;
+  const engineImage = value && /^projects\/media-engine\/jobs\/hosted-[a-f0-9]{32}\/generation-[a-f0-9]{32}\/[a-f0-9]{64}\/generation\.(?:png|jpg|webp)$/.test(value);
+  if (!value || (!engineImage && !value.startsWith("creator-renders/")) || value.includes("..") || value.includes("\\")) return undefined;
   return `/api/media/${value.split("/").map(encodeURIComponent).join("/")}`;
 }
 
@@ -1057,7 +1072,7 @@ function mapWorkspace(workspace: Workspace) {
       cta: stringValue(row.cta, 1_000),
       whyNow: stringValue(row.whyNow, 2_000),
       promptSnapshot: stringValue(prompt.prompt),
-      renderProvider: prompt.provider === "novita" || prompt.provider === "ltx" || prompt.provider === "fal_z_image_turbo_lora"
+      renderProvider: prompt.provider === "render_engine" || prompt.provider === "novita" || prompt.provider === "ltx" || prompt.provider === "fal_z_image_turbo_lora"
         ? prompt.provider
         : "unassigned" as const,
       renderState: job?.status === "selected" ? "ready" as const
@@ -1721,7 +1736,7 @@ function parsePlanItem(value: unknown, fallbackDayOffset: number): PlanItem {
     prompt: requiredText(row.prompt, "planned prompt", 4_000),
     promptStyle: optionalText(row.promptStyle, 1_000),
     referenceNotes: optionalText(row.referenceNotes, 1_000),
-    renderProvider: row.renderProvider === "novita" || row.renderProvider === "ltx" ? row.renderProvider : "unassigned",
+    renderProvider: ["image", "carousel", "story"].includes(format) ? "render_engine" : "unassigned",
   };
 }
 
@@ -1737,7 +1752,11 @@ async function generateWeeklyPlan(payload: RecordValue) {
   const requestedFunnelId = optionalText(payload.funnelId, 180);
   const requestedReferenceAssetIds = stringList(payload.referenceAssetIds, 12);
   const requestedRenderProvider = renderProviderValue(payload.renderProvider);
+  if (requestedRenderProvider === "novita" || requestedRenderProvider === "ltx" || requestedRenderProvider === "fal_z_image_turbo_lora") {
+    throw new Error("Direct render providers are retired; request Render Engine for new image content");
+  }
   const requestedLoraModelId = optionalText(payload.loraModelId, 180);
+  if (requestedLoraModelId) throw new Error("Creator LoRA rendering is not yet supported by Render Engine");
   const postCount = planItemCount(payload.postCount);
   const requestedCadence = cadenceProfile(payload.cadenceProfile);
   const account = requestedAccountId ? workspace.accounts.find((row) => publicId(row) === requestedAccountId) : undefined;
@@ -1771,18 +1790,6 @@ async function generateWeeklyPlan(payload: RecordValue) {
       })
       : [];
     if (!activeFunnelStages.length) throw new Error("selected funnel has no valid stage rules");
-  }
-  if (requestedRenderProvider === "fal_z_image_turbo_lora") {
-    if (!requestedLoraModelId) throw new Error("select an active native creator LoRA before using Z-Image Turbo rendering");
-    if (requestedReferenceAssetIds.length) {
-      throw new Error("Z-Image Turbo LoRA text rendering cannot use per-post reference assets yet; clear those selections or use a supported renderer");
-    }
-    const model = workspace.loraModels.find((row) => publicId(row) === requestedLoraModelId);
-    if (!model || stringValue(model.creatorId, 180) !== creatorId || model.status !== "active" || model.targetModel !== "z-image-turbo") {
-      throw new Error("selected creator LoRA is not an active native Z-Image Turbo model for this creator");
-    }
-  } else if (requestedLoraModelId) {
-    throw new Error("a creator LoRA model may only be attached to the native Z-Image Turbo renderer");
   }
   const timezone = stringValue(creator.timezone, 100) ?? "UTC";
   const recentPerformance = workspace.attributionSnapshots
@@ -1826,7 +1833,7 @@ async function generateWeeklyPlan(payload: RecordValue) {
       `Prompt style: ${stringValue(visualSystem.promptStyle) ?? "Not provided."}`,
       `Reference notes: ${stringValue(visualSystem.referenceNotes) ?? "Not provided."}`,
       `Rights-cleared visual references selected: ${requestedReferenceAssetIds.length ? `${requestedReferenceAssetIds.length} reference asset(s); describe how to use them without copying an unconsented identity.` : "none"}`,
-      `Renderer assignment: ${requestedRenderProvider === "fal_z_image_turbo_lora" ? "native Z-Image Turbo creator LoRA; the approved model snapshot and trigger word are handled by the governed renderer, so do not invent a different identity trigger" : "choose novita, ltx, or unassigned only when appropriate."}`,
+      "Renderer assignment: choose render_engine for image, carousel, or story content; use unassigned for unsupported formats.",
       activeFunnel ? `Active funnel rules: ${activeFunnelStages.map((stage) => `${stage.stage}: ${stage.label}; purpose ${stage.purpose}; CTA must be exactly “${stage.ctaText}”`).join(" | ")}. Use only these funnel stages and CTAs.` : "No active funnel campaign is selected.",
       `Cadence profile: ${requestedCadence}. ${cadenceRequirement(requestedCadence, postCount)}`,
       `Recent verified observations: ${recentPerformance.length ? recentPerformance.join(" | ") : "none recorded"}`,
@@ -1870,8 +1877,8 @@ async function generateWeeklyPlan(payload: RecordValue) {
       promptStyle: item.promptStyle,
       referenceNotes: item.referenceNotes,
       referenceAssetIds: requestedReferenceAssetIds,
-      renderProvider: requestedRenderProvider === "fal_z_image_turbo_lora" ? requestedRenderProvider : item.renderProvider,
-      loraModelId: requestedRenderProvider === "fal_z_image_turbo_lora" ? requestedLoraModelId : undefined,
+      renderProvider: requestedRenderProvider === "render_engine" ? requestedRenderProvider : item.renderProvider,
+
       scheduledAt,
     }));
   }
@@ -1962,7 +1969,7 @@ export async function GET(request: NextRequest) {
       ...mapped,
       referenceAssets,
       providerHealth: checkAllCreatorPromotionProviders(),
-      rendererHealth: checkAllCreatorRendererProviders(),
+      rendererHealth: renderEngineHealth(),
       inboxDraftModelHealth,
       fetchedAt: Date.now(),
     }, { headers: { "Cache-Control": "no-store" } });
@@ -1972,7 +1979,7 @@ export async function GET(request: NextRequest) {
       {
         error: "Creator Promotion is not configured yet. Connect the Media Engine server token before using this operator workspace.",
         providerHealth: checkAllCreatorPromotionProviders(),
-        rendererHealth: checkAllCreatorRendererProviders(),
+        rendererHealth: renderEngineHealth(),
         inboxDraftModelHealth: await checkCreatorPromotionLlmHealth(),
       },
       { status: 503 },

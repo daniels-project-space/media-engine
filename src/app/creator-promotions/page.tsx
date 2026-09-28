@@ -51,7 +51,7 @@ type ProviderHealth = {
 };
 
 type RendererHealth = {
-  provider: "novita" | "ltx" | "fal_z_image_turbo_lora";
+  provider: "render_engine" | "novita" | "ltx" | "fal_z_image_turbo_lora";
   status: "ready" | "not_configured" | "misconfigured";
   canResolveServerCredentials: boolean;
   canResolveApprovedSourceAssets: boolean;
@@ -541,7 +541,6 @@ export default function CreatorPromotionsPage() {
       .slice(0, 48) || "creator",
     [activePersona?.handle],
   );
-  const canUseActiveLoraForPlan = Boolean(activeNativeLoraModel && selectedReferenceAssetIds.length === 0);
 
   const submitProfile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1033,9 +1032,9 @@ export default function CreatorPromotionsPage() {
                 <select aria-label="Schedule account" value={selectedPlanningAccount?.id ?? ""} onChange={(event) => setSelectedPlanningAccountId(event.target.value || undefined)} className="max-w-48 border border-line-2 bg-panel-2 px-2 py-2 text-[10px] text-ink-dim outline-none focus:border-scope"><option value="" disabled>Select schedule account</option>{workspace.accounts.filter((account) => account.creatorId === activePersona?.id).map((account) => <option key={account.id} value={account.id}>{title(account.platform)} · {account.handle}{account.publisher === "postiz" ? " · Postiz" : ""}</option>)}</select>
                 <label className="flex items-center gap-1.5 border border-line-2 bg-panel-2 px-2 py-1 text-[9px] text-ink-dim"><span className="sr-only">Posts per week</span><input aria-label="Posts per week" value={planPostCount} onChange={(event) => setPlanPostCount(Math.max(3, Math.min(7, Number(event.target.value) || 3)))} type="number" min="3" max="7" className="w-7 bg-transparent text-center text-[10px] text-ink outline-none" /><span>/ week</span></label>
                 <select aria-label="Editorial cadence" value={cadenceProfile} onChange={(event) => setCadenceProfile(event.target.value as "balanced" | "growth" | "story_led" | "conversion")} className="border border-line-2 bg-panel-2 px-2 py-2 text-[10px] text-ink-dim outline-none focus:border-scope"><option value="balanced">Balanced mix</option><option value="growth">Growth / reels</option><option value="story_led">Story-led</option><option value="conversion">Conversion-aware</option></select>
-                {activeNativeLoraModel && <span className={`border px-2 py-1 text-[9px] font-semibold tracking-[0.1em] uppercase ${canUseActiveLoraForPlan ? "border-scope/45 text-scope" : "border-amber/45 text-amber"}`}>{canUseActiveLoraForPlan ? "Native LoRA selected" : "Post references override LoRA"}</span>}
+                {activeNativeLoraModel && <span className="border border-amber/45 px-2 py-1 text-[9px] font-semibold tracking-[0.1em] uppercase text-amber">LoRA render profile unavailable in Render Engine</span>}
                 {activeFunnel && <span className="border border-signal/45 px-2 py-1 text-[9px] font-semibold tracking-[0.1em] text-signal uppercase">Active funnel · {activeFunnel.campaignLabel}</span>}
-                <button type="button" disabled={isBusy || !activePersona} onClick={() => { if (activePersona) void runAction("generate-week", { creatorId: activePersona.id, accountId: selectedPlanningAccount?.id, destinationId: activeFunnel?.destinationId ?? activeDestination?.id, ...(activeFunnel ? { funnelId: activeFunnel.id } : {}), referenceAssetIds: selectedReferenceAssetIds, postCount: planPostCount, cadenceProfile, ...(canUseActiveLoraForPlan ? { renderProvider: "fal_z_image_turbo_lora", loraModelId: activeNativeLoraModel?.id } : {}) }); }} className="border border-signal/60 px-3 py-2 text-[10px] font-semibold tracking-wide text-signal transition hover:bg-signal hover:text-void disabled:opacity-50">Generate schedule</button>
+                <button type="button" disabled={isBusy || !activePersona} onClick={() => { if (activePersona) void runAction("generate-week", { creatorId: activePersona.id, accountId: selectedPlanningAccount?.id, destinationId: activeFunnel?.destinationId ?? activeDestination?.id, ...(activeFunnel ? { funnelId: activeFunnel.id } : {}), referenceAssetIds: selectedReferenceAssetIds, postCount: planPostCount, cadenceProfile, renderProvider: "render_engine" }); }} className="border border-signal/60 px-3 py-2 text-[10px] font-semibold tracking-wide text-signal transition hover:bg-signal hover:text-void disabled:opacity-50">Generate schedule</button>
                 <button type="button" disabled={isBusy} onClick={() => { void reload(); }} className="border border-line-2 px-3 py-2 text-[10px] font-semibold tracking-wide text-ink-dim transition hover:border-scope hover:text-scope disabled:opacity-50">Refresh</button>
               </>
             }
@@ -1226,13 +1225,11 @@ export default function CreatorPromotionsPage() {
         </section>
       )}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <ProviderReadiness health={health?.meta_instagram} />
         <ProviderReadiness health={health?.fanvue} />
         <ProviderReadiness health={health?.postiz} />
-        <RendererReadiness health={renderHealth?.novita} />
-        <RendererReadiness health={renderHealth?.ltx} />
-        <RendererReadiness health={renderHealth?.fal_z_image_turbo_lora} />
+        <RendererReadiness health={renderHealth?.render_engine} />
       </section>
 
       {workspace && (

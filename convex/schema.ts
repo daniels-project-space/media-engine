@@ -1464,6 +1464,7 @@ export default defineSchema({
       promptStyle: v.optional(v.string()),
       referenceNotes: v.optional(v.string()),
       provider: v.union(
+        v.literal("render_engine"),
         v.literal("novita"),
         v.literal("ltx"),
         // Explicitly selected only after a ready creator LoRA is snapshotted
@@ -1514,6 +1515,7 @@ export default defineSchema({
     referenceAssetKeys: v.optional(v.array(v.string())),
     renderProvider: v.optional(
       v.union(
+        v.literal("render_engine"),
         v.literal("novita"),
         v.literal("ltx"),
         v.literal("fal_z_image_turbo_lora"),
@@ -1545,6 +1547,7 @@ export default defineSchema({
     actionId: v.optional(v.id("actionLedger")),
     reviewVersion: v.number(),
     provider: v.union(
+      v.literal("render_engine"),
       v.literal("novita"),
       v.literal("ltx"),
       v.literal("fal_z_image_turbo_lora"),
@@ -1592,7 +1595,7 @@ export default defineSchema({
     contentId: v.id("creatorContentItems"),
     jobId: v.id("creatorRenderJobs"),
     attemptNumber: v.number(),
-    provider: v.union(v.literal("novita"), v.literal("ltx"), v.literal("fal_z_image_turbo_lora")),
+    provider: v.union(v.literal("render_engine"), v.literal("novita"), v.literal("ltx"), v.literal("fal_z_image_turbo_lora")),
     mediaType: v.union(v.literal("image"), v.literal("video")),
     status: v.union(v.literal("pending"), v.literal("selected"), v.literal("rejected")),
     idempotencyKey: v.string(),

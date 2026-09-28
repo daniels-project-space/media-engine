@@ -514,7 +514,7 @@ export type CreatorContentItem = {
   cta?: string;
   whyNow?: string;
   promptSnapshot?: string;
-  renderProvider?: "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned";
+  renderProvider?: "render_engine" | "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned";
   renderState?: "unrequested" | "planned" | "queued" | "blocked" | "rendering" | "review" | "ready" | "failed";
   /** The reviewed candidate selected for this post; selection is never publication. */
   selectedRenderCandidateId?: string;
@@ -536,7 +536,7 @@ export type CreatorRenderJob = {
   id: string;
   creatorId: string;
   contentId: string;
-  provider: "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned";
+  provider: "render_engine" | "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned";
   status: CreatorRenderJobStatus;
   attemptNumber: number;
   maxAttempts: number;
@@ -556,7 +556,7 @@ export type CreatorRenderCandidate = {
   creatorId: string;
   contentId: string;
   attemptNumber: number;
-  provider: "novita" | "ltx" | "fal_z_image_turbo_lora";
+  provider: "render_engine" | "novita" | "ltx" | "fal_z_image_turbo_lora";
   mediaType: "image" | "video";
   status: "pending" | "selected" | "rejected";
   previewUrl?: string;
