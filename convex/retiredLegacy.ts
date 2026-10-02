@@ -12,18 +12,18 @@ const RETIRED_MESSAGE =
  * New client production uses creativeGateway, which has a separate service-token
  * boundary. Do not use these wrappers for a new workflow.
  */
-export const query: typeof unsafeQuery = ((definition: any) =>
+export const query: typeof unsafeQuery = ((definition: unknown) =>
   unsafeQuery({
-    ...definition,
+    ...(definition as Record<string, unknown>),
     handler: async () => {
       throw new Error(RETIRED_MESSAGE);
     },
-  })) as typeof unsafeQuery;
+  } as never)) as typeof unsafeQuery;
 
-export const mutation: typeof unsafeMutation = ((definition: any) =>
+export const mutation: typeof unsafeMutation = ((definition: unknown) =>
   unsafeMutation({
-    ...definition,
+    ...(definition as Record<string, unknown>),
     handler: async () => {
       throw new Error(RETIRED_MESSAGE);
     },
-  })) as typeof unsafeMutation;
+  } as never)) as typeof unsafeMutation;

@@ -56,6 +56,78 @@ const projectRenderPlan = v.object({
   providerInstructions: v.array(v.string()),
 });
 
+// Creator Promotion funnels are governed campaign metadata, not public
+// landing pages or redirectors. They deliberately retain only destination
+// identity and a stable URL fingerprint: raw URLs, signed links, click IDs,
+// tracking tokens, and provider credentials never belong in this surface.
+const creatorFunnelStage = v.union(
+  v.literal("awareness"),
+  v.literal("trust"),
+  v.literal("consideration"),
+  v.literal("conversion"),
+  v.literal("retention"),
+);
+
+const creatorFunnelStagePlan = v.object({
+  stage: creatorFunnelStage,
+  label: v.string(),
+  purpose: v.string(),
+  ctaText: v.string(),
+});
+
+const creatorFunnelCompliance = v.object({
+  disclosureRequired: v.boolean(),
+  disclosureText: v.optional(v.string()),
+  ageGateRequired: v.boolean(),
+  ageGateEvidenceReference: v.optional(v.string()),
+  operatorAttestation: v.object({
+    attestedBy: v.string(),
+    statement: v.string(),
+    confirmed: v.literal(true),
+    attestedAt: v.number(),
+  }),
+});
+
+const creatorFunnelLinkPolicy = v.object({
+  // The CTA is explicit and frozen by stage; no runtime text-to-link
+  // generation is allowed by this planning model.
+  utmSource: v.string(),
+  utmMedium: v.string(),
+  utmCampaign: v.string(),
+  utmContentPrefix: v.optional(v.string()),
+  destinationHost: v.string(),
+  destinationUrlHash: v.string(),
+});
+
+const creatorFunnelContentSnapshot = v.object({
+  funnelId: v.id("creatorFunnelCampaigns"),
+  version: v.number(),
+  campaignLabel: v.string(),
+  objective: v.union(
+    v.literal("brand_partnerships"),
+    v.literal("subscription_conversion"),
+    v.literal("website_conversion"),
+    v.literal("lead_capture"),
+    v.literal("other"),
+  ),
+  destinationId: v.id("creatorDestinations"),
+  destinationKind: v.union(
+    v.literal("brand_inquiry"),
+    v.literal("link_in_bio"),
+    v.literal("website"),
+    v.literal("fanvue"),
+    v.literal("fansly"),
+    v.literal("other"),
+  ),
+  stage: creatorFunnelStage,
+  stageLabel: v.string(),
+  stagePurpose: v.string(),
+  ctaText: v.string(),
+  linkPolicy: creatorFunnelLinkPolicy,
+  compliance: creatorFunnelCompliance,
+  snapshotHash: v.string(),
+});
+
 export default defineSchema({
   streams: defineTable({
     slug: v.string(),
@@ -71,7 +143,7 @@ export default defineSchema({
   personas: defineTable({
     name: v.string(),
     handle: v.string(),
-    archetype: v.union(v.literal("flagship"), v.literal("faceless")),
+    archetype: v.union(v.literal("flagship"), v.literal("lifestyle"), v.literal("creator"), v.literal("faceless")),
     globalLock: v.string(),
     bio: v.optional(v.string()),
     identitySummary: v.optional(v.string()),
@@ -973,6 +1045,14 @@ export default defineSchema({
     connectionId: v.optional(v.id("integrationConnections")),
     approvalId: v.optional(v.id("approvalRequests")),
     renderJobId: v.optional(v.id("renderJobs")),
+    // Creator Promotion uses its own render lifecycle. Do not overload the
+    // studio/client `renderJobs` relationship above: the two pipelines have
+    // distinct approval, retention, and provider contracts.
+    creatorRenderJobId: v.optional(v.id("creatorRenderJobs")),
+    // LoRA training is a distinct, consent-gated paid workflow. It must not
+    // share a render action row because its dataset and provider receipt have
+    // their own retention and recovery contract.
+    creatorLoRATrainingJobId: v.optional(v.id("creatorLoRATrainingJobs")),
     actionKind: v.string(),
     riskClass: v.union(v.literal("low"), v.literal("moderate"), v.literal("high"), v.literal("financial")),
     status: v.union(
@@ -999,6 +1079,8 @@ export default defineSchema({
   })
     .index("by_idempotency", ["idempotencyKey"])
     .index("by_render_job", ["renderJobId"])
+    .index("by_creator_render_job", ["creatorRenderJobId"])
+    .index("by_creator_lora_training_job", ["creatorLoRATrainingJobId"])
     .index("by_approval", ["approvalId"])
     .index("by_organization_created", ["organizationId", "createdAt"])
     .index("by_status", ["status"]),
@@ -1024,4 +1106,815 @@ export default defineSchema({
     .index("by_organization_status", ["organizationId", "status"])
     .index("by_status", ["status"])
     .index("by_scope", ["organizationId", "scopeType", "scopeId"]),
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CREATOR PROMOTION WORKSPACE
+  //
+  // This is a new governed surface; it deliberately does not revive the
+  // retired persona/distribution modules above. OAuth material and passwords
+  // never enter Convex. Provider actions are represented by approvalRequests
+  // and actionLedger rows before a trusted dispatcher performs a side effect.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  creatorProfiles: defineTable({
+    organizationId: v.id("organizations"),
+    // Historical persona data can be imported once by an operator without
+    // exposing the retired table directly to the browser.
+    legacyPersonaId: v.optional(v.id("personas")),
+    name: v.string(),
+    handle: v.string(),
+    archetype: v.union(
+      v.literal("flagship"),
+      v.literal("lifestyle"),
+      v.literal("creator"),
+      v.literal("faceless"),
+    ),
+    stage: v.union(
+      v.literal("setup"),
+      v.literal("growth"),
+      v.literal("brand_ready"),
+      v.literal("monetized"),
+      v.literal("paused"),
+    ),
+    timezone: v.string(),
+    identity: v.object({
+      bio: v.optional(v.string()),
+      identitySummary: v.optional(v.string()),
+      emotionalBackstory: v.optional(v.string()),
+      voiceGuide: v.optional(v.string()),
+      audience: v.optional(v.string()),
+      disclosure: v.optional(v.string()),
+      contentPillars: v.array(v.string()),
+      boundaries: v.array(v.string()),
+      contentBoundaries: v.optional(v.array(v.string())),
+    }),
+    visualSystem: v.object({
+      promptLock: v.string(),
+      promptStyle: v.optional(v.string()),
+      loraTrigger: v.optional(v.string()),
+      referenceNotes: v.optional(v.string()),
+      version: v.number(),
+    }),
+    // A ready model is never made active by training completion. This pointer
+    // exists only for a future explicit, auditable operator activation.
+    activeLoraModelId: v.optional(v.id("creatorLoraModels")),
+    // Persona edits are append-only revisions. This pointer is the single
+    // current source for future plans; approved content keeps its own frozen
+    // snapshot and is never rewritten when the active persona changes.
+    activePersonaRevisionId: v.optional(v.id("creatorPersonaRevisions")),
+    activePersonaRevisionNumber: v.optional(v.number()),
+    primaryGoal: v.union(v.literal("audience_growth"), v.literal("brand_partnerships"), v.literal("fanvue_conversion")),
+    // Defaults are intentionally conservative. A future operator policy may
+    // enable an official provider dispatcher per creator/account.
+    inboxPolicy: v.union(v.literal("draft_only"), v.literal("human_handoff")),
+    automationPolicy: v.optional(v.object({
+      postMode: v.union(v.literal("manual"), v.literal("approval_required"), v.literal("automatic")),
+      inboxMode: v.union(v.literal("draft_only"), v.literal("approval_required"), v.literal("automatic_safe")),
+      dailyPostCap: v.number(),
+      dailyReplyCap: v.number(),
+      quietHours: v.optional(v.object({ start: v.string(), end: v.string() })),
+      requireAgeGate: v.boolean(),
+      escalationRules: v.array(v.string()),
+    })),
+    status: v.union(v.literal("active"), v.literal("paused"), v.literal("archived")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_organization_handle", ["organizationId", "handle"])
+    .index("by_legacy_persona", ["legacyPersonaId"]),
+
+  // Immutable persona-bible revisions for the Creator Promotion workspace.
+  // The full identity and visual system are captured together so image prompts
+  // can always be traced back to one stable creative/character definition.
+  creatorPersonaRevisions: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    revisionNumber: v.number(),
+    status: v.union(v.literal("active"), v.literal("superseded")),
+    source: v.union(v.literal("baseline"), v.literal("operator_edit"), v.literal("legacy_sync")),
+    snapshot: v.object({
+      identity: v.object({
+        bio: v.optional(v.string()),
+        identitySummary: v.optional(v.string()),
+        emotionalBackstory: v.optional(v.string()),
+        voiceGuide: v.optional(v.string()),
+        audience: v.optional(v.string()),
+        disclosure: v.optional(v.string()),
+        contentPillars: v.array(v.string()),
+        boundaries: v.array(v.string()),
+        contentBoundaries: v.optional(v.array(v.string())),
+      }),
+      visualSystem: v.object({
+        promptLock: v.string(),
+        promptStyle: v.optional(v.string()),
+        loraTrigger: v.optional(v.string()),
+        referenceNotes: v.optional(v.string()),
+        version: v.number(),
+      }),
+    }),
+    snapshotHash: v.string(),
+    changeNote: v.optional(v.string()),
+    createdBy: v.string(),
+    createdAt: v.number(),
+    activatedBy: v.optional(v.string()),
+    activatedAt: v.optional(v.number()),
+    supersededAt: v.optional(v.number()),
+    supersededBy: v.optional(v.string()),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_creator", ["creatorId"])
+    .index("by_creator_revision", ["creatorId", "revisionNumber"])
+    .index("by_creator_status", ["creatorId", "status"]),
+
+  // Reference-image records are provenance metadata only. The asset bytes live
+  // in the approved object store; this table never contains a signed URL,
+  // remote image URL, scraped source, or provider credential.
+  creatorReferenceAssets: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    storageKey: v.string(),
+    displayName: v.string(),
+    rightsStatus: v.union(v.literal("owned"), v.literal("consented"), v.literal("licensed")),
+    useType: v.union(
+      v.literal("creator_likeness"),
+      v.literal("style"),
+      v.literal("wardrobe"),
+      v.literal("location"),
+      v.literal("product"),
+      v.literal("composition"),
+    ),
+    source: v.union(
+      v.literal("operator_uploaded"),
+      v.literal("client_provided"),
+      v.literal("owned_library"),
+      v.literal("licensed_library"),
+    ),
+    // Every entry has an accountable operator attestation. Likeness reference
+    // assets additionally require consented or owned rights in the mutation.
+    consentAttested: v.boolean(),
+    consentAttestedBy: v.string(),
+    consentAttestedAt: v.number(),
+    consentRecordReference: v.optional(v.string()),
+    licenseReference: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_creator", ["creatorId"])
+    .index("by_organization", ["organizationId"])
+    .index("by_organization_storage_key", ["organizationId", "storageKey"]),
+
+  // Account records hold only provider/account metadata. Creation is a
+  // legitimate onboarding/KYC workflow, never a browser or verification bot.
+  creatorSocialAccounts: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    integrationConnectionId: v.optional(v.id("integrationConnections")),
+    platform: v.union(
+      v.literal("instagram"),
+      v.literal("tiktok"),
+      v.literal("youtube"),
+      v.literal("fanvue"),
+      v.literal("fansly"),
+      v.literal("pinterest"),
+      v.literal("x"),
+      v.literal("facebook"),
+      v.literal("threads"),
+      v.literal("linkedin"),
+      v.literal("bluesky"),
+      v.literal("email"),
+      v.literal("other"),
+    ),
+    handle: v.string(),
+    displayName: v.optional(v.string()),
+    externalAccountId: v.optional(v.string()),
+    ownershipStatus: v.union(v.literal("attested_owned"), v.literal("client_authorized"), v.literal("legacy_unverified")),
+    status: v.union(
+      v.literal("unlinked"),
+      v.literal("pending"),
+      v.literal("not_started"),
+      v.literal("kyc_pending"),
+      v.literal("oauth_pending"),
+      v.literal("connected"),
+      v.literal("degraded"),
+      v.literal("paused"),
+      v.literal("revoked"),
+    ),
+    onboarding: v.optional(v.object({
+      mode: v.union(v.literal("manual"), v.literal("fanvue_partner"), v.literal("oauth_connect")),
+      status: v.union(
+        v.literal("not_started"),
+        v.literal("partner_approval_required"),
+        v.literal("kyc_required"),
+        v.literal("oauth_required"),
+        v.literal("ready"),
+        v.literal("blocked"),
+      ),
+      note: v.optional(v.string()),
+    })),
+    publisher: v.optional(v.union(v.literal("meta"), v.literal("fanvue"), v.literal("postiz"), v.literal("manual"))),
+    capabilities: v.array(v.string()),
+    scopes: v.optional(v.array(v.string())),
+    health: v.union(v.literal("unknown"), v.literal("healthy"), v.literal("degraded"), v.literal("unhealthy")),
+    connectionHealth: v.optional(v.union(v.literal("unknown"), v.literal("healthy"), v.literal("degraded"), v.literal("unhealthy"))),
+    postingPolicy: v.object({
+      mode: v.union(v.literal("manual"), v.literal("approval_required"), v.literal("automatic")),
+      dailyPostLimit: v.number(),
+      timezone: v.string(),
+      dailyCap: v.optional(v.number()),
+      quietHours: v.optional(v.object({ start: v.string(), end: v.string() })),
+      // Editorial cadence and mix targets are planning controls only. They
+      // never authorize provider publishing or dispatch.
+      weeklyTarget: v.optional(v.number()),
+      maxGapDays: v.optional(v.number()),
+      formatTargets: v.optional(v.object({
+        image: v.optional(v.number()),
+        carousel: v.optional(v.number()),
+        reel: v.optional(v.number()),
+        story: v.optional(v.number()),
+        short: v.optional(v.number()),
+        text: v.optional(v.number()),
+      })),
+    }),
+    manualKycStatus: v.union(v.literal("not_applicable"), v.literal("pending"), v.literal("verified"), v.literal("rejected")),
+    lastCheckedAt: v.optional(v.number()),
+    lastSyncedAt: v.optional(v.number()),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_creator", ["creatorId"])
+    .index("by_organization", ["organizationId"])
+    .index("by_connection", ["integrationConnectionId"])
+    .index("by_platform_status", ["platform", "status"])
+    // Official webhook lookup only. This is not an account-creation or
+    // browser-automation capability; it binds a verified recipient id to an
+    // already governed connected account.
+    .index("by_platform_external_account", ["platform", "externalAccountId"]),
+
+  creatorDestinations: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    kind: v.union(v.literal("brand_inquiry"), v.literal("link_in_bio"), v.literal("website"), v.literal("fanvue"), v.literal("fansly"), v.literal("other")),
+    integrationConnectionId: v.optional(v.id("integrationConnections")),
+    label: v.string(),
+    url: v.string(),
+    externalDestinationId: v.optional(v.string()),
+    disclosureText: v.optional(v.string()),
+    disclosure: v.optional(v.string()),
+    ageGateRequired: v.boolean(),
+    capabilities: v.array(v.string()),
+    manualKycStatus: v.union(v.literal("not_applicable"), v.literal("pending"), v.literal("verified"), v.literal("rejected")),
+    approvalRequired: v.boolean(),
+    status: v.union(v.literal("draft"), v.literal("pending_connection"), v.literal("active"), v.literal("paused"), v.literal("archived")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_creator", ["creatorId"])
+    .index("by_organization", ["organizationId"]),
+
+  // A governed creator funnel/campaign ties one creator to one existing
+  // destination. It stores explicit stage CTAs and UTM naming rules, but
+  // never manufactures a public link, redirect, short URL, tracking token, or
+  // provider-side campaign. Activation requires a separately immutable
+  // approval request; pausing prevents new content approval/dispatch.
+  creatorFunnelCampaigns: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    destinationId: v.id("creatorDestinations"),
+    approvalId: v.optional(v.id("approvalRequests")),
+    campaignLabel: v.string(),
+    objective: v.union(
+      v.literal("brand_partnerships"),
+      v.literal("subscription_conversion"),
+      v.literal("website_conversion"),
+      v.literal("lead_capture"),
+      v.literal("other"),
+    ),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("review_required"),
+      v.literal("approved"),
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("archived"),
+    ),
+    // An update creates a new version before it can be reviewed/activated;
+    // approved content keeps its own immutable funnel snapshot instead.
+    version: v.number(),
+    stages: v.array(creatorFunnelStagePlan),
+    compliance: creatorFunnelCompliance,
+    linkPolicy: creatorFunnelLinkPolicy,
+    reviewRequestedAt: v.optional(v.number()),
+    reviewRequestedBy: v.optional(v.string()),
+    approvedAt: v.optional(v.number()),
+    approvedBy: v.optional(v.string()),
+    activatedAt: v.optional(v.number()),
+    activatedBy: v.optional(v.string()),
+    pausedAt: v.optional(v.number()),
+    pausedBy: v.optional(v.string()),
+    pauseReason: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_creator", ["creatorId"])
+    .index("by_creator_status", ["creatorId", "status"])
+    .index("by_destination", ["destinationId"])
+    .index("by_approval", ["approvalId"]),
+
+  // A content item is the operator-visible schedule/outbox entry. It records
+  // the prompt lineage and intended provider, but provider receipts live only
+  // in actionLedger after an authorized dispatch.
+  creatorContentItems: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    accountId: v.optional(v.id("creatorSocialAccounts")),
+    destinationId: v.optional(v.id("creatorDestinations")),
+    // When present, both fields are a frozen, URL-free record of an active
+    // campaign. Content never follows mutable campaign/link state at runtime.
+    funnelId: v.optional(v.id("creatorFunnelCampaigns")),
+    funnelSnapshot: v.optional(creatorFunnelContentSnapshot),
+    approvalId: v.optional(v.id("approvalRequests")),
+    // A selected candidate is a reviewed, controlled-storage asset. It is
+    // deliberately distinct from publication and does not imply that any
+    // social provider accepted or posted it.
+    selectedRenderCandidateId: v.optional(v.id("creatorRenderCandidates")),
+    selectedRenderAt: v.optional(v.number()),
+    format: v.union(v.literal("image"), v.literal("carousel"), v.literal("reel"), v.literal("story"), v.literal("short"), v.literal("text"), v.literal("subscription_post")),
+    funnelStage: v.union(v.literal("awareness"), v.literal("trust"), v.literal("consideration"), v.literal("conversion"), v.literal("retention")),
+    status: v.union(
+      v.literal("idea"),
+      v.literal("draft"),
+      v.literal("scheduled"),
+      v.literal("cancelled"),
+      v.literal("archived"),
+      v.literal("awaiting_render_approval"),
+      v.literal("render_queued"),
+      v.literal("rendered"),
+      v.literal("awaiting_publish_approval"),
+      v.literal("dispatch_queued"),
+      v.literal("published"),
+      v.literal("failed"),
+      v.literal("paused"),
+    ),
+    reviewStatus: v.union(v.literal("not_requested"), v.literal("pending"), v.literal("approved"), v.literal("rejected")),
+    reviewVersion: v.number(),
+    title: v.string(),
+    hook: v.string(),
+    caption: v.string(),
+    cta: v.optional(v.string()),
+    whyNow: v.string(),
+    promptSnapshot: v.object({
+      promptLock: v.string(),
+      prompt: v.string(),
+      promptStyle: v.optional(v.string()),
+      referenceNotes: v.optional(v.string()),
+      provider: v.union(
+        v.literal("novita"),
+        v.literal("ltx"),
+        // Explicitly selected only after a ready creator LoRA is snapshotted
+        // into this content version; never the default renderer.
+        v.literal("fal_z_image_turbo_lora"),
+        v.literal("unassigned"),
+      ),
+      version: v.number(),
+      // A content version that uses a creator LoRA freezes exactly which
+      // reviewed model it references. It never follows a mutable profile
+      // pointer at render time.
+      loraSnapshot: v.optional(v.object({
+        modelId: v.id("creatorLoraModels"),
+        trainingJobId: v.id("creatorLoRATrainingJobs"),
+        targetModel: v.literal("z-image-turbo"),
+        triggerWord: v.string(),
+        modelArtifactKey: v.string(),
+        modelArtifactUrl: v.optional(v.string()),
+        datasetManifestHash: v.string(),
+      })),
+      // A new plan freezes the active persona revision together with its
+      // prompt system. Later persona edits cannot alter this content version
+      // or any approval/render request derived from it.
+      personaSnapshot: v.optional(v.object({
+        revisionId: v.id("creatorPersonaRevisions"),
+        revisionNumber: v.number(),
+        snapshotHash: v.string(),
+        identity: v.object({
+          bio: v.optional(v.string()),
+          identitySummary: v.optional(v.string()),
+          emotionalBackstory: v.optional(v.string()),
+          voiceGuide: v.optional(v.string()),
+          audience: v.optional(v.string()),
+          disclosure: v.optional(v.string()),
+          contentPillars: v.array(v.string()),
+          boundaries: v.array(v.string()),
+          contentBoundaries: v.optional(v.array(v.string())),
+        }),
+        visualSystem: v.object({
+          promptLock: v.string(),
+          promptStyle: v.optional(v.string()),
+          loraTrigger: v.optional(v.string()),
+          referenceNotes: v.optional(v.string()),
+          version: v.number(),
+        }),
+      })),
+    }),
+    referenceAssetKeys: v.optional(v.array(v.string())),
+    renderProvider: v.optional(
+      v.union(
+        v.literal("novita"),
+        v.literal("ltx"),
+        v.literal("fal_z_image_turbo_lora"),
+        v.literal("manual"),
+        v.literal("unassigned"),
+      ),
+    ),
+    renderState: v.union(v.literal("not_requested"), v.literal("brief_ready"), v.literal("approved_for_render"), v.literal("rendered"), v.literal("rejected")),
+    previewUrl: v.optional(v.string()),
+    scheduledAt: v.number(),
+    publishedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_creator_scheduled", ["creatorId", "scheduledAt"])
+    .index("by_account_scheduled", ["accountId", "scheduledAt"])
+    .index("by_organization_scheduled", ["organizationId", "scheduledAt"])
+    .index("by_organization_status", ["organizationId", "status"])
+    .index("by_approval", ["approvalId"]),
+
+  // Creator-specific render attempts. Every row is one immutable attempt of
+  // one approved content version; a retry creates a new row rather than
+  // mutating the original request or reusing a paid-action idempotency key.
+  creatorRenderJobs: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    contentId: v.id("creatorContentItems"),
+    approvalId: v.id("approvalRequests"),
+    actionId: v.optional(v.id("actionLedger")),
+    reviewVersion: v.number(),
+    provider: v.union(
+      v.literal("novita"),
+      v.literal("ltx"),
+      v.literal("fal_z_image_turbo_lora"),
+      v.literal("unassigned"),
+    ),
+    status: v.union(
+      v.literal("blocked"),
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("candidates_ready"),
+      v.literal("selected"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    attemptNumber: v.number(),
+    maxAttempts: v.number(),
+    idempotencyKey: v.string(),
+    // The original approval snapshot is copied into this request envelope and
+    // never replaced on retry. Workers must use it instead of mutable content.
+    requestHash: v.string(),
+    requestSnapshot: v.any(),
+    scheduledAt: v.optional(v.number()),
+    referenceCount: v.number(),
+    retryOfJobId: v.optional(v.id("creatorRenderJobs")),
+    requestedBy: v.string(),
+    failureReason: v.optional(v.string()),
+    selectedCandidateId: v.optional(v.id("creatorRenderCandidates")),
+    selectedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_creator", ["creatorId"])
+    .index("by_content", ["contentId"])
+    .index("by_approval", ["approvalId"])
+    .index("by_idempotency", ["idempotencyKey"])
+    .index("by_status", ["status"]),
+
+  // A candidate may be recorded only after a trusted renderer has copied its
+  // output into controlled storage. This surface never stores a provider URL,
+  // credential, or raw provider receipt.
+  creatorRenderCandidates: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    contentId: v.id("creatorContentItems"),
+    jobId: v.id("creatorRenderJobs"),
+    attemptNumber: v.number(),
+    provider: v.union(v.literal("novita"), v.literal("ltx"), v.literal("fal_z_image_turbo_lora")),
+    mediaType: v.union(v.literal("image"), v.literal("video")),
+    status: v.union(v.literal("pending"), v.literal("selected"), v.literal("rejected")),
+    idempotencyKey: v.string(),
+    assetKey: v.string(),
+    thumbnailKey: v.optional(v.string()),
+    width: v.optional(v.number()),
+    height: v.optional(v.number()),
+    durationSeconds: v.optional(v.number()),
+    rejectionReason: v.optional(v.string()),
+    selectedAt: v.optional(v.number()),
+    selectedBy: v.optional(v.string()),
+    rejectedAt: v.optional(v.number()),
+    rejectedBy: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_creator", ["creatorId"])
+    .index("by_content", ["contentId"])
+    .index("by_job", ["jobId"])
+    .index("by_content_status", ["contentId", "status"])
+    .index("by_idempotency", ["idempotencyKey"]),
+
+  // Creator-specific Z-Image Turbo LoRA training. Every job freezes an
+  // operator-attested dataset manifest at draft creation and is separately
+  // reviewed before a trusted worker may submit it to Fal. No source bytes,
+  // provider credential, signed URL, or raw provider response enters Convex.
+  creatorLoRATrainingJobs: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    reviewApprovalId: v.optional(v.id("approvalRequests")),
+    actionId: v.optional(v.id("actionLedger")),
+    targetModel: v.literal("z-image-turbo"),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("review_required"),
+      v.literal("approved_for_training"),
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("succeeded"),
+      v.literal("failed"),
+      v.literal("rejected"),
+    ),
+    triggerWord: v.string(),
+    trainingLabel: v.optional(v.string()),
+    // The endpoint distinction is intentional: the training endpoint creates
+    // weights, while the inference endpoint consumes an approved model later.
+    // Both are frozen at draft creation so workers never invent defaults.
+    trainingParams: v.object({
+      trainingEndpoint: v.literal("fal-ai/z-image-trainer"),
+      inferenceEndpoint: v.literal("fal-ai/z-image/turbo/lora"),
+      baseModel: v.literal("z-image-turbo"),
+      triggerWord: v.string(),
+      trainingType: v.union(v.literal("content"), v.literal("style"), v.literal("balanced")),
+      // Kept separately so the worker can forward the Fal enum without
+      // inferring or remapping a user-facing training mode.
+      falTrainingType: v.union(v.literal("content"), v.literal("style"), v.literal("balanced")),
+      steps: v.number(),
+      learningRate: v.number(),
+      defaultCaption: v.string(),
+    }),
+    datasetAssetIds: v.array(v.id("creatorReferenceAssets")),
+    datasetAssetCount: v.number(),
+    // Immutable after draft creation. The stable hash is rechecked before
+    // review, queueing, worker claim, and completion.
+    datasetManifest: v.array(v.object({
+      assetId: v.id("creatorReferenceAssets"),
+      storageKey: v.string(),
+      caption: v.string(),
+      // Optional because the current reference library does not yet retain a
+      // cryptographic digest. A worker may compute and verify it before upload.
+      sha256: v.optional(v.string()),
+      rightsStatus: v.union(v.literal("owned"), v.literal("consented")),
+      consentAttestedBy: v.string(),
+      consentAttestedAt: v.number(),
+      consentRecordReference: v.optional(v.string()),
+    })),
+    datasetManifestHash: v.string(),
+    operatorAttestation: v.object({
+      attestedBy: v.string(),
+      statement: v.string(),
+      confirmed: v.literal(true),
+      attestedAt: v.number(),
+    }),
+    reviewRequestedAt: v.optional(v.number()),
+    reviewRequestedBy: v.optional(v.string()),
+    approvedAt: v.optional(v.number()),
+    approvedBy: v.optional(v.string()),
+    rejectedAt: v.optional(v.number()),
+    rejectedBy: v.optional(v.string()),
+    rejectionReason: v.optional(v.string()),
+    queuedAt: v.optional(v.number()),
+    queuedBy: v.optional(v.string()),
+    // Non-secret provider state only. The worker records the request id
+    // atomically before polling so a retry cannot duplicate paid training.
+    falRequestId: v.optional(v.string()),
+    falResultMetadata: v.optional(v.object({
+      status: v.optional(v.string()),
+      modelUrl: v.optional(v.string()),
+      configUrl: v.optional(v.string()),
+      trainingSteps: v.optional(v.number()),
+      trainingImages: v.optional(v.number()),
+    })),
+    // The worker must re-home an output artifact before it can complete a
+    // job. The optional URL is sanitized metadata, never a signed URL.
+    modelArtifactKey: v.optional(v.string()),
+    modelArtifactUrl: v.optional(v.string()),
+    modelId: v.optional(v.id("creatorLoraModels")),
+    triggerRunId: v.optional(v.string()),
+    failureReason: v.optional(v.string()),
+    completedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_creator", ["creatorId"])
+    .index("by_status", ["status"])
+    .index("by_review_approval", ["reviewApprovalId"])
+    .index("by_action", ["actionId"])
+    .index("by_fal_request", ["falRequestId"]),
+
+  // A successful job produces a model registry record. It is deliberately
+  // not auto-attached to a creator prompt system; activation remains a future
+  // explicit operator action.
+  creatorLoraModels: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    trainingJobId: v.id("creatorLoRATrainingJobs"),
+    targetModel: v.literal("z-image-turbo"),
+    triggerWord: v.string(),
+    trainingParams: v.object({
+      trainingEndpoint: v.literal("fal-ai/z-image-trainer"),
+      inferenceEndpoint: v.literal("fal-ai/z-image/turbo/lora"),
+      baseModel: v.literal("z-image-turbo"),
+      triggerWord: v.string(),
+      trainingType: v.union(v.literal("content"), v.literal("style"), v.literal("balanced")),
+      falTrainingType: v.union(v.literal("content"), v.literal("style"), v.literal("balanced")),
+      steps: v.number(),
+      learningRate: v.number(),
+      defaultCaption: v.string(),
+    }),
+    // Completion only registers a model for validation. A separate operator
+    // action may explicitly activate one model for a creator.
+    status: v.union(v.literal("validating"), v.literal("active"), v.literal("failed"), v.literal("archived")),
+    modelArtifactKey: v.string(),
+    modelArtifactUrl: v.optional(v.string()),
+    falRequestId: v.string(),
+    falResultMetadata: v.optional(v.object({
+      status: v.optional(v.string()),
+      modelUrl: v.optional(v.string()),
+      configUrl: v.optional(v.string()),
+      trainingSteps: v.optional(v.number()),
+      trainingImages: v.optional(v.number()),
+    })),
+    datasetManifestHash: v.string(),
+    activatedAt: v.optional(v.number()),
+    activatedBy: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_creator", ["creatorId"])
+    .index("by_training_job", ["trainingJobId"])
+    .index("by_creator_status", ["creatorId", "status"]),
+
+  // Minimal inbox state lets the operator see and govern each conversation.
+  // Message bodies are retention-bounded and may only be sourced from an
+  // official channel webhook or an operator input.
+  creatorInboxThreads: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    accountId: v.optional(v.id("creatorSocialAccounts")),
+    destinationId: v.optional(v.id("creatorDestinations")),
+    platform: v.union(
+      v.literal("instagram"),
+      v.literal("tiktok"),
+      v.literal("youtube"),
+      v.literal("fanvue"),
+      v.literal("fansly"),
+      v.literal("pinterest"),
+      v.literal("x"),
+      v.literal("facebook"),
+      v.literal("threads"),
+      v.literal("linkedin"),
+      v.literal("bluesky"),
+      v.literal("email"),
+      v.literal("other"),
+    ),
+    externalThreadId: v.optional(v.string()),
+    participantLabel: v.optional(v.string()),
+    summary: v.string(),
+    intent: v.union(v.literal("general"), v.literal("brand_inquiry"), v.literal("support"), v.literal("fanvue_interest"), v.literal("safety_review"), v.literal("other")),
+    status: v.union(v.literal("received"), v.literal("draft_ready"), v.literal("human_handoff"), v.literal("closed")),
+    responseWindowEndsAt: v.optional(v.number()),
+    // Set exclusively by signed official Meta webhook ingestion. Manual and
+    // unverified inbox threads leave these absent and are permanently
+    // non-sendable through the governed Meta reply lifecycle.
+    verifiedMetaInstagramInboundAt: v.optional(v.number()),
+    verifiedMetaInstagramReplyEligibilityEndsAt: v.optional(v.number()),
+    requiresDisclosure: v.boolean(),
+    safetyFlags: v.array(v.string()),
+    draftReply: v.optional(v.string()),
+    draftRationale: v.optional(v.string()),
+    draftReviewStatus: v.optional(v.union(v.literal("draft"), v.literal("approved"), v.literal("rejected"))),
+    draftReviewedAt: v.optional(v.number()),
+    draftReviewedBy: v.optional(v.string()),
+    // A local approval freezes one immutable outbound message. It is never a
+    // provider permission by itself; the Meta reply lifecycle below requires a
+    // separate action/approval/explicit queue against this exact message.
+    approvedDraftMessageId: v.optional(v.id("creatorInboxMessages")),
+    // At most one governed Meta reply action may exist for the latest verified
+    // inbound message. A new signed customer message clears this pointer;
+    // failures hand the thread off instead of allowing a duplicate retry.
+    metaInstagramReplyActionId: v.optional(v.id("actionLedger")),
+    handoffReason: v.optional(v.string()),
+    handoffAssignee: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_creator", ["creatorId"])
+    .index("by_account_external_thread", ["accountId", "externalThreadId"])
+    .index("by_organization", ["organizationId"]),
+
+  creatorInboxMessages: defineTable({
+    organizationId: v.id("organizations"),
+    threadId: v.id("creatorInboxThreads"),
+    externalMessageId: v.optional(v.string()),
+    // Present only on a signed, customer-initiated official webhook ingress.
+    // They are deliberately metadata-only and never authorize a reply.
+    verifiedInbound: v.optional(v.boolean()),
+    provider: v.optional(v.literal("meta_instagram")),
+    officialRecipientId: v.optional(v.string()),
+    // The signed webhook's opaque customer Instagram-scoped id. It stays in
+    // the private message record only long enough to address one approved
+    // response-window reply; it is never part of the workspace projection.
+    customerSenderId: v.optional(v.string()),
+    occurredAt: v.optional(v.number()),
+    replyEligibilityEndsAt: v.optional(v.number()),
+    eventReceiptId: v.optional(v.id("eventReceipts")),
+    direction: v.union(v.literal("inbound"), v.literal("outbound"), v.literal("system")),
+    source: v.union(v.literal("operator"), v.literal("official_webhook"), v.literal("ai_draft"), v.literal("provider")),
+    status: v.union(v.literal("received"), v.literal("draft"), v.literal("approved"), v.literal("queued"), v.literal("sent"), v.literal("failed")),
+    body: v.string(),
+    automated: v.boolean(),
+    actionId: v.optional(v.id("actionLedger")),
+    expiresAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_thread_created", ["threadId", "createdAt"])
+    .index("by_action", ["actionId"])
+    .index("by_expiry", ["expiresAt"])
+    .index("by_provider_external_message", ["provider", "externalMessageId"])
+    .index("by_event_receipt", ["eventReceiptId"]),
+
+  // Actual provider-derived performance only. The UI must never fabricate
+  // reach, clicks, subscriptions, or revenue when a connection is absent.
+  creatorAttributionSnapshots: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    accountId: v.optional(v.id("creatorSocialAccounts")),
+    contentId: v.optional(v.id("creatorContentItems")),
+    destinationId: v.optional(v.id("creatorDestinations")),
+    funnelId: v.optional(v.id("creatorFunnelCampaigns")),
+    funnelVersion: v.optional(v.number()),
+    funnelSnapshotHash: v.optional(v.string()),
+    source: v.union(v.literal("instagram"), v.literal("fanvue"), v.literal("postiz"), v.literal("manual")),
+    metrics: v.object({
+      impressions: v.optional(v.number()),
+      reach: v.optional(v.number()),
+      linkClicks: v.optional(v.number()),
+      followers: v.optional(v.number()),
+      subscribers: v.optional(v.number()),
+      grossRevenueMinor: v.optional(v.number()),
+      currency: v.optional(v.string()),
+    }),
+    capturedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_creator_captured", ["creatorId", "capturedAt"])
+    .index("by_content_captured", ["contentId", "capturedAt"])
+    .index("by_funnel_captured", ["funnelId", "capturedAt"])
+    .index("by_organization_captured", ["organizationId", "capturedAt"]),
+
+  // Manual, aggregate-only funnel observations. This is an audit trail for
+  // operator-transcribed analytics, not a pixel, webhook, redirect, payment,
+  // or subscriber-data integration. It intentionally stores no visitor ID,
+  // message body, email, public URL, or provider token.
+  creatorFunnelEvents: defineTable({
+    organizationId: v.id("organizations"),
+    creatorId: v.id("creatorProfiles"),
+    funnelId: v.id("creatorFunnelCampaigns"),
+    funnelVersion: v.number(),
+    funnelSnapshotHash: v.string(),
+    destinationId: v.id("creatorDestinations"),
+    contentId: v.optional(v.id("creatorContentItems")),
+    source: v.literal("manual"),
+    eventType: v.union(
+      v.literal("link_click"),
+      v.literal("lead"),
+      v.literal("brand_inquiry"),
+      v.literal("signup"),
+      v.literal("subscription"),
+      v.literal("revenue_observed"),
+      v.literal("other"),
+    ),
+    count: v.number(),
+    revenueMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    note: v.optional(v.string()),
+    occurredAt: v.number(),
+    recordedBy: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_funnel_occurred", ["funnelId", "occurredAt"])
+    .index("by_content_occurred", ["contentId", "occurredAt"])
+    .index("by_organization_occurred", ["organizationId", "occurredAt"]),
 });

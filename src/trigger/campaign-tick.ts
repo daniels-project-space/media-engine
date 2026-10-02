@@ -1,12 +1,11 @@
-import { schedules, logger } from "@trigger.dev/sdk";
+import { task, logger } from "@trigger.dev/sdk";
 
 // The old campaign heartbeat could invoke social, email, and influencer
 // integrations from legacy Convex state. It is deliberately retained under its
-// old task id only to drain scheduled invocations safely while Distribution is
+// old task id so any explicitly queued invocation drains safely while Distribution is
 // rebuilt behind an authenticated operator boundary.
-export const campaignTick = schedules.task({
+export const campaignTick = task({
   id: "campaign-tick",
-  cron: "7,22,37,52 * * * *",
   maxDuration: 300,
   run: async () => {
     const result = {
