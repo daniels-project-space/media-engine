@@ -7,7 +7,7 @@ import { hasOperatorSession, requireOperator } from "@/lib/operator-auth";
 import { creativeServiceToken } from "@/lib/creative-service";
 import { vaultService } from "@/lib/vault";
 import { chatJson } from "@/lib/llm";
-import { assertSeedanceRendererEnabled, SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE } from "@/lib/video-router";
+import { assertRenderEngineCanRenderApprovedAd, RENDER_ENGINE_AD_INCOMPATIBLE_MESSAGE } from "@/lib/render-engine-compatibility";
 
 export const maxDuration = 60;
 
@@ -362,7 +362,7 @@ export async function POST(request: NextRequest) {
       // Fail before we create a render job or invoke Trigger. The worker has a
       // matching guard, but admission must be safe even if a prior worker build
       // is still serving a deployment during the cloud cutover.
-      assertSeedanceRendererEnabled();
+      assertRenderEngineCanRenderApprovedAd();
       const dispatchToken = randomBytes(32).toString("base64url");
       const { convex, serviceToken } = await serviceClient();
       const admission = (await convex.action(api.creativeGateway.startRender, {
@@ -393,7 +393,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unknown work action" }, { status: 400 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Work request failed";
-    const status = message.includes(SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE)
+    const status = message.includes(RENDER_ENGINE_AD_INCOMPATIBLE_MESSAGE)
       ? 503
       : message.includes("required") || message.includes("before") || message.includes("must") || message.includes("No approved") || message.includes("Every storyboard")
         ? 400

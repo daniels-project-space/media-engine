@@ -1,12 +1,11 @@
-import { schedules, logger } from "@trigger.dev/sdk";
+import { task, logger } from "@trigger.dev/sdk";
 
-// The former autopilot heartbeat remains scheduled so deployments with this task
-// ID do not start an old renderer. It performs no generation, approval, or
+// The former autopilot task keeps its ID so explicitly queued calls can drain
+// safely. It performs no generation, approval, or
 // publishing. Social planning and review data remain intact while client media
 // renders are restricted to the private Work flow.
-export const scheduleTick = schedules.task({
+export const scheduleTick = task({
   id: "schedule-tick",
-  cron: "*/30 * * * *",
   maxDuration: 60,
   run: async () => {
     const result = {
