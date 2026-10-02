@@ -41,9 +41,10 @@ type Narrative = {
 };
 
 type RenderPlan = {
-  provider: "higgsfield";
-  model: "seedance_2_0";
-  creditSource: "higgsfield_subscription";
+  provider: "higgsfield" | "render-engine";
+  model: "seedance_2_0" | "seedance-2.5-i2v";
+  creditSource: "higgsfield_subscription" | "engine_hosted_budget";
+  referenceFrameSha256?: string;
   aspectRatio: "9:16" | "16:9" | "1:1";
   durationSeconds: number;
   audioStrategy: string;
@@ -95,11 +96,13 @@ type RenderJob = {
   _id: string;
   kind: RenderKind;
   planVersion: number;
-  provider: "higgsfield";
-  model: "seedance_2_0";
-  creditSource: "higgsfield_subscription";
+  provider: "higgsfield" | "render-engine";
+  model: "seedance_2_0" | "seedance-2.5-i2v";
+  creditSource: "higgsfield_subscription" | "engine_hosted_budget";
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   creditsUsed?: number;
+  hostedEstimatedCostUsd?: number;
+  hostedAdmittedCostUsd?: number;
   error?: string;
   createdAt: number;
   updatedAt: number;
@@ -155,10 +158,7 @@ const MESSAGE_META: Record<ProjectMessage["role"], { label: string; className: s
   system: { label: "System", className: "border-line-2 text-ink-faint" },
 };
 
-// This is deliberately flipped only when the authenticated production MCP
-// manifest has been reviewed and a strict Seedance tool mapping is committed.
-const RENDERING_ENABLED = false;
-const RENDERING_DISABLED_REASON = "Rendering is paused while the production Seedance 2.0 MCP tool schema is verified. No subscription credits can be used yet.";
+const RENDERING_DISABLED_REASON = "Generate and approve a new Render Engine Seedance 2.5 I2V plan before rendering. Historical Higgsfield plans remain closed.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -471,13 +471,14 @@ export default function WorkPage() {
     void runAction(
       `${selected.project._id}:approve-plan`,
       { action: "approve-plan", projectId: selected.project._id },
-      "Render plan approved. A draft can now be rendered with Higgsfield credits.",
+      "Render plan approved. A draft can now use the project's Render Engine hosted budget.",
     );
   }
 
   function render(kind: RenderKind) {
     if (!selected) return;
-    if (!RENDERING_ENABLED) {
+    if (selected.project.renderPlan?.provider !== "render-engine" ||
+        selected.project.renderPlan.model !== "seedance-2.5-i2v") {
       setError(RENDERING_DISABLED_REASON);
       return;
     }
@@ -511,7 +512,7 @@ export default function WorkPage() {
         </div>
         <div className="border border-signal/35 bg-signal/5 px-3 py-2 text-right text-[10px] leading-relaxed text-signal">
           <div className="font-semibold tracking-[0.12em] uppercase">Generation policy</div>
-          <div>Higgsfield · Seedance 2.0 · subscription credits · fail closed</div>
+          <div>Render Engine · Seedance 2.5 I2V · project budget · fail closed</div>
         </div>
       </header>
 
@@ -801,9 +802,9 @@ function ProjectWorkspace({
                 <div className="border border-signal/30 bg-signal/[0.035] p-3">
                   <h4 className="text-[10px] font-semibold tracking-[0.14em] text-signal uppercase">Render policy</h4>
                   <div className="mt-2 grid gap-2 text-xs text-ink-dim sm:grid-cols-2">
-                    <span>Provider: Higgsfield</span>
-                    <span>Model: Seedance 2.0</span>
-                    <span>Credits: subscription only</span>
+                    <span>Provider: {project.renderPlan.provider === "render-engine" ? "Render Engine" : "Historical Higgsfield"}</span>
+                    <span>Model: {project.renderPlan.model}</span>
+                    <span>Cost: project hosted budget; actual charge reconciled later</span>
                     <span>Fallback: fail closed</span>
                     <span>Format: {project.renderPlan.aspectRatio} · {project.renderPlan.durationSeconds}s</span>
                     <span>{project.renderPlan.audioStrategy}</span>
@@ -820,22 +821,22 @@ function ProjectWorkspace({
         <aside className="space-y-5">
           <article className="border border-line bg-panel p-4">
             <h3 className="display text-lg font-bold">Production</h3>
-            <p className="mt-1 text-xs leading-relaxed text-ink-faint">Rendering only uses Higgsfield subscription credits. If the provider is unavailable, the job stops instead of moving to a paid fallback.</p>
+            <p className="mt-1 text-xs leading-relaxed text-ink-faint">Approved reference shots use project-owned Seedance 2.5 I2V. Engine budget admission is required for each shot; a provider failure stops the job.</p>
             <div className="mt-4 space-y-2">
-              <ActionButton onClick={() => onRender("draft")} disabled={!RENDERING_ENABLED || isBusy || !planApproved || project.stage !== "script_ready"} kind="primary">
+              <ActionButton onClick={() => onRender("draft")} disabled={isBusy || !planApproved || project.renderPlan?.provider !== "render-engine" || project.stage !== "script_ready"} kind="primary">
                 {projectBusy("render-draft") ? "Starting draft…" : "Render draft"}
               </ActionButton>
-              <ActionButton onClick={() => onRender("final")} disabled={!RENDERING_ENABLED || isBusy || !planApproved || project.stage !== "draft_ready"} kind="primary">
+              <ActionButton onClick={() => onRender("final")} disabled={isBusy || !planApproved || project.renderPlan?.provider !== "render-engine" || project.stage !== "draft_ready"} kind="primary">
                 {projectBusy("render-final") ? "Starting final…" : "Render final"}
               </ActionButton>
               {retryKind && (
-                <ActionButton onClick={() => onRender(retryKind)} disabled={!RENDERING_ENABLED || isBusy || !planApproved} kind="primary">
+                <ActionButton onClick={() => onRender(retryKind)} disabled={isBusy || !planApproved || project.renderPlan?.provider !== "render-engine"} kind="primary">
                   {projectBusy(`render-${retryKind}`) ? "Retrying…" : `Retry ${retryKind}`}
                 </ActionButton>
               )}
             </div>
             {!planApproved && <p className="mt-3 text-xs text-amber">Approve the current plan before using render credits.</p>}
-            {!RENDERING_ENABLED && <p className="mt-3 text-xs leading-relaxed text-amber">{RENDERING_DISABLED_REASON}</p>}
+            {project.renderPlan?.provider !== "render-engine" && <p className="mt-3 text-xs leading-relaxed text-amber">{RENDERING_DISABLED_REASON}</p>}
             {planApproved && !draftReady && project.stage !== "drafting" && <p className="mt-3 text-xs text-ink-faint">A draft is the next allowed production step.</p>}
             {draftReady && !finalReady && <p className="mt-3 text-xs text-ink-faint">Review the draft before starting the final.</p>}
             {readyForDelivery && (
@@ -916,8 +917,9 @@ function RenderJobRow({ job }: { job: RenderJob }) {
         <span className="text-sm font-semibold capitalize text-ink">{job.kind} · plan v{job.planVersion}</span>
         <span className={`border px-1.5 py-0.5 text-[9px] font-semibold tracking-wide uppercase ${statusClass}`}>{job.status}</span>
       </div>
-      <p className="mt-1 text-[11px] text-ink-faint">Seedance 2.0 · Higgsfield subscription · {formatTime(job.updatedAt)}</p>
+      <p className="mt-1 text-[11px] text-ink-faint">{job.provider === "render-engine" ? "Seedance 2.5 I2V · Engine hosted budget" : "Historical Seedance 2.0 · Higgsfield"} · {formatTime(job.updatedAt)}</p>
       {typeof job.creditsUsed === "number" && <p className="mt-1 text-xs text-signal">{job.creditsUsed} credits used</p>}
+      {typeof job.hostedAdmittedCostUsd === "number" && <p className="mt-1 text-xs text-signal">${job.hostedAdmittedCostUsd.toFixed(2)} budget admitted · actual provider charge pending</p>}
       {job.error && <p className="mt-2 text-xs leading-relaxed text-onair">{job.error}</p>}
     </div>
   );

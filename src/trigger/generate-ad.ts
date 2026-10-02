@@ -3,15 +3,14 @@ import { ConvexHttpClient } from "convex/browser";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { writeFile, readFile, mkdtemp } from "node:fs/promises";
-import { createWriteStream, existsSync } from "node:fs";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { putObject, presignedGet } from "../lib/storage";
-import { CANONICAL_VIDEO_MODEL, renderClip, primeHiggsfield } from "../lib/video-router";
+import { renderEngineAdScene, stageApprovedPortrait, putVerifiedAdArtifact,
+  type EngineAdScene } from "../lib/render-engine-ad-video";
 import { creativeServiceToken } from "../lib/creative-service";
 import { scoreImage } from "../lib/vision";
 import { buildVariantTag } from "../lib/variant";
@@ -48,6 +47,7 @@ type ClaimedExecution = {
     id: Id<"adProjects">;
     buyer: string;
     title: string;
+    renderPlan: { referenceFrameSha256: string };
     narrative?: { corePromise: string; arc: { beat: string; purpose: string }[]; cta: string };
     shots: Array<{
       kind?: string;
@@ -86,6 +86,7 @@ function asClaimedExecution(value: unknown): ClaimedExecution {
     typeof candidate.project.title !== "string" ||
     !Array.isArray(candidate.project.shots) ||
     typeof candidate.referenceKey !== "string" ||
+    !candidate.project.renderPlan || !/^[a-f0-9]{64}$/.test(candidate.project.renderPlan.referenceFrameSha256 ?? "") ||
     !candidate.referenceKey.startsWith("products/client/")
   ) {
     throw new AbortTaskRunError("render claim returned malformed execution data");
@@ -95,7 +96,7 @@ function asClaimedExecution(value: unknown): ClaimedExecution {
 
 function canonicalScenes(execution: ClaimedExecution): Scene[] {
   const shots = execution.project.shots;
-  if (shots.length === 0 || shots.length > 6) {
+  if (shots.length === 0 || shots.length > 6 || !shots.some(shot => shot.kind !== "card")) {
     throw new Error("approved storyboard must contain between one and six shots");
   }
   return shots.map((shot, index) => {
@@ -171,9 +172,9 @@ async function makeCard(
 
 /**
  * Stitches an approved-reference marketing video. Each moving scene is rendered
- * by Higgsfield Seedance 2.0 against a quoted subscription-credit balance; brand
+ * by project-owned Seedance 2.5 first-frame I2V against the Engine hosted budget; brand
  * cards and assembly remain deterministic and local. No non-Seedance model is
- * allowed to consume the connected subscription credits.
+ * is allowed to replace the approved reference image.
  */
 export const generateAd = task({
   id: "generate-ad",
@@ -219,10 +220,9 @@ export const generateAd = task({
       execution = asClaimedExecution(claim);
       const scenes = canonicalScenes(execution);
 
-      // Non-billable MCP manifest verification happens before the post ledger
-      // or any media side effect. It currently fails closed until the exact
-      // Seedance tool contract has been reviewed.
-      await primeHiggsfield();
+      const firstFrame = await stageApprovedPortrait(execution.referenceKey);
+      if (firstFrame.sha256 !== execution.project.renderPlan.referenceFrameSha256)
+        throw new Error("Approved reference frame bytes changed after plan approval");
 
       const concept = `creative-${execution.project.id}-${execution.job.kind}-v${execution.job.planVersion}`;
       const tag = buildVariantTag({
@@ -242,13 +242,16 @@ export const generateAd = task({
         },
       })) as Id<"posts">;
 
-      let higgsCreditsUsed = 0;
+      const sceneReceipts: EngineAdScene[] = [];
       let motionScoreSum = 0;
       let motionScoreCount = 0;
       const dir = await mkdtemp(path.join(tmpdir(), "ad-"));
 
       const renderScene = async (scene: Scene, index: number): Promise<string> => {
         const duration = scene.seconds ?? 0;
+        if (scene.kind !== "card" && (!Number.isSafeInteger(duration) || duration < 4 || duration > 15)) {
+          throw new Error(`scene ${index + 1}: approved duration must be an integer from 4 to 15 seconds`);
+        }
         logger.log(`scene ${index + 1}/${scenes.length} (${scene.kind ?? "i2v"})`);
         if (scene.kind === "card") {
           const norm = path.join(dir, `norm-${index}.mp4`);
@@ -258,29 +261,13 @@ export const generateAd = task({
         }
 
         if (!scene.imageKey) throw new Error(`scene ${index + 1}: approved reference image is required`);
-        const source = await fetch(await presignedGet(scene.imageKey, 60 * 60));
-        if (!source.ok) throw new Error(`scene ${index + 1}: reference image HTTP ${source.status}`);
-        const firstBytes = Buffer.from(await source.arrayBuffer());
-        const sourceType = source.headers.get("content-type")?.split(";", 1)[0] ?? "image/png";
-        const firstContentType = sourceType.startsWith("image/") ? sourceType : "image/png";
-        const firstKey = `creative/${postId}/scene-${index + 1}-a.png`;
-        await putObject(firstKey, firstBytes, firstContentType);
-        const firstUrl = await presignedGet(firstKey);
-
-        const clip = await renderClip({
-          model: CANONICAL_VIDEO_MODEL,
-          imageUrl: firstUrl,
-          imageBytes: firstBytes,
-          imageContentType: firstContentType,
-          motion: scene.motion,
-          durationSeconds: duration,
-          aspectRatio: "9:16",
-        });
-        higgsCreditsUsed += clip.credits;
+        const clip = await renderEngineAdScene({ renderJobId: String(execution!.job.id),
+          index: sceneReceipts.length + 1, prompt: scene.motion, durationSeconds: duration, firstFrame });
+        await convex.action(api.creativeGateway.recordHostedScene, { serviceToken: renderServiceToken,
+          payload: { jobId: execution!.job.id, triggerRunId: ctx.run.id, scene: clip.scene } });
+        sceneReceipts.push(clip.scene);
         const raw = path.join(dir, `raw-${index}.mp4`);
-        const response = await fetch(clip.url);
-        if (!response.ok || !response.body) throw new Error(`clip download HTTP ${response.status}`);
-        await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream), createWriteStream(raw));
+        await writeFile(raw, clip.bytes);
         const norm = path.join(dir, `norm-${index}.mp4`);
         await exec(FFMPEG, [
           "-y", "-i", raw, "-t", String(duration),
@@ -318,21 +305,26 @@ export const generateAd = task({
       await exec(FFMPEG, ["-y", "-i", silent, "-c", "copy", "-movflags", "+faststart", final]);
 
       const r2Key = `creative/${postId}/ad.mp4`;
-      await putObject(r2Key, await readFile(final), "video/mp4");
+      const finalOutput = await putVerifiedAdArtifact(r2Key, await readFile(final));
       const url = await presignedGet(r2Key);
-      await convex.action(api.creativeGateway.completeRender, {
+      await convex.action(api.creativeGateway.completeRenderHosted, {
         serviceToken: renderServiceToken,
         payload: {
           jobId: execution.job.id,
           triggerRunId: ctx.run.id,
           postId,
-          creditsUsed: higgsCreditsUsed,
+          scenes: sceneReceipts,
+          finalOutput,
           slides: [{ r2Key, url, prompt: execution.project.title, role: "video" }],
           qcScore: motionScoreCount > 0 ? Math.round(motionScoreSum / motionScoreCount) : undefined,
         },
       });
-      logger.log("ad ready", { postId, url, variantTag: tag.variantTag, higgsCreditsUsed });
-      return { postId, url, variantTag: tag.variantTag, estimatePence: 0, higgsCreditsUsed };
+      const estimatedCostUsd = sceneReceipts.reduce((sum, scene) => sum + scene.estimatedCostUsd, 0);
+      const admittedCostUsd = sceneReceipts.reduce((sum, scene) => sum + scene.admittedCostUsd, 0);
+      logger.log("ad ready", { postId, url, variantTag: tag.variantTag, estimatedCostUsd, admittedCostUsd,
+        actualProviderCostUsd: null });
+      return { postId, url, variantTag: tag.variantTag, estimatedCostUsd, admittedCostUsd,
+        actualProviderCostUsd: null };
     } catch (err) {
       await failRenderLifecycle(err);
       throw err;
