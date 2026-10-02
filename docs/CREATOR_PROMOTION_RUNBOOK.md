@@ -22,7 +22,7 @@ flowchart LR
   Metrics["Verified performance observations"] --> Plan
   Plan --> Review["Immutable approval snapshot"]
   Review --> Outbox["Idempotent render outbox"]
-  Outbox --> Renderer["Approved Novita / LTX dispatcher"]
+  Outbox --> Renderer["Authenticated Render Engine project API"]
   Renderer --> Publish["Approved publisher action"]
   Publish --> Meta["Direct Meta: publish + verified inbound replies"]
   Publish --> Postiz["Postiz: cross-network scheduling"]
@@ -62,7 +62,7 @@ connection, server-side resolver, and individual approval are present.
   publishes it.
 - Manual entry of verified provider analytics for the learning loop. Entries
   are never auto-summed across incompatible reporting windows.
-- Global Meta, Fanvue, Postiz, Novita, and LTX readiness cards that reveal
+- Global Meta, Fanvue, Postiz, and Render Engine readiness cards that reveal
   configuration gaps without exposing secret values.
 - Postiz is the optional self-hosted, cross-network scheduling executor. It
   is deliberately downstream of Media Engine: a frozen, individually approved
@@ -203,23 +203,19 @@ different persona.
   generic scheduler must not be allowed to infer a recipient or response
   window for the chatbot.
 
-### Novita and LTX
+### Render Engine creator images
 
 - Deploy the `generate-creator-promotion` Trigger task and configure
   `TRIGGER_SECRET_KEY_MEDIA_ENGINE` in the `trigger` vault service.
 - Configure `MEDIA_ENGINE_CONVEX_SERVICE_TOKEN`; it is required for the
   worker to claim or complete a render attempt.
-- For Novita: `NOVITA_API_KEY`, `CREATOR_NOVITA_MODEL`, plus the existing
-  `NOVITA_SERVER_TOKEN_RESOLVER`, `NOVITA_SOURCE_ASSET_RESOLVER`, and
-  `NOVITA_APPROVED_DISPATCHER` implementation identifiers.
-- For LTX: `LTXV_API_KEY`, `CREATOR_LTX_MODEL` (`ltx-2-3-fast` or
-  `ltx-2-3-pro`), `CREATOR_LTX_RESOLUTION` (`1080p`, `1440p`, or `4K`), plus
-  the matching `LTX_*` resolver/dispatcher identifiers.
-- Reference provenance is checked before a short-lived source URL is used.
-  Provider output is immediately copied to `creator-renders/…`; only its
-  controlled storage key and sanitized receipt are persisted.
-- Novita is the image-generation/editing path; LTX is the image-to-video
-  path. Neither provider is invoked from the browser or Convex mutations.
+- Configure `RENDER_ENGINE_PROJECT_API_URL` and the Media Engine project
+  capability in Trigger or the `media-engine` vault service. Enroll the
+  project with the dedicated `media-engine` R2 output bucket.
+- Image, carousel, and static-story content uses the Final Nano Banana Pro
+  profile through the project API. The worker verifies the image and its R2
+  checksum before recording a review candidate. Video and creator LoRA
+  profiles remain unavailable until their exact Render Engine routes qualify.
 
 ### Deployment recovery
 
@@ -251,7 +247,9 @@ production alias.
   version; retries create a separate, capped immutable attempt.
 - An unconfigured renderer records a failed attempt before it can make a
   provider call; blocked/unassigned work cannot be claimed at all.
-- Candidate media is under `creator-renders/`, must be explicitly selected,
+- Candidate media is stored in Media Engine R2 under
+  `projects/media-engine/jobs/…` for new Engine images or
+  `creator-renders/…` for historical renders. It must be explicitly selected
   and still is not a published post.
 - A Postiz action can be requested only for a selected rendered asset, a
   future local schedule, and a connected, capability-approved Postiz channel.

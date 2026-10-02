@@ -1,5 +1,31 @@
 # Media Engine render cutover gate
 
+## Creator promotion images
+
+New image, carousel, and static story plans select `render_engine`. Their
+approval snapshot and Convex action ledger remain the admission authority.
+The Trigger worker sends the frozen safe prompt and up to five approved
+reference images to the authenticated `POST /client/hosted-generations` project
+API with `model: nano-banana-pro`, Final `2K`, and the format's aspect ratio.
+It first reads the deterministic idempotency key through the matching GET
+endpoint and submits at most once. The Render Engine chooses its qualified
+route and writes the output directly into Media Engine's R2 bucket. References
+require the direct Google route; a fallback that ignores them is rejected.
+
+The worker checks the returned project bucket, key, model, MIME type, byte
+count, and SHA-256, then independently reads and hashes the R2 object before
+recording a review candidate. Operator preview uses the same private media
+route as historical candidates. Publishing still needs its separate approval.
+The static readiness indicator does not prove project enrollment, budget,
+credential health, or output quality. Those remain dispatch and human review
+gates. No paid call is made by this repository change.
+
+Historical provider and candidate records remain readable. New direct Novita,
+LTX, and Fal LoRA creator plans are rejected. An already approved legacy render
+job records a clear retired-route failure instead of calling its old provider.
+Video, creator LoRA, and other exact profiles stay unavailable until a
+qualified Render Engine project route can execute their frozen requests.
+
 The current `generate-ad` consumer renders each approved footage beat from the
 client's R2 reference image through Seedance 2.0, for 4–15 seconds at 9:16.
 The frozen Convex plan requires `provider: higgsfield`,

@@ -6,19 +6,8 @@ function triggerRuntimeEnvironment(): Record<string, string> | undefined {
     "VAULT_ACCESS_TOKEN",
     "FORM_SEVEN_OUTBOX_DRAIN_URL",
     "FORM_SEVEN_OUTBOX_DRAIN_TOKEN",
-    // Non-secret creator-renderer configuration only. Provider API keys stay
-    // in the vault and are resolved inside the dedicated worker.
-    "NOVITA_SERVER_TOKEN_RESOLVER",
-    "NOVITA_SOURCE_ASSET_RESOLVER",
-    "NOVITA_APPROVED_DISPATCHER",
-    "LTX_SERVER_TOKEN_RESOLVER",
-    "LTX_SOURCE_ASSET_RESOLVER",
-    "LTX_APPROVED_DISPATCHER",
-    // Fal native Z-Image Turbo LoRA render integration identifiers. These are
-    // non-secret gates; FAL_KEY stays server-only in the Fal vault.
-    "FAL_SERVER_TOKEN_RESOLVER",
-    "FAL_SOURCE_ASSET_RESOLVER",
-    "FAL_APPROVED_DISPATCHER",
+    // Creator images use only the authenticated Render Engine project API.
+    "RENDER_ENGINE_PROJECT_API_URL",
     // Meta dispatch accepts only existing official Professional-account
     // connections. Its access token is resolved inside the worker from the
     // server vault; neither token nor OAuth client secret is synced to Trigger.
@@ -33,9 +22,6 @@ function triggerRuntimeEnvironment(): Record<string, string> | undefined {
     "POSTIZ_APPROVED_DISPATCHER",
     "POSTIZ_API_KEY_RESOLVER",
     "CREATOR_POSTIZ_SCHEDULE_ENABLED",
-    "CREATOR_NOVITA_MODEL",
-    "CREATOR_LTX_MODEL",
-    "CREATOR_LTX_RESOLUTION",
     // Explicit non-secret production gate for the paid Fal LoRA trainer.
     // FAL_KEY remains server-only in the `fal` vault and is never synced.
     "CREATOR_LORA_TRAINING_ENABLED",

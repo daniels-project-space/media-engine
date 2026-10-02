@@ -118,6 +118,22 @@ export const completeRender = action({
   },
 });
 
+export const completeRenderHosted = action({
+  args: { ...serviceArgs, payload: v.any() },
+  handler: async (ctx, { serviceToken, payload }): Promise<unknown> => {
+    requireServiceToken(serviceToken);
+    return await ctx.runMutation(internal.creative.completeRenderHosted, payload);
+  },
+});
+
+export const recordHostedScene = action({
+  args: { ...serviceArgs, payload: v.any() },
+  handler: async (ctx, { serviceToken, payload }): Promise<unknown> => {
+    requireServiceToken(serviceToken);
+    return await ctx.runMutation(internal.creative.recordHostedScene, payload);
+  },
+});
+
 export const markDelivered = action({
   args: { ...serviceArgs, payload: v.any() },
   handler: async (ctx, { serviceToken, payload }): Promise<unknown> => {

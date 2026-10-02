@@ -42,7 +42,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ key: string
   // above, but need the stable media proxy so a selected review candidate can
   // appear in the promotion desk without leaking a provider's temporary URL.
   const allowed = ["creative/", "posts/", "demo/", "buildout/", "reference/", "creator-renders/"];
-  if (!allowed.some((prefix) => objectKey.startsWith(prefix))) {
+  const engineImage = /^projects\/media-engine\/jobs\/hosted-[a-f0-9]{32}\/generation-[a-f0-9]{32}\/[a-f0-9]{64}\/generation\.(?:png|jpg|webp)$/.test(objectKey);
+  if (!engineImage && !allowed.some((prefix) => objectKey.startsWith(prefix))) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   try {

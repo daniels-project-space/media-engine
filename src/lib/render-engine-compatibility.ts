@@ -4,17 +4,22 @@
  * reference image into an unrelated text-to-video render.
  */
 export const RENDER_ENGINE_PROJECT_VIDEO = {
-  path: "/client/h3-jobs",
-  profileId: "minimax-h3",
-  mode: "text-to-video",
-  acceptsReferenceImage: false,
-  durationSeconds: 5,
+  path: "/client/hosted-generations",
+  profileId: "seedance-2.5-i2v",
+  mode: "first-frame-image-to-video",
+  acceptsReferenceImage: true,
+  durationSeconds: "4-15",
 } as const;
 
 export const RENDER_ENGINE_AD_INCOMPATIBLE_MESSAGE =
-  "Render Engine GPU jobs currently accept five-second MiniMax H3 text-to-video prompts, and its hosted Seedance routes are also text-to-video; approved Media Engine ads require the client's reference image, Seedance 2.0, and 4–15 second image-to-video clips. No render was submitted.";
+  "Render Engine project I2V is unavailable without an exact HTTPS project API origin; no render was admitted.";
 
 /** Called at both public admission and worker execution boundaries. */
 export function assertRenderEngineCanRenderApprovedAd(): void {
+  const raw = process.env.RENDER_ENGINE_PROJECT_API_URL?.trim();
+  try {
+    const url = raw ? new URL(raw) : null;
+    if (url?.protocol === "https:" && url.pathname === "/" && !url.search && !url.hash && !url.username && !url.password) return;
+  } catch { /* malformed origin fails closed */ }
   throw new Error(RENDER_ENGINE_AD_INCOMPATIBLE_MESSAGE);
 }

@@ -183,6 +183,7 @@ const funnelEventType = v.union(
   v.literal("other"),
 );
 const renderProvider = v.union(
+  v.literal("render_engine"),
   v.literal("novita"),
   v.literal("ltx"),
   // Only an explicitly snapshotted, ready creator model may use this path.
@@ -485,7 +486,7 @@ function contentApprovalSnapshot(content: Doc<"creatorContentItems">, reviewVers
 }
 
 type CreatorRenderRequestDetails = {
-  provider: "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned";
+  provider: "render_engine" | "novita" | "ltx" | "fal_z_image_turbo_lora" | "unassigned";
   scheduledAt: number;
   referenceCount: number;
 };
@@ -519,7 +520,7 @@ function creatorRenderRequestDetails(requestSnapshot: unknown): CreatorRenderReq
   const content = asRecord(approvalSnapshot.content, "creator render content snapshot");
   const promptSnapshot = asRecord(content.promptSnapshot, "creator render prompt snapshot");
   const provider = promptSnapshot.provider;
-  if (provider !== "novita" && provider !== "ltx" && provider !== "fal_z_image_turbo_lora" && provider !== "unassigned") {
+  if (provider !== "render_engine" && provider !== "novita" && provider !== "ltx" && provider !== "fal_z_image_turbo_lora" && provider !== "unassigned") {
     throw new Error("creator render request has an unsupported provider");
   }
   const loraSnapshot = promptSnapshot.loraSnapshot;
@@ -606,9 +607,9 @@ function assertCreatorRenderRequestIntegrity(job: Doc<"creatorRenderJobs">): Cre
 
 function assertControlledCreatorRenderAssetKey(value: string, label: string): void {
   const suffix = value.slice("creator-renders/".length);
+  const engineKey = /^projects\/media-engine\/jobs\/hosted-[a-f0-9]{32}\/generation-[a-f0-9]{32}\/[a-f0-9]{64}\/generation\.(?:png|jpg|webp)$/.test(value);
   if (
-    !value.startsWith("creator-renders/") ||
-    !suffix ||
+    !(engineKey || (value.startsWith("creator-renders/") && suffix)) ||
     value.length > 1_024 ||
     value.includes("..") ||
     value.includes("\\") ||
@@ -2764,31 +2765,6 @@ async function requireLoRATrainingAction(
   return action;
 }
 
-async function requireActiveCreatorLoRAModel(
-  ctx: MutationCtx,
-  creator: Doc<"creatorProfiles">,
-  modelId: Id<"creatorLoraModels">,
-) {
-  const model = await ctx.db.get(modelId);
-  if (
-    !model ||
-    model.organizationId !== creator.organizationId ||
-    model.creatorId !== creator._id ||
-    model.status !== "active" ||
-    creator.activeLoraModelId !== model._id
-  ) {
-    throw new Error("content may use only this creator's explicitly active LoRA model");
-  }
-  const job = await ctx.db.get(model.trainingJobId);
-  if (!job || job.status !== "succeeded" || job.modelId !== model._id || job.creatorId !== creator._id) {
-    throw new Error("active creator LoRA model is not bound to a successful training job");
-  }
-  assertLoRATrainingJobIntegrity(job);
-  assertControlledCreatorLoraArtifactKey(model.modelArtifactKey, "active creator LoRA model artifact");
-  if (model.modelArtifactUrl) normalizePublicArtifactUrl(model.modelArtifactUrl, "active creator LoRA model artifact URL");
-  return { model, job };
-}
-
 async function ensureAccountDailyLimit(
   ctx: MutationCtx,
   account: Doc<"creatorSocialAccounts">,
@@ -4211,20 +4187,17 @@ export const createContentPlan = internalMutation({
     }
     const referenceAssets = await requireReferenceAssetsForCreator(ctx, creator, args.referenceAssetIds);
     const personaRevision = await ensureActivePersonaRevision(ctx, creator);
-    const provider = args.renderProvider ?? "unassigned";
-    const activeLora = args.loraModelId ? await requireActiveCreatorLoRAModel(ctx, creator, args.loraModelId) : undefined;
-    if (provider === "fal_z_image_turbo_lora" && !activeLora) {
-      throw new Error("the Fal Z-Image Turbo LoRA provider requires an explicitly active creator LoRA model");
+    const provider = args.renderProvider ?? (["image", "carousel", "story"].includes(args.format) ? "render_engine" : "unassigned");
+    if (provider === "novita" || provider === "ltx" || provider === "fal_z_image_turbo_lora") {
+      throw new Error("Direct renderer routes are retired; use Render Engine for new approved images");
     }
-    if (provider !== "fal_z_image_turbo_lora" && activeLora) {
-      throw new Error("an active creator LoRA model may only be snapshotted with the Fal Z-Image Turbo LoRA provider");
+    if (provider === "render_engine" && !["image", "carousel", "story"].includes(args.format)) {
+      throw new Error("Render Engine image route does not support this content format");
     }
-    // The first native Fal endpoint is text-to-image only. Rejecting an
-    // attached reference set here prevents a future dispatcher from silently
-    // ignoring a governed likeness/style reference.
-    if (provider === "fal_z_image_turbo_lora" && referenceAssets.length) {
-      throw new Error("the Fal Z-Image Turbo LoRA provider does not support per-post reference assets yet");
+    if (provider === "render_engine" && referenceAssets.length > 5) {
+      throw new Error("Render Engine image route accepts at most five approved reference images");
     }
+    if (args.loraModelId) throw new Error("The approved creator LoRA profile is not supported by Render Engine yet");
     const now = Date.now();
     return await ctx.db.insert("creatorContentItems", {
       organizationId: creator.organizationId,
@@ -4251,17 +4224,7 @@ export const createContentPlan = internalMutation({
         referenceNotes: normalizeOptionalText(args.referenceNotes ?? personaRevision.snapshot.visualSystem.referenceNotes, "reference notes"),
         provider,
         version: personaRevision.snapshot.visualSystem.version,
-        loraSnapshot: activeLora
-          ? {
-              modelId: activeLora.model._id,
-              trainingJobId: activeLora.job._id,
-              targetModel: activeLora.model.targetModel,
-              triggerWord: activeLora.model.triggerWord,
-              modelArtifactKey: activeLora.model.modelArtifactKey,
-              modelArtifactUrl: activeLora.model.modelArtifactUrl,
-              datasetManifestHash: activeLora.model.datasetManifestHash,
-          }
-          : undefined,
+        loraSnapshot: undefined,
         personaSnapshot: {
           revisionId: personaRevision._id,
           revisionNumber: personaRevision.revisionNumber,

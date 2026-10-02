@@ -202,7 +202,7 @@ export default function OperationsOverview() {
 
   const summaryCards = [
     { label: "Needs approval", value: overview.counts.needsApproval, href: "/work", tone: "text-amber", description: "Plans and drafts waiting for your decision" },
-    { label: "Active renders", value: overview.counts.activeRenders, href: "/work", tone: "text-scope", description: "Queued or running Higgsfield jobs" },
+    { label: "Active renders", value: overview.counts.activeRenders, href: "/work", tone: "text-scope", description: "Queued or running approved jobs" },
     { label: "Ready to deliver", value: overview.counts.readyDelivery, href: "/work", tone: "text-signal", description: "Final client work ready to hand over" },
     { label: "Failed", value: overview.counts.failed, href: "/work", tone: overview.counts.failed > 0 ? "text-onair" : "text-ink-faint", description: "Jobs that need a real fix before retrying" },
   ];
@@ -284,11 +284,11 @@ export default function OperationsOverview() {
 
         <aside className="border border-line bg-panel p-4 sm:p-5">
           <h2 className="display text-xl font-bold">Generation policy</h2>
-          <p className="mt-2 text-sm leading-relaxed text-ink-dim">Client renders are approval-gated and use only the configured Higgsfield subscription connection.</p>
+          <p className="mt-2 text-sm leading-relaxed text-ink-dim">Client renders require an approved plan and use the project-owned Render Engine hosted budget.</p>
           <dl className="mt-4 space-y-3 border-t border-line pt-4 text-xs">
-            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Provider</dt><dd className="text-right text-ink">Higgsfield</dd></div>
-            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Model</dt><dd className="text-right text-ink">Seedance 2.0</dd></div>
-            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Credits</dt><dd className="text-right text-ink">Subscription only</dd></div>
+            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Provider</dt><dd className="text-right text-ink">Render Engine</dd></div>
+            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Model</dt><dd className="text-right text-ink">Seedance 2.5 I2V</dd></div>
+            <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Budget</dt><dd className="text-right text-ink">Project hosted budget</dd></div>
             <div className="flex items-start justify-between gap-4"><dt className="text-ink-faint">Fallback</dt><dd className="text-right text-amber">Fail closed</dd></div>
           </dl>
           <Link href="/settings" className="mt-5 inline-block text-xs font-semibold text-signal hover:underline">Review connections and safeguards →</Link>

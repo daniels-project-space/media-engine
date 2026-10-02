@@ -53,8 +53,7 @@ export default function Settings() {
           <div>
             <h2 className="mb-1 text-[11px] tracking-[0.3em] text-signal">HIGGSFIELD · SEEDANCE 2.0</h2>
             <p className="max-w-2xl text-[11px] leading-relaxed text-ink-faint">
-              This is the only approved render connection: a separate cloud OAuth session, Higgsfield subscription credits,
-              Seedance 2.0, and no paid fallback provider.
+              This legacy OAuth session is retained for historical records. New approved client video plans use the project-owned Render Engine Seedance 2.5 I2V route and its hosted budget.
             </p>
           </div>
           <span className={`border px-2 py-1 text-[10px] tracking-widest ${services === null ? "border-line-2 text-ink-faint" : linked ? "border-signal/60 text-signal" : "border-onair/60 text-onair"}`}>
@@ -64,9 +63,9 @@ export default function Settings() {
 
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <div className="border border-line bg-panel-2/40 p-4">
-            <h3 className="mb-2 text-[10px] tracking-[0.18em] text-ink-dim">CONNECT PRODUCTION RENDERER</h3>
+            <h3 className="mb-2 text-[10px] tracking-[0.18em] text-ink-dim">LEGACY OAUTH CONNECTION</h3>
             <p className="text-[11px] leading-relaxed text-ink-dim">
-              Your desktop MCP login is never copied here. This link creates the cloud renderer&apos;s own rotating Vault session.
+              Existing Higgsfield records can still be inspected. New client video does not use this OAuth connection.
             </p>
             <a href="/api/auth/higgsfield/start" className="mt-3 inline-block text-xs font-semibold text-signal hover:underline">
               Connect Higgsfield to this production app →
@@ -75,8 +74,7 @@ export default function Settings() {
           <div className="border border-line bg-panel-2/40 p-4">
             <h3 className="mb-2 text-[10px] tracking-[0.18em] text-ink-dim">RENDER RELEASE GATE</h3>
             <p className="text-[11px] leading-relaxed text-ink-dim">
-              Rendering remains disabled until the authenticated MCP tool manifest is inspected and the exact Seedance 2.0 schema is allowlisted.
-              Listing the manifest is non-billable.
+              The legacy Higgsfield adapter remains closed. Engine video requires an approved project plan and verifies the first frame, output hash, and budget admission.
             </p>
             {linked && (
               <a href="/api/auth/higgsfield/tools" className="mt-3 inline-block text-xs font-semibold text-signal hover:underline">

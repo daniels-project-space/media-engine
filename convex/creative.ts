@@ -17,7 +17,7 @@ const DEFAULT_MEDIA_ENGINE_ORGANIZATION = {
 };
 const PLAN_APPROVAL_RESOURCE_TYPE = "ad_project_plan";
 const PLAN_APPROVAL_ACTION_KIND = "render_plan_approval";
-const RENDER_ACTION_KIND = "higgsfield_seedance_render";
+const RENDER_ACTION_KIND = "render_engine_seedance_i2v_render";
 const MODERATE_RISK = "moderate" as const;
 
 const shot = v.object({
@@ -46,13 +46,14 @@ const narrative = v.object({
 });
 
 const renderPlan = v.object({
-  provider: v.literal("higgsfield"),
-  model: v.literal("seedance_2_0"),
-  creditSource: v.literal("higgsfield_subscription"),
+  provider: v.union(v.literal("higgsfield"), v.literal("render-engine")),
+  model: v.union(v.literal("seedance_2_0"), v.literal("seedance-2.5-i2v")),
+  creditSource: v.union(v.literal("higgsfield_subscription"), v.literal("engine_hosted_budget")),
   aspectRatio: v.union(v.literal("9:16"), v.literal("16:9"), v.literal("1:1")),
   durationSeconds: v.number(),
   audioStrategy: v.string(),
   referencePolicy: v.string(),
+  referenceFrameSha256: v.optional(v.string()),
   fallbackPolicy: v.literal("fail_closed"),
   providerInstructions: v.array(v.string()),
 });
@@ -371,7 +372,7 @@ export const persistPlan = internalMutation({
     await ctx.db.insert("projectMessages", {
       projectId: args.projectId,
       role: "system",
-      body: `Narrative, storyboard and Seedance 2.0 render plan v${storyboardVersion} are ready for approval.`,
+      body: `Narrative, storyboard and ${args.renderPlan.model} render plan v${storyboardVersion} are ready for approval.`,
       status: "sent",
       createdAt: now,
     });
@@ -427,7 +428,7 @@ export const approvePlan = internalMutation({
     await ctx.db.insert("projectMessages", {
       projectId,
       role: "operator",
-      body: `Approved Seedance 2.0 render plan v${project.storyboardVersion}.`,
+      body: `Approved ${project.renderPlan.model} render plan v${project.storyboardVersion}.`,
       status: "sent",
       createdAt: now,
     });
@@ -444,6 +445,11 @@ export const startRender = internalMutation({
     if (!project) throw new Error("project not found");
     if (
       !project.renderPlan ||
+      project.renderPlan.provider !== "render-engine" ||
+      project.renderPlan.model !== "seedance-2.5-i2v" ||
+      project.renderPlan.creditSource !== "engine_hosted_budget" ||
+      project.renderPlan.aspectRatio !== "9:16" ||
+      !/^[a-f0-9]{64}$/.test(project.renderPlan.referenceFrameSha256 ?? "") ||
       !project.storyboardVersion ||
       project.approvedPlanVersion !== project.storyboardVersion ||
       !(project.approvedShots?.length)
@@ -459,16 +465,17 @@ export const startRender = internalMutation({
       }
     }
     const jobs = await ctx.db.query("renderJobs").withIndex("by_project", (q) => q.eq("projectId", projectId)).collect();
-    const active = jobs.find((job) => job.kind === kind && job.planVersion === project.storyboardVersion && (job.status === "queued" || job.status === "running"));
-    // A duplicate click after the project has moved into drafting/rendering
-    // returns the admitted job instead of producing a second paid render.
-    if (active) return { jobId: active._id, reused: true };
+    const matching = jobs.filter((job) => job.kind === kind && job.planVersion === project.storyboardVersion);
+    const active = matching.find((job) => job.status === "queued" || job.status === "running");
+    // An already claimed worker owns the only paid execution for this plan.
+    if (active?.status === "running") return { jobId: active._id, reused: true };
+    const failed = matching.filter((job) => job.status === "failed");
+    if (failed.length > 1) throw new Error("multiple failed render attempts require operator reconciliation");
+    const resume = active ?? failed[0];
     const expectedStage = kind === "draft" ? "script_ready" : "draft_ready";
-    const failedSameKind = jobs.some(
-      (job) => job.kind === kind && job.planVersion === project.storyboardVersion && job.status === "failed",
-    );
-    const retryEligible = project.stage === "failed" && failedSameKind && (kind === "draft" || Boolean(project.draftPostId));
-    if (project.stage !== expectedStage && !retryEligible) {
+    const retryEligible = project.stage === "failed" && resume?.status === "failed" && (kind === "draft" || Boolean(project.draftPostId));
+    const queuedEligible = project.stage === expectedRenderStage(kind) && resume?.status === "queued";
+    if (project.stage !== expectedStage && !retryEligible && !queuedEligible) {
       throw new Error(kind === "draft" ? "draft render is not eligible" : "final render needs an approved draft first");
     }
     const attempt = jobs.filter((job) => job.kind === kind && job.planVersion === project.storyboardVersion).length + 1;
@@ -485,6 +492,34 @@ export const startRender = internalMutation({
     if (!approval || !hasMatchingSnapshot(approval.snapshot, approval.snapshotHash, approvalSnapshot)) {
       throw new Error("the current render plan must have a matching approved control-plane record");
     }
+    if (resume) {
+      const wasFailed = resume.status === "failed";
+      const action = resume.actionId ? await ctx.db.get(resume.actionId) : null;
+      const actionPayload = {
+        resourceType: PLAN_APPROVAL_RESOURCE_TYPE, resourceId: String(projectId), planVersion: project.storyboardVersion,
+        renderKind: kind, provider: project.renderPlan.provider, model: project.renderPlan.model,
+        creditSource: project.renderPlan.creditSource,
+      };
+      if (resume.provider !== project.renderPlan.provider || resume.model !== project.renderPlan.model ||
+          resume.creditSource !== project.renderPlan.creditSource ||
+          !resume.approvalId || resume.approvalId !== approval._id || !action ||
+          action.organizationId !== organizationId || action.approvalId !== approval._id ||
+          action.renderJobId !== resume._id || action.actionKind !== RENDER_ACTION_KIND ||
+          action.idempotencyKey !== resume.idempotencyKey ||
+          !hasMatchingSnapshot(action.payloadSnapshot, action.payloadHash, actionPayload) ||
+          action.status !== (wasFailed ? "failed" : "queued")) {
+        throw new Error("prior render action needs operator reconciliation before resume");
+      }
+      // Rotate the private dispatch capability even after a lost Trigger ACK.
+      // A late old worker and the replacement cannot both claim this job.
+      await ctx.db.patch(resume._id, { status: "queued", dispatchToken,
+        workerRunId: undefined, triggerRunId: undefined, error: undefined, updatedAt: now });
+      if (wasFailed) {
+        await ctx.db.patch(action._id, { status: "queued", triggerRunId: undefined, error: undefined, updatedAt: now });
+      }
+      await ctx.db.patch(projectId, { stage: expectedRenderStage(kind), error: undefined, lastActivityAt: now });
+      return { jobId: resume._id, reused: false, resumed: true };
+    }
     const idempotencyKey = `${projectId}:${project.storyboardVersion}:${kind}:${attempt}`;
     // Keep the ledger payload deliberately metadata-only. The immutable plan
     // snapshot remains on the approval record; the action ledger must not
@@ -494,9 +529,9 @@ export const startRender = internalMutation({
       resourceId: String(projectId),
       planVersion: project.storyboardVersion,
       renderKind: kind,
-      provider: "higgsfield",
-      model: "seedance_2_0",
-      creditSource: "higgsfield_subscription",
+      provider: project.renderPlan.provider,
+      model: project.renderPlan.model,
+      creditSource: project.renderPlan.creditSource,
     };
     // Insert the control-plane action before the durable render job. Convex
     // mutations are atomic, so a failure cannot leave one record without the
@@ -520,9 +555,9 @@ export const startRender = internalMutation({
       approvalId: approval._id,
       actionId,
       idempotencyKey,
-      provider: "higgsfield",
-      model: "seedance_2_0",
-      creditSource: "higgsfield_subscription",
+      provider: project.renderPlan.provider,
+      model: project.renderPlan.model,
+      creditSource: project.renderPlan.creditSource,
       status: "queued",
       dispatchToken,
       createdAt: now,
@@ -559,9 +594,11 @@ export const claimRenderExecution = internalMutation({
     const order = project.orderId ? await ctx.db.get(project.orderId) : null;
     if (
       !project.renderPlan ||
-      project.renderPlan.provider !== "higgsfield" ||
-      project.renderPlan.model !== "seedance_2_0" ||
-      project.renderPlan.creditSource !== "higgsfield_subscription" ||
+      project.renderPlan.provider !== "render-engine" ||
+      project.renderPlan.model !== "seedance-2.5-i2v" ||
+      project.renderPlan.creditSource !== "engine_hosted_budget" ||
+      project.renderPlan.aspectRatio !== "9:16" ||
+      !/^[a-f0-9]{64}$/.test(project.renderPlan.referenceFrameSha256 ?? "") ||
       project.renderPlan.fallbackPolicy !== "fail_closed" ||
       project.storyboardVersion !== job.planVersion ||
       project.approvedPlanVersion !== job.planVersion ||
@@ -569,7 +606,7 @@ export const claimRenderExecution = internalMutation({
       !(project.approvedShots?.length) ||
       project.stage !== expectedRenderStage(job.kind)
     ) {
-      throw new Error("render job no longer matches an approved Seedance 2.0 plan");
+      throw new Error("render job no longer matches an approved Render Engine Seedance I2V plan");
     }
     assertClientReferenceKey(order?.productImageKey);
     for (const item of project.approvedShots) {
@@ -714,6 +751,9 @@ export const completeRender = internalMutation({
     if (!job || job.status !== "running" || job.workerRunId !== triggerRunId || job.postId !== postId) {
       throw new Error("only the claimed render worker can complete this job");
     }
+    if (job.provider !== "higgsfield" || job.model !== "seedance_2_0") {
+      throw new Error("legacy settlement cannot complete a Render Engine job");
+    }
     const [project, post] = await Promise.all([ctx.db.get(job.projectId), ctx.db.get(postId)]);
     if (!project) throw new Error("project not found");
     if (!post || post.renderJobId !== jobId) throw new Error("render result does not belong to this job");
@@ -757,6 +797,107 @@ export const completeRender = internalMutation({
       status: "sent",
       createdAt: now,
     });
+  },
+});
+
+const hostedScene = v.object({ index: v.number(), idempotencyKey: v.string(), engineJobId: v.string(),
+  providerRequestId: v.string(), estimatedCostUsd: v.number(), admittedCostUsd: v.number(),
+  outputKey: v.string(), outputSha256: v.string(), outputBytes: v.number() });
+
+function validHostedScene(scene: { index: number; idempotencyKey: string; engineJobId: string;
+  providerRequestId: string; estimatedCostUsd: number; admittedCostUsd: number;
+  outputKey: string; outputSha256: string; outputBytes: number }, jobId: string): boolean {
+  return Number.isSafeInteger(scene.index) && scene.index >= 0 && scene.index < 6 &&
+    scene.idempotencyKey === `${jobId}:scene:${scene.index + 1}` &&
+    /^hosted-[a-f0-9]{32}$/.test(scene.engineJobId) &&
+    /^[A-Za-z0-9_-]{1,200}$/.test(scene.providerRequestId) &&
+    scene.outputKey.startsWith(`projects/media-engine/jobs/${scene.engineJobId}/`) &&
+    scene.outputKey.endsWith("/generation.mp4") && /^[a-f0-9]{64}$/.test(scene.outputSha256) &&
+    Number.isSafeInteger(scene.outputBytes) && scene.outputBytes > 0 &&
+    Number.isFinite(scene.estimatedCostUsd) && scene.estimatedCostUsd > 0 &&
+    Number.isFinite(scene.admittedCostUsd) && scene.admittedCostUsd > 0;
+}
+
+/** Persist partial paid admissions even when a later shot or QC fails. */
+export const recordHostedScene = internalMutation({
+  args: { jobId: v.id("renderJobs"), triggerRunId: v.string(), scene: hostedScene },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.status !== "running" || job.workerRunId !== args.triggerRunId ||
+        job.provider !== "render-engine" || job.model !== "seedance-2.5-i2v" ||
+        !validHostedScene(args.scene, String(args.jobId))) throw new Error("Hosted scene claim differs");
+    const existing = job.hostedSceneReceipts ?? [];
+    if (args.scene.index < existing.length) {
+      if (JSON.stringify(existing[args.scene.index]) !== JSON.stringify(args.scene))
+        throw new Error("Hosted scene receipt changed after admission");
+      return existing.length;
+    }
+    if (args.scene.index !== existing.length) throw new Error("Hosted scenes must settle in approved order");
+    const next = [...existing, args.scene];
+    await ctx.db.patch(job._id, { hostedSceneReceipts: next,
+      hostedEstimatedCostUsd: next.reduce((sum, scene) => sum + scene.estimatedCostUsd, 0),
+      hostedAdmittedCostUsd: next.reduce((sum, scene) => sum + scene.admittedCostUsd, 0),
+      updatedAt: Date.now() });
+    return next.length;
+  },
+});
+
+/** Settle the owned ad only from completed Engine objects and its budget ledger. */
+export const completeRenderHosted = internalMutation({
+  args: {
+    jobId: v.id("renderJobs"), triggerRunId: v.string(), postId: v.id("posts"),
+    scenes: v.array(hostedScene),
+    finalOutput: v.object({ key: v.string(), sha256: v.string(), bytes: v.number() }),
+    slides: v.array(v.object({ r2Key: v.optional(v.string()), url: v.optional(v.string()), prompt: v.string(), role: v.optional(v.string()) })),
+    qcScore: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.status !== "running" || job.workerRunId !== args.triggerRunId || job.postId !== args.postId ||
+        job.provider !== "render-engine" || job.model !== "seedance-2.5-i2v" || job.creditSource !== "engine_hosted_budget")
+      throw new Error("Only the claimed Render Engine worker can settle this ad");
+    const [project, post] = await Promise.all([ctx.db.get(job.projectId), ctx.db.get(args.postId)]);
+    if (!project || !post || post.renderJobId !== job._id || project.renderPlan?.provider !== "render-engine" ||
+        project.renderPlan.model !== "seedance-2.5-i2v" || project.renderPlan.creditSource !== "engine_hosted_budget" ||
+        !/^[a-f0-9]{64}$/.test(project.renderPlan.referenceFrameSha256 ?? "") ||
+        project.approvedPlanVersion !== job.planVersion || project.storyboardVersion !== job.planVersion)
+      throw new Error("Rendered ad no longer matches the approved project plan");
+    const action = job.actionId ? await ctx.db.get(job.actionId) : null;
+    if (!action || action.renderJobId !== job._id || action.status !== "running" || action.triggerRunId !== args.triggerRunId)
+      throw new Error("Render Engine action ledger is not owned by this worker");
+    const i2vCount = project.approvedShots?.filter(shot => shot.kind !== "card").length ?? 0;
+    if (i2vCount < 1 || args.scenes.length !== i2vCount || args.scenes.length > 6 ||
+        JSON.stringify(job.hostedSceneReceipts ?? []) !== JSON.stringify(args.scenes) ||
+        args.finalOutput.key !== `creative/${args.postId}/ad.mp4` ||
+        !/^[a-f0-9]{64}$/.test(args.finalOutput.sha256) ||
+        !Number.isSafeInteger(args.finalOutput.bytes) || args.finalOutput.bytes < 1 ||
+        args.slides.length !== 1 || args.slides[0].r2Key !== args.finalOutput.key ||
+        (args.qcScore !== undefined && (!Number.isFinite(args.qcScore) || args.qcScore < 0 || args.qcScore > 100)))
+      throw new Error("Render Engine final artifact or shot count differs");
+    for (const [ordinal, scene] of args.scenes.entries()) {
+      if (scene.index !== ordinal || !validHostedScene(scene, String(args.jobId)))
+        throw new Error("Render Engine scene receipt or cost admission differs");
+    }
+    const estimatedCostUsd = args.scenes.reduce((sum, scene) => sum + scene.estimatedCostUsd, 0);
+    const admittedCostUsd = args.scenes.reduce((sum, scene) => sum + scene.admittedCostUsd, 0);
+    const now = Date.now();
+    await ctx.db.patch(post._id, { slides: args.slides, status: "ready", qcScore: args.qcScore, error: undefined });
+    await ctx.db.patch(job._id, { status: "succeeded", hostedSceneReceipts: args.scenes,
+      hostedEstimatedCostUsd: estimatedCostUsd, hostedAdmittedCostUsd: admittedCostUsd,
+      finalOutputSha256: args.finalOutput.sha256, finalOutputBytes: args.finalOutput.bytes,
+      error: undefined, updatedAt: now });
+    await ctx.db.patch(action._id, { status: "succeeded", triggerRunId: args.triggerRunId,
+      providerReceipt: { provider: "render-engine", model: "seedance-2.5-i2v", creditSource: "engine_hosted_budget",
+        estimatedCostUsd, admittedCostUsd, actualCostUsd: null, scenes: args.scenes,
+        finalOutput: args.finalOutput, renderJobId: String(job._id), postId: String(post._id) }, updatedAt: now });
+    if (job.kind === "draft") await ctx.db.patch(project._id, { draftPostId: post._id, stage: "draft_ready", lastActivityAt: now });
+    else {
+      await ctx.db.patch(project._id, { finalPostId: post._id, stage: "final_ready", lastActivityAt: now });
+      if (project.orderId) await ctx.db.patch(project.orderId, { deliveryPostId: post._id, status: "ready_for_delivery" });
+    }
+    await ctx.db.insert("projectMessages", { projectId: project._id, role: "system",
+      body: `${job.kind === "draft" ? "Draft" : "Final"} render completed through project-owned Seedance 2.5 I2V. ${admittedCostUsd.toFixed(2)} USD admitted against the Engine hosted budget; actual provider charge awaits reconciliation.`,
+      status: "sent", createdAt: now });
   },
 });
 

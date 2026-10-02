@@ -14,7 +14,7 @@ export type CreatorAccountReadinessProviderHealth = {
 };
 
 export type CreatorAccountReadinessRendererHealth = {
-  provider: "novita" | "ltx" | "fal_z_image_turbo_lora";
+  provider: "render_engine" | "novita" | "ltx" | "fal_z_image_turbo_lora";
   status: "ready" | "not_configured" | "misconfigured";
   canResolveServerCredentials: boolean;
   canResolveApprovedSourceAssets: boolean;

@@ -44,13 +44,14 @@ const projectNarrative = v.object({
 });
 
 const projectRenderPlan = v.object({
-  provider: v.literal("higgsfield"),
-  model: v.literal("seedance_2_0"),
-  creditSource: v.literal("higgsfield_subscription"),
+  provider: v.union(v.literal("higgsfield"), v.literal("render-engine")),
+  model: v.union(v.literal("seedance_2_0"), v.literal("seedance-2.5-i2v")),
+  creditSource: v.union(v.literal("higgsfield_subscription"), v.literal("engine_hosted_budget")),
   aspectRatio: v.union(v.literal("9:16"), v.literal("16:9"), v.literal("1:1")),
   durationSeconds: v.number(),
   audioStrategy: v.string(),
   referencePolicy: v.string(),
+  referenceFrameSha256: v.optional(v.string()),
   fallbackPolicy: v.literal("fail_closed"),
   providerInstructions: v.array(v.string()),
 });
@@ -355,9 +356,9 @@ export default defineSchema({
     planVersion: v.number(),
     kind: v.union(v.literal("draft"), v.literal("final")),
     idempotencyKey: v.string(),
-    provider: v.literal("higgsfield"),
-    model: v.literal("seedance_2_0"),
-    creditSource: v.literal("higgsfield_subscription"),
+    provider: v.union(v.literal("higgsfield"), v.literal("render-engine")),
+    model: v.union(v.literal("seedance_2_0"), v.literal("seedance-2.5-i2v")),
+    creditSource: v.union(v.literal("higgsfield_subscription"), v.literal("engine_hosted_budget")),
     status: v.union(v.literal("queued"), v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("cancelled")),
     // One 32-byte server-generated dispatch capability is consumed by the
     // Trigger worker before it may read the approved plan or create media.
@@ -366,6 +367,12 @@ export default defineSchema({
     workerRunId: v.optional(v.string()),
     postId: v.optional(v.id("posts")),
     creditsUsed: v.optional(v.number()),
+    hostedEstimatedCostUsd: v.optional(v.number()),
+    hostedAdmittedCostUsd: v.optional(v.number()),
+    hostedSceneReceipts: v.optional(v.array(v.object({ index: v.number(), idempotencyKey: v.string(),
+      engineJobId: v.string(), providerRequestId: v.string(), estimatedCostUsd: v.number(),
+      admittedCostUsd: v.number(), outputKey: v.string(), outputSha256: v.string(), outputBytes: v.number() }))),
+    finalOutputSha256: v.optional(v.string()), finalOutputBytes: v.optional(v.number()),
     error: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -1464,6 +1471,7 @@ export default defineSchema({
       promptStyle: v.optional(v.string()),
       referenceNotes: v.optional(v.string()),
       provider: v.union(
+        v.literal("render_engine"),
         v.literal("novita"),
         v.literal("ltx"),
         // Explicitly selected only after a ready creator LoRA is snapshotted
@@ -1514,6 +1522,7 @@ export default defineSchema({
     referenceAssetKeys: v.optional(v.array(v.string())),
     renderProvider: v.optional(
       v.union(
+        v.literal("render_engine"),
         v.literal("novita"),
         v.literal("ltx"),
         v.literal("fal_z_image_turbo_lora"),
@@ -1545,6 +1554,7 @@ export default defineSchema({
     actionId: v.optional(v.id("actionLedger")),
     reviewVersion: v.number(),
     provider: v.union(
+      v.literal("render_engine"),
       v.literal("novita"),
       v.literal("ltx"),
       v.literal("fal_z_image_turbo_lora"),
@@ -1592,7 +1602,7 @@ export default defineSchema({
     contentId: v.id("creatorContentItems"),
     jobId: v.id("creatorRenderJobs"),
     attemptNumber: v.number(),
-    provider: v.union(v.literal("novita"), v.literal("ltx"), v.literal("fal_z_image_turbo_lora")),
+    provider: v.union(v.literal("render_engine"), v.literal("novita"), v.literal("ltx"), v.literal("fal_z_image_turbo_lora")),
     mediaType: v.union(v.literal("image"), v.literal("video")),
     status: v.union(v.literal("pending"), v.literal("selected"), v.literal("rejected")),
     idempotencyKey: v.string(),
