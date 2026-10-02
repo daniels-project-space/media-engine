@@ -1,5 +1,3 @@
-import { listHiggsfieldMcpTools } from "./higgsfield";
-import { assertRenderEngineCanRenderApprovedAd } from "./render-engine-compatibility";
 
 /** The single approved image-to-video model for this workspace. */
 export const CANONICAL_VIDEO_MODEL = "seedance_2_0" as const;
@@ -14,7 +12,6 @@ export const SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE =
  * run before the exact billable MCP tool contract has been reviewed.
  */
 export function assertSeedanceRendererEnabled(): void {
-  if (process.env.RENDER_ENGINE_PROJECT_API_URL) assertRenderEngineCanRenderApprovedAd();
   throw new Error(SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE);
 }
 
@@ -24,10 +21,7 @@ export function assertSeedanceRendererEnabled(): void {
  * then this adapter is filled with an allowlisted Seedance 2.0 schema only.
  */
 export async function primeHiggsfield(): Promise<void> {
-  if (process.env.RENDER_ENGINE_PROJECT_API_URL) assertRenderEngineCanRenderApprovedAd();
-  const tools = await listHiggsfieldMcpTools();
-  if (!tools.length) throw new Error("Higgsfield MCP linked successfully but exposed no tools");
-  throw new Error(`${SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE}; no render was submitted`);
+  assertSeedanceRendererEnabled();
 }
 
 /**

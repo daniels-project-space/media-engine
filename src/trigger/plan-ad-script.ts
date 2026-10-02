@@ -5,6 +5,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { chat, parseJson } from "../lib/llm";
 import { creativeServiceToken } from "../lib/creative-service";
 import { presignedGet } from "../lib/storage";
+import { stageApprovedPortrait } from "../lib/render-engine-ad-video";
 
 const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL ?? "https://blissful-sardine-231.convex.cloud";
 
@@ -69,9 +70,10 @@ type Shot = {
 };
 
 type RenderPlan = {
-  provider: "higgsfield";
-  model: "seedance_2_0";
-  creditSource: "higgsfield_subscription";
+  provider: "render-engine";
+  model: "seedance-2.5-i2v";
+  creditSource: "engine_hosted_budget";
+  referenceFrameSha256: string;
   aspectRatio: "9:16";
   durationSeconds: number;
   audioStrategy: string;
@@ -203,7 +205,7 @@ function clientTranscript(messages: { role: string; body: string }[]): string {
 
 // Produces the reviewable narrative/storyboard boundary. Rendering only starts after
 // an operator approves the persisted plan, and that later job is fail-closed to the
-// Higgsfield subscription-backed Seedance 2.0 provider.
+// Project-owned Render Engine Seedance 2.5 first-frame I2V provider.
 export const planAdScript = task({
   id: "plan-ad-script",
   maxDuration: 120,
@@ -229,11 +231,9 @@ export const planAdScript = task({
       : null;
     if (!referenceKey) {
       throw new AbortTaskRunError(
-        "A client-approved product or reference image is required before planning. The subscription-only Seedance 2.0 workflow never creates replacement images.",
+        "A client-approved product or reference image is required before planning. Seedance 2.5 I2V never creates a replacement first frame.",
       );
     }
-    const referenceUrl = await presignedGet(referenceKey, 60 * 60 * 24);
-
     const project = context.project;
     if (project.intakeStatus !== "ready_to_plan" && project.intakeStatus !== "complete") {
       throw new AbortTaskRunError("The client intake is incomplete; collect the remaining details before generating a storyboard.");
@@ -241,6 +241,8 @@ export const planAdScript = task({
     if (!["scripting", "script_ready", "failed"].includes(project.stage)) {
       throw new AbortTaskRunError(`Project is currently ${project.stage}; no new plan can replace an active or delivered render.`);
     }
+    const referenceUrl = await presignedGet(referenceKey, 60 * 60 * 24);
+    const approvedFrame = await stageApprovedPortrait(referenceKey);
 
     const clipCount = boundedInteger(payload.clipCount, 3, 2, 5);
     const secondsPerShot = boundedInteger(payload.secondsPerShot, 5, 4, 12);
@@ -249,7 +251,7 @@ export const planAdScript = task({
 
     const system = `You are the creative director for a premium direct-response marketing video. Create a reviewable ${clipCount}-beat vertical 9:16 storyboard that turns a verified client brief into a specific, persuasive narrative.
 
-The workflow is subscription-only image-to-video. A client-approved product/reference photograph will be attached to EVERY footage beat by the system. Do not propose generated replacement images, synthetic product variants, logos, invented claims, unsupported transformations, FAL, OpenAI image generation, or a provider/model alternative. Your visual directions must describe how to animate the supplied reference truthfully.
+The workflow is project-owned Render Engine Seedance 2.5 first-frame image-to-video. A client-approved product/reference photograph will be attached to EVERY footage beat by the system. The reference is center-cropped to portrait, as in the final ad framing. Do not propose generated replacement images, synthetic product variants, logos, invented claims, unsupported transformations, or an alternate model. Your visual directions must describe how to animate the supplied reference truthfully.
 
 Creative quality: make each beat visually distinct and cinematic, but maintain factual product continuity. Use a strong hook, evidence-led demonstration, payoff, and a clear CTA. Camera/motion directions must be physically filmable and concise. On-screen text must be short and never make a claim absent from the brief.
 
@@ -319,20 +321,21 @@ The storyboard array must contain exactly ${clipCount} footage beats. Do not inc
 
     const audioStrategy = optionalText(plan.audioStrategy, 500) ?? "Use a clean licensed music bed and natural product sound design; keep speech and CTA intelligible.";
     const renderPlan: RenderPlan = {
-      provider: "higgsfield",
-      model: "seedance_2_0",
-      creditSource: "higgsfield_subscription",
+      provider: "render-engine",
+      model: "seedance-2.5-i2v",
+      creditSource: "engine_hosted_budget",
+      referenceFrameSha256: approvedFrame.sha256,
       aspectRatio: "9:16",
       durationSeconds: shots.reduce((total, shot) => total + shot.seconds, 0),
       audioStrategy,
       referencePolicy:
-        "Every non-card footage beat is image-to-video from the supplied client-approved product/reference image. Re-sign the stored image key at render time when available; do not synthesize replacement assets.",
+        "Every non-card footage beat is image-to-video from the supplied client-approved product/reference image. Center-crop that exact source to 9:16 at 720x1280, matching final portrait framing; never synthesize a replacement asset.",
       fallbackPolicy: "fail_closed",
       providerInstructions: [
-        "Render only through Higgsfield using Seedance 2.0.",
-        "Charge only the connected Higgsfield subscription credits.",
+        "Render only through the project-owned Render Engine Seedance 2.5 first-frame I2V route.",
+        "Admit paid shots only against the Render Engine project hosted budget; record estimates and reservation separately from actual provider charges.",
         "Use the approved reference image as the image-to-video input for every non-card shot.",
-        "Do not call FAL, OpenAI image generation, or any alternate provider/model.",
+        "Do not switch to text-to-video or an unapproved provider/model when a shot fails.",
         "Fail the job with a clear error instead of silently substituting a provider, model, or credit source.",
       ],
     };
@@ -341,7 +344,7 @@ The storyboard array must contain exactly ${clipCount} footage beats. Do not inc
       serviceToken,
       payload: { projectId: project._id, narrative, shots, renderPlan },
     });
-    logger.log("subscription-only Seedance 2.0 plan ready", {
+    logger.log("Render Engine Seedance 2.5 I2V plan ready", {
       projectId: project._id,
       storyboardVersion,
       footageShots: footage.length,

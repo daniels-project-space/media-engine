@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   RENDER_ENGINE_PROJECT_VIDEO,
   RENDER_ENGINE_AD_INCOMPATIBLE_MESSAGE,
+  assertRenderEngineCanRenderApprovedAd,
 } from "../src/lib/render-engine-compatibility.ts";
 import {
   CANONICAL_VIDEO_MODEL,
@@ -12,7 +13,7 @@ import {
   renderClip,
 } from "../src/lib/video-router.ts";
 
-test("configured Render Engine cutover fails at admission and worker preflight without a network call", async () => {
+test("configured Engine route admits while the legacy Higgsfield adapter remains closed", async () => {
   const priorUrl = process.env.RENDER_ENGINE_PROJECT_API_URL;
   const priorFetch = globalThis.fetch;
   let networkCalls = 0;
@@ -22,15 +23,16 @@ test("configured Render Engine cutover fails at admission and worker preflight w
     throw new Error("unexpected network request");
   };
   try {
-    assert.throws(assertSeedanceRendererEnabled, { message: RENDER_ENGINE_AD_INCOMPATIBLE_MESSAGE });
-    await assert.rejects(primeHiggsfield(), { message: RENDER_ENGINE_AD_INCOMPATIBLE_MESSAGE });
+    assert.doesNotThrow(assertRenderEngineCanRenderApprovedAd);
+    assert.throws(assertSeedanceRendererEnabled, { message: SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE });
+    await assert.rejects(primeHiggsfield(), { message: SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE });
     await assert.rejects(renderClip({
       model: CANONICAL_VIDEO_MODEL,
       imageBytes: Buffer.from("approved reference"),
       motion: "slow orbit",
       durationSeconds: 5,
       aspectRatio: "9:16",
-    }), { message: RENDER_ENGINE_AD_INCOMPATIBLE_MESSAGE });
+    }), { message: SEEDANCE_SCHEMA_UNVERIFIED_MESSAGE });
     assert.equal(networkCalls, 0);
   } finally {
     globalThis.fetch = priorFetch;
@@ -49,8 +51,8 @@ test("without Render Engine configuration, the existing Seedance gate remains cl
   }
 });
 
-test("the engine's current project job has no approved-reference input", () => {
-  assert.equal(RENDER_ENGINE_PROJECT_VIDEO.path, "/client/h3-jobs");
-  assert.equal(RENDER_ENGINE_PROJECT_VIDEO.profileId, "minimax-h3");
-  assert.equal(RENDER_ENGINE_PROJECT_VIDEO.acceptsReferenceImage, false);
+test("the Engine I2V project route requires the approved first frame", () => {
+  assert.equal(RENDER_ENGINE_PROJECT_VIDEO.path, "/client/hosted-generations");
+  assert.equal(RENDER_ENGINE_PROJECT_VIDEO.profileId, "seedance-2.5-i2v");
+  assert.equal(RENDER_ENGINE_PROJECT_VIDEO.acceptsReferenceImage, true);
 });
