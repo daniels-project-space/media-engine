@@ -2,7 +2,7 @@ import { task, logger, AbortTaskRunError } from "@trigger.dev/sdk";
 import { ConvexHttpClient } from "convex/browser";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, readFile, mkdtemp } from "node:fs/promises";
+import { writeFile, readFile, mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -188,6 +188,7 @@ export const generateAd = task({
     const renderServiceToken = await creativeServiceToken();
     let execution: ClaimedExecution | null = null;
     let lifecycleFailureRecorded = false;
+    let workDir: string | undefined;
 
     const failRenderLifecycle = async (err: unknown): Promise<void> => {
       if (!execution || lifecycleFailureRecorded) return;
@@ -246,6 +247,7 @@ export const generateAd = task({
       let motionScoreSum = 0;
       let motionScoreCount = 0;
       const dir = await mkdtemp(path.join(tmpdir(), "ad-"));
+      workDir = dir;
 
       const renderScene = async (scene: Scene, index: number): Promise<string> => {
         const duration = scene.seconds ?? 0;
@@ -328,6 +330,13 @@ export const generateAd = task({
     } catch (err) {
       await failRenderLifecycle(err);
       throw err;
+    } finally {
+      if (workDir) {
+        try { await rm(workDir, { recursive: true, force: true }); }
+        catch (error) { logger.error("could not remove local ad work directory", {
+          renderJobId: jobId, error: error instanceof Error ? error.message : String(error),
+        }); }
+      }
     }
   },
 });

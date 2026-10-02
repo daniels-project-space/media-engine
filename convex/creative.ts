@@ -465,16 +465,17 @@ export const startRender = internalMutation({
       }
     }
     const jobs = await ctx.db.query("renderJobs").withIndex("by_project", (q) => q.eq("projectId", projectId)).collect();
-    const active = jobs.find((job) => job.kind === kind && job.planVersion === project.storyboardVersion && (job.status === "queued" || job.status === "running"));
-    // A duplicate click after the project has moved into drafting/rendering
-    // returns the admitted job instead of producing a second paid render.
-    if (active) return { jobId: active._id, reused: true };
+    const matching = jobs.filter((job) => job.kind === kind && job.planVersion === project.storyboardVersion);
+    const active = matching.find((job) => job.status === "queued" || job.status === "running");
+    // An already claimed worker owns the only paid execution for this plan.
+    if (active?.status === "running") return { jobId: active._id, reused: true };
+    const failed = matching.filter((job) => job.status === "failed");
+    if (failed.length > 1) throw new Error("multiple failed render attempts require operator reconciliation");
+    const resume = active ?? failed[0];
     const expectedStage = kind === "draft" ? "script_ready" : "draft_ready";
-    const failedSameKind = jobs.some(
-      (job) => job.kind === kind && job.planVersion === project.storyboardVersion && job.status === "failed",
-    );
-    const retryEligible = project.stage === "failed" && failedSameKind && (kind === "draft" || Boolean(project.draftPostId));
-    if (project.stage !== expectedStage && !retryEligible) {
+    const retryEligible = project.stage === "failed" && resume?.status === "failed" && (kind === "draft" || Boolean(project.draftPostId));
+    const queuedEligible = project.stage === expectedRenderStage(kind) && resume?.status === "queued";
+    if (project.stage !== expectedStage && !retryEligible && !queuedEligible) {
       throw new Error(kind === "draft" ? "draft render is not eligible" : "final render needs an approved draft first");
     }
     const attempt = jobs.filter((job) => job.kind === kind && job.planVersion === project.storyboardVersion).length + 1;
@@ -490,6 +491,34 @@ export const startRender = internalMutation({
     const approval = await findPlanApproval(ctx, organizationId, projectId, project.storyboardVersion, "approved");
     if (!approval || !hasMatchingSnapshot(approval.snapshot, approval.snapshotHash, approvalSnapshot)) {
       throw new Error("the current render plan must have a matching approved control-plane record");
+    }
+    if (resume) {
+      const wasFailed = resume.status === "failed";
+      const action = resume.actionId ? await ctx.db.get(resume.actionId) : null;
+      const actionPayload = {
+        resourceType: PLAN_APPROVAL_RESOURCE_TYPE, resourceId: String(projectId), planVersion: project.storyboardVersion,
+        renderKind: kind, provider: project.renderPlan.provider, model: project.renderPlan.model,
+        creditSource: project.renderPlan.creditSource,
+      };
+      if (resume.provider !== project.renderPlan.provider || resume.model !== project.renderPlan.model ||
+          resume.creditSource !== project.renderPlan.creditSource ||
+          !resume.approvalId || resume.approvalId !== approval._id || !action ||
+          action.organizationId !== organizationId || action.approvalId !== approval._id ||
+          action.renderJobId !== resume._id || action.actionKind !== RENDER_ACTION_KIND ||
+          action.idempotencyKey !== resume.idempotencyKey ||
+          !hasMatchingSnapshot(action.payloadSnapshot, action.payloadHash, actionPayload) ||
+          action.status !== (wasFailed ? "failed" : "queued")) {
+        throw new Error("prior render action needs operator reconciliation before resume");
+      }
+      // Rotate the private dispatch capability even after a lost Trigger ACK.
+      // A late old worker and the replacement cannot both claim this job.
+      await ctx.db.patch(resume._id, { status: "queued", dispatchToken,
+        workerRunId: undefined, triggerRunId: undefined, error: undefined, updatedAt: now });
+      if (wasFailed) {
+        await ctx.db.patch(action._id, { status: "queued", triggerRunId: undefined, error: undefined, updatedAt: now });
+      }
+      await ctx.db.patch(projectId, { stage: expectedRenderStage(kind), error: undefined, lastActivityAt: now });
+      return { jobId: resume._id, reused: false, resumed: true };
     }
     const idempotencyKey = `${projectId}:${project.storyboardVersion}:${kind}:${attempt}`;
     // Keep the ledger payload deliberately metadata-only. The immutable plan
