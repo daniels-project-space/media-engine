@@ -1485,6 +1485,7 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
     {revision > 0 ? <p className="text-xs text-ink-dim">Saved revision {revision} · {origin === "ai" ? "AI-generated draft" : "owner-authored"}</p> : null}
   </form>
   <PlanCalendar project={project} planId={planId} calendar={savedCalendar} stale={planProjectVersion !== project.version || planResearchVersion !== (project.researchVersion ?? 0) || calendar !== savedCalendar} channels={channels} accounts={accounts} busy={busy} action={action} />
+  <RenderBriefs project={project} />
   </>;
 }
 
@@ -1515,6 +1516,13 @@ function PlanCalendar({ project, planId, calendar, stale, channels, accounts, bu
         {Array.isArray(entry.hashtags) && entry.hashtags.length ? <p className="text-xs text-ink-dim">{entry.hashtags.join(" ")}</p> : null}
         {entry.rationale ? <p className="text-xs text-ink-dim">Why: {entry.rationale}</p> : null}
         {entry.videoScript ? <details className="text-xs text-ink-dim"><summary>Video script</summary><p className="whitespace-pre-wrap">{entry.videoScript}</p></details> : null}
+        {entry.videoScript ? <form className="flex flex-wrap gap-2" onSubmit={async event => {
+          event.preventDefault();
+          await action("create-render-brief", { projectId: project._id, planId, entryIndex: index, modelId: new FormData(event.currentTarget).get("modelId") });
+          window.dispatchEvent(new Event("marketing-render-briefs-changed"));
+        }}><select name="modelId" className={inputClass} aria-label={`Render model for day ${entry.day}`}>
+          <option value="minimax-h3">Video · MiniMax H3</option><option value="qwen-image-2-1">Image · Qwen Image 2.1</option>
+        </select><button className={buttonClass} disabled={busy || stale}>Save render brief</button></form> : null}
         {eligible.length ? <form className="flex flex-wrap gap-2" onSubmit={async event => {
           event.preventDefault();
           await action("create-plan-draft", { projectId: project._id, planId, entryIndex: index, channelId: new FormData(event.currentTarget).get("channelId") });
@@ -1524,6 +1532,33 @@ function PlanCalendar({ project, planId, calendar, stale, channels, accounts, bu
       </div>;
     })}
   </div>;
+}
+
+function RenderBriefs({ project }: { project: Project }) {
+  const [briefs, setBriefs] = useState<Doc<"marketingRenderBriefs">[]>([]);
+  const [error, setError] = useState(false);
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/marketing?view=render-briefs&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store", signal: controller.signal })
+      .then(responseJson).then(body => { setBriefs(body.briefs as Doc<"marketingRenderBriefs">[]); setError(false); })
+      .catch(() => { if (!controller.signal.aborted) setError(true); });
+    return () => controller.abort();
+  }, [project._id, revision]);
+  useEffect(() => {
+    const refresh = () => setRevision(value => value + 1);
+    window.addEventListener("marketing-render-briefs-changed", refresh);
+    return () => window.removeEventListener("marketing-render-briefs-changed", refresh);
+  }, []);
+  return <section className="grid gap-3 border-t border-line pt-5">
+    <h3 className="text-sm font-bold">Render briefs</h3>
+    <p className="text-xs leading-5 text-ink-dim">Saved creative scripts for the new GPU service. These are planning briefs only: no render, spend or approval has been initiated. Model qualification, project connection and enforceable spending controls are still required.</p>
+    {error ? <p className="text-xs text-amber-600" role="alert">Could not load render briefs.</p> : null}
+    {briefs.map(brief => <details key={brief._id} className="rounded-xl border border-line p-3 text-xs">
+      <summary className="font-bold">{brief.format} · {brief.channel} · {brief.modelId}{brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0) ? " · brief changed since saving" : ""}</summary>
+      <p className="whitespace-pre-wrap pt-2 text-ink-dim">{brief.prompt}</p>
+    </details>)}
+  </section>;
 }
 
 function RenderReuse({

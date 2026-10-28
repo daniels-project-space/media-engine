@@ -90,6 +90,15 @@ export const marketingTables = {
     createdAt: v.number(),
   }).index("by_project_revision", ["projectId", "revision"]),
 
+  // A brief is a reviewed planning artifact, not a GPU job or authorization.
+  marketingRenderBriefs: defineTable({
+    organizationId: v.id("organizations"), projectId: v.id("marketingProjects"),
+    planId: v.id("marketingPlans"), entryIndex: v.number(), projectVersion: v.number(),
+    researchVersion: v.number(), modelId: v.union(v.literal("minimax-h3"), v.literal("qwen-image-2-1")),
+    prompt: v.string(), channel: v.string(), format: v.string(), createdAt: v.number(),
+  }).index("by_project_created", ["projectId", "createdAt"])
+    .index("by_plan_entry_model", ["planId", "entryIndex", "modelId"]),
+
   marketingPlanRuns: defineTable({
     organizationId: v.id("organizations"),
     projectId: v.id("marketingProjects"),

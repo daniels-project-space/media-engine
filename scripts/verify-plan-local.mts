@@ -45,6 +45,9 @@ try {
   await page.getByRole("button", { name: "Save plan revision" }).click();
   await expect(page.getByRole("heading", { name: "Calendar drafts" })).toBeVisible();
   await expect(page.getByText("A private fixture draft", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Save render brief" }).click();
+  await expect.poll(async () => (await call("listRenderBriefs", { projectId }) as unknown[]).length).toBe(1);
+  await expect(page.getByText("Local introduction · x · minimax-h3", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Create review draft" }).click();
   await expect.poll(async () => ((await call("listWorkspace", { projectId })) as { items: unknown[] }).items.length).toBe(1);
   const final = await call("listWorkspace", { projectId }) as { items: Array<{ status: string; content: string }> };
@@ -57,5 +60,5 @@ try {
   await expect(page.getByRole("heading", { name: "Calendar drafts" })).toBeVisible();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "Mobile workspace must fit the viewport");
   await page.screenshot({ path: "/root/media-engine-marketing-proof-20261028/local-plan-calendar-mobile.png", fullPage: true });
-  console.log("Local browser: plan save, calendar card and review draft passed. No public or paid writes.");
+  console.log("Local browser: plan save, render brief, calendar card and review draft passed. No public or paid writes.");
 } finally { await browser.close(); }

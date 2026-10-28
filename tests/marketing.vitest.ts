@@ -99,6 +99,23 @@ async function item(
 }
 
 describe("marketing isolation and dispatch invariants", () => {
+  it("keeps render briefs project-scoped, idempotent and tied to the current plan", async () => {
+    const f = await projects();
+    const planMutation = (name: string) => makeFunctionReference<"mutation">(`marketingPlans:${name}`);
+    const planQuery = (name: string) => makeFunctionReference<"query">(`marketingPlans:${name}`);
+    const calendar = JSON.stringify([{ day: 1, channel: "x", format: "video", videoScript: "Show the product and its benefit" }]);
+    const saved = await f.t.mutation(planMutation("save"), { projectId: f.a, expectedProjectVersion: 1,
+      expectedResearchVersion: 0, expectedRevision: 0, strategy: "Introduce the product", calendar, sources: "" });
+    const request = { projectId: f.a, planId: saved.planId, entryIndex: 0, modelId: "minimax-h3" };
+    const first = await f.t.mutation(planMutation("createRenderBrief"), request);
+    expect(await f.t.mutation(planMutation("createRenderBrief"), request)).toEqual({ briefId: first.briefId, reused: true });
+    expect((await f.t.query(planQuery("listRenderBriefs"), { projectId: f.a }))[0]).toMatchObject({ prompt: "Show the product and its benefit", modelId: "minimax-h3" });
+    expect(await f.t.query(planQuery("listRenderBriefs"), { projectId: f.b })).toHaveLength(0);
+    await expect(f.t.mutation(planMutation("createRenderBrief"), { ...request, projectId: f.b })).rejects.toThrow();
+    await f.t.mutation(planMutation("save"), { projectId: f.a, expectedProjectVersion: 1,
+      expectedResearchVersion: 0, expectedRevision: 1, strategy: "Revised", calendar, sources: "" });
+    await expect(f.t.mutation(planMutation("createRenderBrief"), { ...request, modelId: "qwen-image-2-1" })).rejects.toThrow(/current plan/);
+  });
   it("admin cleanup refuses connected projects and removes only an exact unused draft", async () => {
     const f = await projects();
     await expect(

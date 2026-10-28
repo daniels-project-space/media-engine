@@ -59,6 +59,10 @@ export async function GET(request: NextRequest) {
         { headers },
       );
     }
+    if (view === "render-briefs") {
+      const projectId = id.parse(request.nextUrl.searchParams.get("projectId"));
+      return NextResponse.json({ briefs: await marketingCall("listRenderBriefs", { projectId }) }, { headers });
+    }
     if (view === "overview")
       return NextResponse.json(
         await marketingCall("overview", {
@@ -179,6 +183,11 @@ export async function POST(request: NextRequest) {
     if (input.action === "create-plan-draft") {
       const payload = z.object({ projectId: id, planId: id, entryIndex: z.number().int().min(0).max(27), channelId: id }).strict().parse(input.payload);
       return NextResponse.json({ result: await marketingCall("createPlanDraft", payload) }, { headers });
+    }
+    if (input.action === "create-render-brief") {
+      const payload = z.object({ projectId: id, planId: id, entryIndex: z.number().int().min(0).max(27),
+        modelId: z.enum(["minimax-h3", "qwen-image-2-1"]) }).strict().parse(input.payload);
+      return NextResponse.json({ result: await marketingCall("createRenderBrief", payload) }, { headers });
     }
     if (input.action === "capture-research") {
       const payload = z.object({ projectId: id, url: z.string().url().max(700) }).strict().parse(input.payload);

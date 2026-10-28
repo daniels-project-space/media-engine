@@ -10,6 +10,7 @@ const mutations = {
   startDiscovery: "marketingResearch:startDiscovery",
   finishDiscovery: "marketingResearch:finishDiscovery",
   createPlanDraft: "marketingPlans:createDraft",
+  createRenderBrief: "marketingPlans:createRenderBrief",
   startPlan: "marketingPlans:start",
   claimPlan: "marketingPlans:claim",
   finishPlan: "marketingPlans:finish",
@@ -45,6 +46,7 @@ const mutations = {
 } as const;
 const queries = {
   latestPlan: "marketingPlans:latest",
+  listRenderBriefs: "marketingPlans:listRenderBriefs",
   listResearch: "marketingResearch:list",
   latestPlanRun: "marketingPlans:latestRun",
   latestHyperImport: "marketingHyperImports:latest",

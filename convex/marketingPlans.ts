@@ -18,6 +18,42 @@ export const latest = internalQuery({
   },
 });
 
+export const listRenderBriefs = internalQuery({
+  args: { projectId: v.id("marketingProjects") },
+  handler: async (ctx, { projectId }) => {
+    const [project, organization] = await Promise.all([ctx.db.get(projectId), findDefaultOrganization(ctx)]);
+    if (!project || !organization || project.organizationId !== organization._id) throw new Error("Marketing project not found");
+    return ctx.db.query("marketingRenderBriefs").withIndex("by_project_created", q => q.eq("projectId", projectId)).order("desc").take(25);
+  },
+});
+
+export const createRenderBrief = internalMutation({
+  args: { projectId: v.id("marketingProjects"), planId: v.id("marketingPlans"), entryIndex: v.number(),
+    modelId: v.union(v.literal("minimax-h3"), v.literal("qwen-image-2-1")) },
+  handler: async (ctx, args) => {
+    const [project, organization, plan] = await Promise.all([ctx.db.get(args.projectId), findDefaultOrganization(ctx), ctx.db.get(args.planId)]);
+    if (!project || !organization || project.organizationId !== organization._id) throw new Error("Marketing project not found");
+    assertOwned(project._id, plan);
+    const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", project._id)).order("desc").first();
+    if (!plan || latest?._id !== plan._id || plan.projectVersion !== project.version || (plan.researchVersion ?? 0) !== (project.researchVersion ?? 0))
+      throw new Error("Review and save a current plan before preparing a render brief");
+    if (!Number.isInteger(args.entryIndex) || args.entryIndex < 0 || args.entryIndex >= 28) throw new Error("Invalid calendar entry");
+    let entries: unknown;
+    try { entries = JSON.parse(plan.calendar); } catch { throw new Error("The saved calendar is not structured"); }
+    if (!Array.isArray(entries) || entries.length > 28) throw new Error("The saved calendar is invalid");
+    const entry = entries[args.entryIndex];
+    if (!entry || typeof entry !== "object" || typeof entry.videoScript !== "string" || !entry.videoScript.trim() || entry.videoScript.length > 10_000 ||
+        typeof entry.channel !== "string" || entry.channel.length > 40 || typeof entry.format !== "string" || entry.format.length > 200)
+      throw new Error("This calendar entry needs a bounded creative script");
+    const existing = await ctx.db.query("marketingRenderBriefs").withIndex("by_plan_entry_model", q => q.eq("planId", plan._id).eq("entryIndex", args.entryIndex).eq("modelId", args.modelId)).unique();
+    if (existing) return { briefId: existing._id, reused: true };
+    const briefId = await ctx.db.insert("marketingRenderBriefs", { organizationId: organization._id, projectId: project._id,
+      planId: plan._id, entryIndex: args.entryIndex, projectVersion: project.version, researchVersion: project.researchVersion ?? 0,
+      modelId: args.modelId, prompt: entry.videoScript.trim(), channel: entry.channel, format: entry.format, createdAt: Date.now() });
+    return { briefId, reused: false };
+  },
+});
+
 export const save = internalMutation({
   args: {
     projectId: v.id("marketingProjects"),
