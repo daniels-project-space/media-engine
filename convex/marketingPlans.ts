@@ -121,6 +121,7 @@ export const stageHyperMediaRequest = internalMutation({
     blockers: v.array(v.union(
       v.literal("native-model-unqualified"),
       v.literal("gpu-profile-unverified"),
+      v.literal("model-gpu-unqualified"),
       v.literal("project-connection-missing"),
       v.literal("project-connection-unavailable"),
       v.literal("environment-required"),

@@ -10,7 +10,7 @@ describe("render preflight", () => {
     const environment = vi.fn().mockResolvedValue({ id: input.environmentId, modelId: "minimax-h3", modelMatches: true, prepared: true });
     const result = await checkHyperPreflight(input, { connection: vi.fn().mockResolvedValue(connection), catalogue: vi.fn().mockResolvedValue(catalogue), environment, project: vi.fn() });
     expect(environment).toHaveBeenCalledWith(connection, input.environmentId, "minimax-h3");
-    expect(result).toMatchObject({ briefStale: true, projectConnection: "verified", model, hardware: catalogue.hardware, gpuProfileVerified: true, dispatchEnabled: false, monetaryCapVerified: false, capacityVerified: false, outputVerified: false });
+    expect(result).toMatchObject({ briefStale: true, projectConnection: "verified", model, hardware: catalogue.hardware, gpuProfileVerified: true, modelGpuVerified: false, dispatchEnabled: false, monetaryCapVerified: false, capacityVerified: false, outputVerified: false });
     expect(JSON.stringify(result)).not.toContain(connection.token);
   });
   it("distinguishes missing connection, vault failure and missing catalogue without submitting", async () => {
@@ -36,5 +36,13 @@ describe("render preflight", () => {
     expect(result).toMatchObject({ hardware: mismatched.hardware, gpuProfileVerified: false, dispatchEnabled: false });
     const unavailable = await checkHyperPreflight(input, { connection: vi.fn().mockResolvedValue(connection), catalogue: vi.fn().mockRejectedValue(new Error("offline")), environment: vi.fn(), project: vi.fn() });
     expect(unavailable).toMatchObject({ hardware: null, gpuProfileVerified: false, dispatchEnabled: false });
+  });
+  it("requires each selected model to be qualified for the initial RTX 3090", async () => {
+    const qualified = { ...catalogue, models: [{ ...model, nativeQualified: true, qualifiedGpuTypes: ["rtx3090", "rtx5090"] }] };
+    const supported = await checkHyperPreflight(input, { connection: vi.fn().mockResolvedValue(connection), catalogue: vi.fn().mockResolvedValue(qualified), environment: vi.fn(), project: vi.fn() });
+    expect(supported).toMatchObject({ gpuProfileVerified: true, modelGpuVerified: true });
+    const futureOnly = { ...catalogue, models: [{ ...model, nativeQualified: true, qualifiedGpuTypes: ["rtx5090"] }] };
+    const unsupported = await checkHyperPreflight(input, { connection: vi.fn().mockResolvedValue(connection), catalogue: vi.fn().mockResolvedValue(futureOnly), environment: vi.fn(), project: vi.fn() });
+    expect(unsupported).toMatchObject({ gpuProfileVerified: true, modelGpuVerified: false });
   });
 });

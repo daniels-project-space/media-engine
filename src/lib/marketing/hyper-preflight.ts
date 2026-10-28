@@ -21,9 +21,10 @@ export async function checkHyperPreflight(input: { projectId: string; environmen
   const model = catalogue?.models.find(item => item.id === input.brief.modelId) ?? null;
   const hardware = catalogue?.hardware ?? null;
   const gpuProfileVerified = hardware?.initial === requiredGpuProfile.initial && hardware.future === requiredGpuProfile.future;
+  const modelGpuVerified = model?.qualifiedGpuTypes.includes(requiredGpuProfile.initial) ?? false;
   const environment = connection && input.environmentId ? await deps.environment(connection, input.environmentId, input.brief.modelId) : null;
   if (connection && !input.environmentId) await deps.project(connection);
-  return { model, hardware, gpuProfileVerified, catalogueAvailable: catalogue !== null, briefStale: input.brief.stale, projectConnection: connectionResult.status === "rejected" ? "unavailable" : connection ? "verified" : "missing",
+  return { model, hardware, gpuProfileVerified, modelGpuVerified, catalogueAvailable: catalogue !== null, briefStale: input.brief.stale, projectConnection: connectionResult.status === "rejected" ? "unavailable" : connection ? "verified" : "missing",
     environment, checkedAt: new Date().toISOString(), dispatchEnabled: false, monetaryCapVerified: false,
     capacityVerified: false, outputVerified: false };
 }

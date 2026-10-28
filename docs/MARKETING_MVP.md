@@ -67,7 +67,9 @@ model-specific qualified GPU types. As checked on 28 October 2026 it reported
 routes. The UI reads that catalogue live; neither GPU name implies available
 capacity or permission to render. Preflight also fails closed unless that live
 profile still matches the pinned 3090-initial / 5090-future plan. Refresh and
-verify model qualification before any pilot.
+verify model qualification before any pilot. A selected model must also list
+the initial RTX 3090 in its own qualified GPU types; qualification on a
+different GPU cannot unlock this marketing path.
 5. Generate a structured two-week strategy and calendar when the configured
    Codex subscription worker and owner AI gate are available. Items include
    channel copy, hashtags, proposed local times, CTAs, confirmed promotions,

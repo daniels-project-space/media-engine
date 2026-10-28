@@ -110,6 +110,7 @@ const qwenQualitySchema = z.object({
 export const hyperRenderBlockers = [
   "native-model-unqualified",
   "gpu-profile-unverified",
+  "model-gpu-unqualified",
   "project-connection-missing",
   "project-connection-unavailable",
   "environment-required",
