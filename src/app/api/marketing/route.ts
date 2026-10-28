@@ -50,13 +50,14 @@ export async function GET(request: NextRequest) {
     }
     if (view === "plan") {
       const projectId = id.parse(request.nextUrl.searchParams.get("projectId"));
-      const [plan, run, aiAllowed] = await Promise.all([
+      const [plan, run, aiAllowed, aiCheck] = await Promise.all([
         marketingCall("latestPlan", { projectId }),
         marketingCall("latestPlanRun", { projectId, asOfMinute: Math.floor(Date.now() / 60_000) }),
         marketingCall("marketingAiAllowed", {}),
+        marketingCall("latestAiCheck", { projectId, asOfMinute: Math.floor(Date.now() / 60_000) }),
       ]);
       return NextResponse.json(
-        { plan, run, aiAllowed: aiAllowed === true },
+        { plan, run, aiAllowed: aiAllowed === true, aiCheck },
         { headers },
       );
     }
@@ -203,6 +204,22 @@ export async function POST(request: NextRequest) {
     if (input.action === "discover-research") {
       const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
       return NextResponse.json({ result: await discoverProjectResearch(payload.projectId, payload.requestKey) }, { headers });
+    }
+    if (input.action === "check-ai-worker") {
+      const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
+      const check = await marketingCall<{ status: string }>("startAiCheck", payload);
+      if (check.status === "queued") {
+        const key = process.env.TRIGGER_SECRET_KEY || (await vaultService("trigger")).TRIGGER_SECRET_KEY_MEDIA_ENGINE;
+        if (!key) throw new Error("Worker check is queued, but the Trigger connection is not configured. Retry this check after setup.");
+        const response = await fetch("https://api.trigger.dev/api/v1/tasks/marketing-ai-check/trigger", {
+          method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify({ payload, options: { idempotencyKey: `marketing-ai-check:${payload.projectId}:${payload.requestKey}`, idempotencyKeyTTL: "1d" } }),
+          signal: AbortSignal.timeout(8_000), redirect: "error",
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || typeof result.id !== "string") throw new Error("Worker check dispatch is unconfirmed. Retry the same check.");
+      }
+      return NextResponse.json({ result: check }, { headers });
     }
     if (input.action === "generate-plan") {
       const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);

@@ -113,6 +113,14 @@ export const marketingTables = {
   }).index("by_project_request", ["projectId", "requestKey"])
     .index("by_project_created", ["projectId", "createdAt"]),
 
+  // One bounded diagnostic record per project; old workers are fenced by key.
+  marketingAiChecks: defineTable({
+    projectId: v.id("marketingProjects"), requestKey: v.string(),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("completed")),
+    outcome: v.optional(v.union(v.literal("subscription-login"), v.literal("unavailable"))),
+    updatedAt: v.number(),
+  }).index("by_project", ["projectId"]),
+
   marketingHyperImports: defineTable({
     projectId: v.id("marketingProjects"), jobId: v.string(),
     status: v.union(v.literal("queued"), v.literal("running"), v.literal("verified"), v.literal("failed")),

@@ -13,6 +13,51 @@ export const aiAllowed = internalQuery({
   },
 });
 
+export const latestAiCheck = internalQuery({
+  args: { projectId: v.id("marketingProjects"), asOfMinute: v.number() },
+  handler: async (ctx, { projectId, asOfMinute }) => {
+    const [project, organization] = await Promise.all([ctx.db.get(projectId), findDefaultOrganization(ctx)]);
+    if (!project || !organization || project.organizationId !== organization._id) throw new Error("Marketing project not found");
+    const check = await ctx.db.query("marketingAiChecks").withIndex("by_project", q => q.eq("projectId", projectId)).unique();
+    return check ? { ...check, recoverable: check.status !== "completed" && check.updatedAt < asOfMinute * 60_000 - 120_000 } : null;
+  },
+});
+
+export const startAiCheck = internalMutation({
+  args: { projectId: v.id("marketingProjects"), requestKey: v.string() },
+  handler: async (ctx, { projectId, requestKey }) => {
+    const [project, organization] = await Promise.all([ctx.db.get(projectId), findDefaultOrganization(ctx)]);
+    if (!project || !organization || project.organizationId !== organization._id) throw new Error("Marketing project not found");
+    if (!/^[a-f0-9-]{36}$/.test(requestKey)) throw new Error("Invalid diagnostic request");
+    const check = await ctx.db.query("marketingAiChecks").withIndex("by_project", q => q.eq("projectId", projectId)).unique();
+    if (check?.requestKey === requestKey) return { status: check.status };
+    if (check && Date.now() - check.updatedAt < 120_000) throw new Error("Wait before starting another worker check.");
+    const data = { projectId, requestKey, status: "queued" as const, outcome: undefined, updatedAt: Date.now() };
+    if (check) await ctx.db.patch(check._id, data); else await ctx.db.insert("marketingAiChecks", data);
+    return { status: "queued" as const };
+  },
+});
+
+export const claimAiCheck = internalMutation({
+  args: { projectId: v.id("marketingProjects"), requestKey: v.string() },
+  handler: async (ctx, { projectId, requestKey }) => {
+    const check = await ctx.db.query("marketingAiChecks").withIndex("by_project", q => q.eq("projectId", projectId)).unique();
+    if (!check || check.requestKey !== requestKey || check.status !== "queued") return false;
+    await ctx.db.patch(check._id, { status: "running", updatedAt: Date.now() });
+    return true;
+  },
+});
+
+export const finishAiCheck = internalMutation({
+  args: { projectId: v.id("marketingProjects"), requestKey: v.string(), outcome: v.union(v.literal("subscription-login"), v.literal("unavailable")) },
+  handler: async (ctx, { projectId, requestKey, outcome }) => {
+    const check = await ctx.db.query("marketingAiChecks").withIndex("by_project", q => q.eq("projectId", projectId)).unique();
+    if (!check || check.requestKey !== requestKey || check.status !== "running") return false;
+    await ctx.db.patch(check._id, { status: "completed", outcome, updatedAt: Date.now() });
+    return true;
+  },
+});
+
 export const latest = internalQuery({
   args: { projectId: v.id("marketingProjects") },
   handler: async (ctx, { projectId }) => {

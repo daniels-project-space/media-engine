@@ -30,7 +30,7 @@ const CODEX_STATUS_TIMEOUT_MS = 10_000;
  * and access-token modes.
  */
 export function isChatGptLoginStatus(status: string): boolean {
-  // Codex's successful subscription status is exactly this stdout line. Do
+  // Codex's successful subscription status is exactly this line. Do
   // not match a help message, error, diagnostic, or a status that merely
   // mentions ChatGPT: all of those must leave generation paused.
   return status.trim() === "Logged in using ChatGPT";
@@ -51,8 +51,8 @@ export function codexChildEnv(parent: NodeJS.ProcessEnv = process.env): NodeJS.P
     LANG: parent.LANG ?? "C.UTF-8",
     LC_ALL: parent.LC_ALL ?? "C.UTF-8",
     NO_COLOR: "1",
-    // CODEX_HOME is a path, not a credential; the pinned worker image mounts
-    // the subscription-authenticated CLI state there.
+    // CODEX_HOME is a path, not a credential. A worker must be configured
+    // with its own subscription login; this does not provision or prove it.
     CODEX_HOME: parent.CODEX_HOME ?? `${home}/.codex`,
     OPENAI_API_KEY: "",
     CODEX_API_KEY: "",
@@ -71,20 +71,26 @@ export function codexExecArgs(prompt: string, noTools = false): string[] {
     "--ephemeral", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", prompt];
 }
 
-async function requireChatGptLogin(cli: string): Promise<void> {
+/** Checks only local CLI login state; does not call a model or qualify it. */
+export async function inspectCodexSubscription(cli = process.env.CODEX_CLI ?? "codex"): Promise<"subscription-login" | "unavailable"> {
   try {
-    const { stdout } = await run(cli, ["login", "status"], {
+    const { stdout, stderr } = await run(cli, ["login", "status"], {
       cwd: "/tmp",
       timeout: CODEX_STATUS_TIMEOUT_MS,
       maxBuffer: 64 * 1024,
       env: codexChildEnv(),
     });
-    if (isChatGptLoginStatus(stdout)) return;
+    if (isChatGptLoginStatus(stdout) || isChatGptLoginStatus(stderr)) return "subscription-login";
   } catch {
     // Do not reveal saved-profile details. All unsuccessful checks have the
     // same fail-closed result below.
   }
-  throw new Error("Codex CLI requires a ChatGPT subscription login; API-key and access-token authentication are disabled");
+  return "unavailable";
+}
+
+async function requireChatGptLogin(cli: string): Promise<void> {
+  if (await inspectCodexSubscription(cli) !== "subscription-login")
+    throw new Error("Codex CLI requires a ChatGPT subscription login; API-key and access-token authentication are disabled");
 }
 
 async function chatWithGate(opts: ChatOpts, permitted: () => Promise<boolean>): Promise<string> {

@@ -1419,6 +1419,7 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
   const [savedCalendar, setSavedCalendar] = useState("");
   const [origin, setOrigin] = useState("owner");
   const [run, setRun] = useState<null | { status: string; requestKey: string; error?: string; recoverable?: boolean }>(null);
+  const [aiCheck, setAiCheck] = useState<null | { status: string; requestKey: string; outcome?: string; updatedAt: number; recoverable?: boolean }>(null);
   const [aiAllowed, setAiAllowed] = useState(false);
   const [reload, setReload] = useState(0);
   const [planProjectVersion, setPlanProjectVersion] = useState<number | null>(null);
@@ -1437,21 +1438,26 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
       }
       setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean });
       setAiAllowed(body.aiAllowed === true);
+      setAiCheck(body.aiCheck as typeof aiCheck);
       setLoadState("ready");
     }).catch(() => { if (!controller.signal.aborted) setLoadState("error"); });
     return () => controller.abort();
   }, [project._id, reload]);
   const runStatus = run?.status;
+  const checkStatus = aiCheck?.status;
   useEffect(() => {
-    if (!runStatus || !["queued", "running"].includes(runStatus)) return;
+    if (![runStatus, checkStatus].some(status => status && ["queued", "running"].includes(status))) return;
     const controller = new AbortController();
     const timer = window.setInterval(() => {
       fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store", signal: controller.signal })
-        .then(responseJson).then((body) => setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean }))
+        .then(responseJson).then((body) => {
+          setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean });
+          setAiCheck(body.aiCheck as typeof aiCheck);
+        })
         .catch(() => {});
     }, 5000);
     return () => { window.clearInterval(timer); controller.abort(); };
-  }, [project._id, runStatus]);
+  }, [project._id, runStatus, checkStatus]);
   return <><form className="grid gap-3 border-t border-line pt-5" onSubmit={async (event) => {
     event.preventDefault();
     const result = await action("save-plan", {
@@ -1470,7 +1476,16 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
   }}>
     <h3 className="text-sm font-bold">Strategy and content plan</h3>
     <p className="text-xs leading-5 text-ink-dim">Save or edit this project’s strategy and two-week content plan. AI drafts use the confirmed brief and captured source pages.</p>
-    <p className="text-xs leading-5 text-ink-dim">AI safety switch: {loadState === "ready" ? (aiAllowed ? "enabled" : "paused") : "checking"}. The cloud subscription worker and its model availability have not yet been verified.</p>
+    <p className="text-xs leading-5 text-ink-dim">AI safety switch: {loadState === "ready" ? (aiAllowed ? "enabled" : "paused") : "checking"}.</p>
+    <p className="text-xs leading-5 text-ink-dim" role="status">Cloud worker login: {aiCheck?.status === "completed" ? `${aiCheck.outcome === "subscription-login" ? "subscription login detected" : "unavailable or not signed in"} · checked ${new Date(aiCheck.updatedAt).toLocaleString()}` : aiCheck ? `${aiCheck.status}${aiCheck.recoverable ? " · timed out; check again" : ""}` : "not checked"}. This diagnostic does not test model generation or guarantee future availability.</p>
+    <button type="button" className={buttonClass} disabled={busy || loadState !== "ready" || (aiCheck?.status === "running" && !aiCheck.recoverable)} onClick={async () => {
+      const requestKey = aiCheck?.status === "queued" && !aiCheck.recoverable ? aiCheck.requestKey : crypto.randomUUID();
+      await action("check-ai-worker", { projectId: project._id, requestKey });
+      try {
+        const body = await responseJson(await fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store" }));
+        setAiCheck(body.aiCheck as typeof aiCheck);
+      } catch { /* The parent displays any request failure. */ }
+    }}>{aiCheck?.status === "queued" && !aiCheck.recoverable ? "Retry worker check" : "Check cloud worker login"}</button>
     <button type="button" className={buttonClass} disabled={busy || loadState !== "ready" || !aiAllowed || (run?.status === "running" && !run.recoverable)} onClick={async () => {
       const requestKey = run?.status === "queued" ? run.requestKey : crypto.randomUUID();
       const result = await action("generate-plan", { projectId: project._id, requestKey });

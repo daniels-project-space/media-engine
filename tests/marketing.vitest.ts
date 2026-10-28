@@ -99,6 +99,26 @@ async function item(
 }
 
 describe("marketing isolation and dispatch invariants", () => {
+  it("fences worker diagnostics, reuses retries and isolates projects", async () => {
+    const f = await projects();
+    const m = (name: string) => makeFunctionReference<"mutation">(`marketingPlans:${name}`);
+    const q = makeFunctionReference<"query">("marketingPlans:latestAiCheck");
+    const request = { projectId: f.a, requestKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" };
+    const later = { projectId: f.a, requestKey: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };
+    expect(await f.t.mutation(m("startAiCheck"), request)).toEqual({ status: "queued" });
+    expect(await f.t.mutation(m("startAiCheck"), request)).toEqual({ status: "queued" });
+    await expect(f.t.mutation(m("startAiCheck"), later)).rejects.toThrow(/Wait/);
+    expect(await f.t.mutation(m("claimAiCheck"), request)).toBe(true);
+    expect(await f.t.mutation(m("claimAiCheck"), request)).toBe(false);
+    expect(await f.t.query(q, { projectId: f.b, asOfMinute: Math.floor(Date.now() / 60_000) })).toBeNull();
+    const check = await f.t.query(q, { projectId: f.a, asOfMinute: Math.floor(Date.now() / 60_000) });
+    await f.t.run(ctx => ctx.db.patch(check!._id, { updatedAt: Date.now() - 180_000 }));
+    expect(await f.t.mutation(m("startAiCheck"), later)).toEqual({ status: "queued" });
+    expect(await f.t.mutation(m("finishAiCheck"), { ...request, outcome: "subscription-login" })).toBe(false);
+    expect(await f.t.mutation(m("claimAiCheck"), later)).toBe(true);
+    expect(await f.t.mutation(m("finishAiCheck"), { ...later, outcome: "unavailable" })).toBe(true);
+    expect(await f.t.query(q, { projectId: f.a, asOfMinute: Math.floor(Date.now() / 60_000) })).toMatchObject({ status: "completed", outcome: "unavailable" });
+  });
   it("reads the existing AI kill switch through the internal marketing boundary and fails closed", async () => {
     const t = convexTest(schema, modules);
     const aiAllowed = makeFunctionReference<"query">("marketingPlans:aiAllowed");

@@ -14,6 +14,9 @@ const mutations = {
   startPlan: "marketingPlans:start",
   claimPlan: "marketingPlans:claim",
   finishPlan: "marketingPlans:finish",
+  startAiCheck: "marketingPlans:startAiCheck",
+  claimAiCheck: "marketingPlans:claimAiCheck",
+  finishAiCheck: "marketingPlans:finishAiCheck",
   requestHyperImport: "marketingHyperImports:request",
   claimHyperImport: "marketingHyperImports:claim",
   settleHyperImport: "marketingHyperImports:settle",
@@ -46,6 +49,7 @@ const mutations = {
 } as const;
 const queries = {
   marketingAiAllowed: "marketingPlans:aiAllowed",
+  latestAiCheck: "marketingPlans:latestAiCheck",
   latestPlan: "marketingPlans:latest",
   listRenderBriefs: "marketingPlans:listRenderBriefs",
   listResearch: "marketingResearch:list",
