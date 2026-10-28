@@ -78,7 +78,23 @@ export const listRenderBriefs = internalQuery({
   handler: async (ctx, { projectId }) => {
     const [project, organization] = await Promise.all([ctx.db.get(projectId), findDefaultOrganization(ctx)]);
     if (!project || !organization || project.organizationId !== organization._id) throw new Error("Marketing project not found");
-    return ctx.db.query("marketingRenderBriefs").withIndex("by_project_created", q => q.eq("projectId", projectId)).order("desc").take(25);
+    const [briefs, latest] = await Promise.all([
+      ctx.db.query("marketingRenderBriefs").withIndex("by_project_created", q => q.eq("projectId", projectId)).order("desc").take(25),
+      ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", projectId)).order("desc").first(),
+    ]);
+    return briefs.map(brief => ({ ...brief, stale: latest?._id !== brief.planId || brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0) }));
+  },
+});
+
+export const getRenderBrief = internalQuery({
+  args: { projectId: v.id("marketingProjects"), briefId: v.id("marketingRenderBriefs") },
+  handler: async (ctx, { projectId, briefId }) => {
+    const [project, organization, brief] = await Promise.all([ctx.db.get(projectId), findDefaultOrganization(ctx), ctx.db.get(briefId)]);
+    if (!project || !organization || project.organizationId !== organization._id) throw new Error("Marketing project not found");
+    assertOwned(projectId, brief);
+    if (!brief) throw new Error("Render brief not found");
+    const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", projectId)).order("desc").first();
+    return { modelId: brief.modelId, stale: latest?._id !== brief.planId || brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0) };
   },
 });
 

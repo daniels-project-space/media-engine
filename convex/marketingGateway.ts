@@ -52,6 +52,7 @@ const queries = {
   latestAiCheck: "marketingPlans:latestAiCheck",
   latestPlan: "marketingPlans:latest",
   listRenderBriefs: "marketingPlans:listRenderBriefs",
+  getRenderBrief: "marketingPlans:getRenderBrief",
   listResearch: "marketingResearch:list",
   latestPlanRun: "marketingPlans:latestRun",
   latestHyperImport: "marketingHyperImports:latest",

@@ -85,6 +85,10 @@ try {
   await page.getByRole("button", { name: "Save render brief" }).click();
   await expect.poll(async () => (await call("listRenderBriefs", { projectId }) as unknown[]).length).toBe(1);
   await expect(page.getByText("Local introduction · x · minimax-h3", { exact: true })).toBeVisible();
+  await page.getByText("Local introduction · x · minimax-h3", { exact: true }).click();
+  await page.getByRole("button", { name: "Check render readiness" }).click();
+  await expect(page.getByText(/Project connection status is unavailable/)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/No GPU job was submitted/)).toBeVisible();
   await page.getByRole("button", { name: "Create review draft" }).click();
   await expect.poll(async () => ((await call("listWorkspace", { projectId })) as { items: unknown[] }).items.length).toBe(1);
   const final = await call("listWorkspace", { projectId }) as { items: Array<{ status: string; content: string }> };

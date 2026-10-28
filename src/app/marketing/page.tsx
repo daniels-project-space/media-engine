@@ -1517,7 +1517,7 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
     {revision > 0 ? <p className="text-xs text-ink-dim">Saved revision {revision} · {origin === "ai" ? "AI-generated draft" : "owner-authored"}</p> : null}
   </form>
   <PlanCalendar project={project} planId={planId} calendar={savedCalendar} stale={planProjectVersion !== project.version || planResearchVersion !== (project.researchVersion ?? 0) || calendar !== savedCalendar || strategy !== savedStrategy || sources !== savedSources} channels={channels} accounts={accounts} busy={busy} action={action} />
-  <RenderBriefs project={project} />
+  <RenderBriefs project={project} planId={planId} />
   </>;
 }
 
@@ -1566,17 +1566,17 @@ function PlanCalendar({ project, planId, calendar, stale, channels, accounts, bu
   </div>;
 }
 
-function RenderBriefs({ project }: { project: Project }) {
-  const [briefs, setBriefs] = useState<Doc<"marketingRenderBriefs">[]>([]);
+function RenderBriefs({ project, planId }: { project: Project; planId: string }) {
+  const [briefs, setBriefs] = useState<Array<Doc<"marketingRenderBriefs"> & { stale: boolean }>>([]);
   const [error, setError] = useState(false);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     fetch(`/api/marketing?view=render-briefs&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store", signal: controller.signal })
-      .then(responseJson).then(body => { setBriefs(body.briefs as Doc<"marketingRenderBriefs">[]); setError(false); })
+      .then(responseJson).then(body => { setBriefs(body.briefs as Array<Doc<"marketingRenderBriefs"> & { stale: boolean }>); setError(false); })
       .catch(() => { if (!controller.signal.aborted) setError(true); });
     return () => controller.abort();
-  }, [project._id, revision]);
+  }, [project._id, project.version, project.researchVersion, planId, revision]);
   useEffect(() => {
     const refresh = () => setRevision(value => value + 1);
     window.addEventListener("marketing-render-briefs-changed", refresh);
@@ -1586,11 +1586,37 @@ function RenderBriefs({ project }: { project: Project }) {
     <h3 className="text-sm font-bold">Render briefs</h3>
     <p className="text-xs leading-5 text-ink-dim">Saved creative scripts for the new GPU service. These are planning briefs only: no render, spend or approval has been initiated. Model qualification, project connection and enforceable spending controls are still required.</p>
     {error ? <p className="text-xs text-amber-600" role="alert">Could not load render briefs.</p> : null}
-    {briefs.map(brief => <details key={brief._id} className="rounded-xl border border-line p-3 text-xs">
-      <summary className="font-bold">{brief.format} · {brief.channel} · {brief.modelId}{brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0) ? " · brief changed since saving" : ""}</summary>
-      <p className="whitespace-pre-wrap pt-2 text-ink-dim">{brief.prompt}</p>
-    </details>)}
+    {briefs.map(brief => <RenderBriefCard key={brief._id} projectId={project._id} brief={brief} />)}
   </section>;
+}
+
+function RenderBriefCard({ projectId, brief }: { projectId: string; brief: Doc<"marketingRenderBriefs"> & { stale: boolean } }) {
+  const [environmentId, setEnvironmentId] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [message, setMessage] = useState("");
+  return <details className="rounded-xl border border-line p-3 text-xs">
+    <summary className="font-bold">{brief.format} · {brief.channel} · {brief.modelId}{brief.stale ? " · plan or brief changed since saving" : ""}</summary>
+    <p className="whitespace-pre-wrap pt-2 text-ink-dim">{brief.prompt}</p>
+    <form className="grid gap-2 pt-3" onSubmit={async event => {
+      event.preventDefault(); setChecking(true); setMessage("");
+      try {
+        const query = new URLSearchParams({ projectId, briefId: brief._id });
+        if (environmentId.trim()) query.set("environmentId", environmentId.trim());
+        const body = await responseJson(await fetch(`/api/marketing/hyper-preflight?${query}`, { cache: "no-store" }));
+        const model = body.model as null | { nativeQualified: boolean };
+        const environment = body.environment as null | { modelMatches: boolean; prepared: boolean };
+        const connection = String(body.projectConnection);
+        setMessage(`${body.briefStale ? "This brief is from an older plan or project version. " : ""}${model ? (model.nativeQualified ? "Model has a native qualification. " : "Model has no native qualification. ") : body.catalogueAvailable === true ? "Model is not in the current catalogue. " : "Model catalogue is unavailable. "}${connection === "missing" ? "Project connection is missing. " : connection === "verified" ? "Project connection verified. " : "Project connection status is unavailable. "}${environment ? (environment.modelMatches ? (environment.prepared ? "Environment is prepared and matches the model. " : "Environment matches but is not prepared. ") : "Environment uses a different model. ") : "No environment checked. "}Capacity, spending controls and output delivery are not verified. No GPU job was submitted.`);
+      } catch { setMessage("The project connection or environment could not be checked. Confirm the environment ID and try again."); }
+      finally { setChecking(false); }
+    }}>
+      <label className="grid gap-1 text-ink-dim">Existing renderer environment ID (optional)
+        <input className={inputClass} value={environmentId} maxLength={36} onChange={event => { setEnvironmentId(event.target.value); setMessage(""); }} placeholder="Environment UUID" />
+      </label>
+      <button className={buttonClass} disabled={checking}>{checking ? "Checking…" : "Check render readiness"}</button>
+      {message ? <p className="leading-5 text-ink-dim" role="status">{message}</p> : null}
+    </form>
+  </details>;
 }
 
 function RenderReuse({

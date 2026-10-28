@@ -142,9 +142,12 @@ describe("marketing isolation and dispatch invariants", () => {
     expect(await f.t.mutation(planMutation("createRenderBrief"), request)).toEqual({ briefId: first.briefId, reused: true });
     expect((await f.t.query(planQuery("listRenderBriefs"), { projectId: f.a }))[0]).toMatchObject({ prompt: "Show the product and its benefit", modelId: "minimax-h3" });
     expect(await f.t.query(planQuery("listRenderBriefs"), { projectId: f.b })).toHaveLength(0);
+    expect(await f.t.query(planQuery("getRenderBrief"), { projectId: f.a, briefId: first.briefId })).toEqual({ modelId: "minimax-h3", stale: false });
+    await expect(f.t.query(planQuery("getRenderBrief"), { projectId: f.b, briefId: first.briefId })).rejects.toThrow();
     await expect(f.t.mutation(planMutation("createRenderBrief"), { ...request, projectId: f.b })).rejects.toThrow();
     await f.t.mutation(planMutation("save"), { projectId: f.a, expectedProjectVersion: 1,
       expectedResearchVersion: 0, expectedRevision: 1, strategy: "Revised", calendar, sources: "" });
+    expect(await f.t.query(planQuery("getRenderBrief"), { projectId: f.a, briefId: first.briefId })).toEqual({ modelId: "minimax-h3", stale: true });
     await expect(f.t.mutation(planMutation("createRenderBrief"), { ...request, modelId: "qwen-image-2-1" })).rejects.toThrow(/current plan/);
   });
   it("admin cleanup refuses connected projects and removes only an exact unused draft", async () => {
