@@ -60,6 +60,10 @@ async function fixture(kind: "post" | "ad" = "post") {
       },
     ],
   });
+  await t.mutation(mutation("setProviderProfile"), {
+    projectId,
+    profileId: "owned-profile",
+  });
   const workspace = await t.query(query("listWorkspace"), { projectId });
   const accountId = workspace.accounts[0]._id;
   const channelId = await t.mutation(mutation("saveChannel"), {

@@ -228,6 +228,27 @@ export default function Marketing() {
     [notice, setNotice] = useState("");
   const [conversionToken, setConversionToken] = useState("");
   const requestNumber = useRef(0);
+  const requestedProjectId = useRef<string | null>(null);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    requestedProjectId.current = url.searchParams.get("projectId");
+    const connection = url.searchParams.get("connection");
+    if (!connection) return;
+    const messages: Record<string, string> = {
+      connected:
+        "Account connected and verified. Map it to a channel below; no post or ad was launched.",
+      pending:
+        "The provider returned from OAuth, but account sync is not verified yet. Refresh accounts and check the provider billing status.",
+      failed: "Platform authorization did not finish. You can retry the connection.",
+      invalid: "This connection return could not be verified. Start again from the project.",
+    };
+    if (requestedProjectId.current) setProjectId(requestedProjectId.current);
+    setTab("projects");
+    setNotice(messages[connection] ?? messages.invalid);
+    url.searchParams.delete("connection");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   const load = useCallback(async (selected: string, signal?: AbortSignal) => {
     const sequence = ++requestNumber.current;
@@ -238,7 +259,14 @@ export default function Marketing() {
     const data = (await responseJson(response)) as unknown as Workspace;
     if (sequence !== requestNumber.current) return;
     setWorkspace(data);
-    if (!selected && data.projects.length) setProjectId(data.projects[0]._id);
+    if (!selected && data.projects.length) {
+      const requested = requestedProjectId.current;
+      setProjectId(
+        requested && data.projects.some((row) => row._id === requested)
+          ? requested
+          : data.projects[0]._id,
+      );
+    }
   }, []);
 
   useEffect(() => {
@@ -259,8 +287,14 @@ export default function Marketing() {
         const data = value as unknown as Workspace;
         setWorkspace(data);
         setError("");
-        if (!projectId && data.projects.length)
-          setProjectId(data.projects[0]._id);
+        if (!projectId && data.projects.length) {
+          const requested = requestedProjectId.current;
+          setProjectId(
+            requested && data.projects.some((row) => row._id === requested)
+              ? requested
+              : data.projects[0]._id,
+          );
+        }
       })
       .catch((cause) => {
         if (!controller.signal.aborted)
@@ -279,6 +313,14 @@ export default function Marketing() {
   const accountById = new Map(
     workspace?.accounts.map((account) => [account._id, account]),
   );
+  const projectAccounts =
+    selected && project && workspace
+      ? workspace.accounts.filter((account) =>
+          project.zernioProfileId
+            ? account.profileId === project.zernioProfileId
+            : channels.some((channel) => channel.accountId === account._id),
+        )
+      : [];
 
   const hasPending = items.some((item) =>
     [
@@ -334,6 +376,17 @@ export default function Marketing() {
     }
   }
 
+  async function connectAccount(platform: "instagram" | "x" | "reddit" | "metaads" | "googleads") {
+    if (!projectId) return;
+    const result = await action("connect-account", { projectId, platform });
+    if (typeof result?.authUrl === "string") {
+      window.location.assign(result.authUrl);
+      return;
+    }
+    if (result?.alreadyConnected)
+      setNotice("This account is already connected to the project. Refresh the account list to verify its current status.");
+  }
+
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -385,6 +438,9 @@ export default function Marketing() {
     return (
       <MarketingOnboarding
         accounts={workspace.accounts}
+        reservedProfileIds={workspace.projects.flatMap((project) =>
+          project.zernioProfileId ? [project.zernioProfileId] : [],
+        )}
         onRefresh={async () => {
           const response = await fetch("/api/marketing", {
             method: "POST",
@@ -601,8 +657,8 @@ export default function Marketing() {
                 </p>
               ) : null}
               {project && tab === "projects" ? (
-                <section className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
-                  <div className="space-y-5 rounded-2xl border border-line bg-panel p-6">
+                <section className="grid items-start gap-6 lg:grid-cols-[1fr_1.2fr]">
+                  <div className="min-w-0 space-y-5 rounded-2xl border border-line bg-panel p-6">
                     <div className="flex items-start justify-between gap-3">
                       <h2 className="display text-2xl font-bold">
                         {project.name}
@@ -703,7 +759,7 @@ export default function Marketing() {
                       action={action}
                     />
                   </div>
-                  <div className="rounded-2xl border border-line bg-panel p-6">
+                  <div className="min-w-0 rounded-2xl border border-line bg-panel p-6">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <h2 className="display text-2xl font-bold">Channels</h2>
                       <button
@@ -715,18 +771,56 @@ export default function Marketing() {
                       </button>
                     </div>
                     <p className="mt-3 text-xs leading-6 text-ink-dim">
-                      Connect owned accounts in{" "}
-                      <a
-                        className="text-scope underline"
-                        href="https://zernio.com/dashboard"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Zernio
-                      </a>
-                      , then map them here. Dedicated social and ad accounts
-                      each count toward the software fee.
+                      Each project has its own provider profile. Connect through
+                      the platform&apos;s OAuth consent screen, then map the account
+                      below. Connecting does not publish or launch ads. Provider
+                      account fees count toward the $30/month base target. X API
+                      calls and managed ads after 500 active ads ($0.01 per
+                      active ad/month) can add provider usage fees; taxes and
+                      platform ad spend are separate.
                     </p>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      {([
+                        ["instagram", "Instagram"],
+                        ["x", "X"],
+                        ["reddit", "Reddit"],
+                        ["metaads", "Meta Ads"],
+                        ["googleads", "Google Ads"],
+                      ] as const).map(([platform, label]) => {
+                        const account = projectAccounts.find(
+                          (row) => row.platform === platform,
+                        );
+                        return (
+                          <div
+                            key={platform}
+                            className="flex items-center justify-between gap-3 rounded-lg border border-line p-3"
+                          >
+                            <span className="min-w-0 text-xs">
+                              <strong>{label}</strong>
+                              <span className="mt-1 block truncate text-ink-dim">
+                                {account
+                                  ? `${account.connected ? "Connected" : "Reconnect required"} · ${account.label}`
+                                  : project.zernioProfileId
+                                    ? "Not connected"
+                                    : "Connect to create this project profile"}
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              className={buttonClass}
+                              disabled={busy || account?.connected}
+                              onClick={() => void connectAccount(platform)}
+                            >
+                              {account?.connected
+                                ? "Connected"
+                                : account
+                                  ? "Reconnect"
+                                  : "Connect"}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
                     <div
                       role="list"
                       aria-label="Configured channels"
@@ -795,7 +889,7 @@ export default function Marketing() {
                           className={inputClass}
                         >
                           <option value="">Select an account</option>
-                          {workspace.accounts
+                          {projectAccounts
                             .filter((account) => account.connected)
                             .map((account) => (
                               <option key={account._id} value={account._id}>
@@ -1537,35 +1631,47 @@ function PlanCalendar({ project, planId, calendar, stale, channels, accounts, bu
   channels: Doc<"marketingChannels">[]; accounts: Doc<"marketingProviderAccounts">[]; busy: boolean;
   action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
 }) {
-  type CalendarEntry = { day: number; channel: string; format: string; rationale: string; caption: string; hashtags: string[]; videoScript: string };
+  type CalendarEntry = { day: number; localTime?: string; channel: string; format: string; rationale: string; caption: string;
+    cta?: string; promotion?: string; hashtags: string[]; videoScript: string; videoPrompt?: string; imagePrompt?: string };
   let entries: Array<{ entry: CalendarEntry; index: number }> = [];
   try {
     const value: unknown = JSON.parse(calendar);
     if (Array.isArray(value)) entries = value.map((entry, index) => ({ entry, index })).filter(({ entry }) =>
       entry && Number.isInteger(entry.day) && entry.day >= 1 && entry.day <= 14 && typeof entry.channel === "string" &&
       typeof entry.format === "string" && typeof entry.caption === "string" && typeof entry.rationale === "string" &&
-      typeof entry.videoScript === "string" && Array.isArray(entry.hashtags) && entry.hashtags.every((tag: unknown) => typeof tag === "string"));
+      typeof entry.videoScript === "string" &&
+      (entry.localTime === undefined || typeof entry.localTime === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(entry.localTime)) &&
+      (entry.cta === undefined || typeof entry.cta === "string") &&
+      (entry.promotion === undefined || typeof entry.promotion === "string") &&
+      Array.isArray(entry.hashtags) && entry.hashtags.every((tag: unknown) => typeof tag === "string"));
   } catch { /* An owner-authored free-text plan has no structured entries. */ }
   if (!entries.length || !planId) return null;
   return <div className="grid gap-3 border-t border-line pt-5">
     <h3 className="text-sm font-bold">Calendar drafts</h3>
-    <p className="text-xs leading-5 text-ink-dim">Each draft proposes 09:00 in {project.timezone}, on the indicated day from today. Review before approving; creating a draft does not publish it.</p>
+    <p className="text-xs leading-5 text-ink-dim">Proposed times use {project.timezone}. Creating a review draft stores its suggested time; it does not approve or publish it.</p>
     {stale ? <p className="text-xs text-amber-600" role="status">Save and review the current plan before creating drafts.</p> : null}
     {entries.map(({ entry, index }) => {
       const eligible = channels.filter(channel => accounts.some(account => account._id === channel.accountId && account.platform === entry.channel));
       return <div key={`${index}-${entry.day}`} className="grid gap-2 rounded-xl border border-line p-3">
-        <p className="text-xs font-bold">Day {entry.day} · {entry.channel} · {entry.format}</p>
+        <p className="text-xs font-bold">Day {entry.day} · {entry.localTime ?? "09:00"} {project.timezone} · {entry.channel} · {entry.format}</p>
         <p className="whitespace-pre-wrap text-xs leading-5 text-ink-dim">{entry.caption}</p>
+        {entry.cta ? <p className="text-xs text-ink-dim">CTA: {entry.cta}</p> : null}
+        {entry.promotion ? <p className="text-xs text-ink-dim">Promotion: {entry.promotion}</p> : null}
         {Array.isArray(entry.hashtags) && entry.hashtags.length ? <p className="text-xs text-ink-dim">{entry.hashtags.join(" ")}</p> : null}
         {entry.rationale ? <p className="text-xs text-ink-dim">Why: {entry.rationale}</p> : null}
         {entry.videoScript ? <details className="text-xs text-ink-dim"><summary>Video script</summary><p className="whitespace-pre-wrap">{entry.videoScript}</p></details> : null}
-        {entry.videoScript ? <form className="flex flex-wrap gap-2" onSubmit={async event => {
-          event.preventDefault();
-          await action("create-render-brief", { projectId: project._id, planId, entryIndex: index, modelId: new FormData(event.currentTarget).get("modelId") });
-          window.dispatchEvent(new Event("marketing-render-briefs-changed"));
-        }}><select name="modelId" className={inputClass} aria-label={`Render model for day ${entry.day}`}>
-          <option value="minimax-h3">Video · MiniMax H3</option><option value="qwen-image-2-1">Image · Qwen Image 2.1</option>
-        </select><button className={buttonClass} disabled={busy || stale}>Save render brief</button></form> : null}
+        {entry.videoPrompt ? <details className="text-xs text-ink-dim"><summary>Direct video-generation prompt</summary><p className="whitespace-pre-wrap">{entry.videoPrompt}</p></details> : null}
+        {entry.imagePrompt ? <details className="text-xs text-ink-dim"><summary>Direct image-generation prompt</summary><p className="whitespace-pre-wrap">{entry.imagePrompt}</p></details> : null}
+        {(entry.videoScript || entry.imagePrompt) ? <div className="flex flex-wrap gap-2">
+          {entry.videoScript ? <button type="button" className={buttonClass} disabled={busy || stale} onClick={async () => {
+            await action("create-render-brief", { projectId: project._id, planId, entryIndex: index, modelId: "minimax-h3" });
+            window.dispatchEvent(new Event("marketing-render-briefs-changed"));
+          }}>Prepare Hyper video prompt</button> : null}
+          {entry.imagePrompt ? <button type="button" className={buttonClass} disabled={busy || stale} onClick={async () => {
+            await action("create-render-brief", { projectId: project._id, planId, entryIndex: index, modelId: "qwen-image-2-1" });
+            window.dispatchEvent(new Event("marketing-render-briefs-changed"));
+          }}>Prepare Hyper image prompt</button> : null}
+        </div> : null}
         <form className="flex flex-wrap gap-2" onSubmit={async event => {
           event.preventDefault();
           const channelId = new FormData(event.currentTarget).get("channelId");
@@ -1599,11 +1705,11 @@ function RenderBriefs({ project, planId, busy, action }: { project: Project; pla
     <h3 className="text-sm font-bold">Render briefs</h3>
     <p className="text-xs leading-5 text-ink-dim">Saved creative scripts for the new GPU service. These are planning briefs only: no render, spend or approval has been initiated. Model qualification, project connection and enforceable spending controls are still required.</p>
     {error ? <p className="text-xs text-amber-600" role="alert">Could not load render briefs.</p> : null}
-    {briefs.map(brief => <RenderBriefCard key={brief._id} projectId={project._id} brief={brief} busy={busy} action={action} />)}
+    {briefs.map(brief => <RenderBriefCard key={brief._id} projectId={project._id} generationLimitMinor={project.generationLimitMinor} currency={project.currency} brief={brief} busy={busy} action={action} />)}
   </section>;
 }
 
-function RenderBriefCard({ projectId, brief, busy, action }: { projectId: string; brief: Doc<"marketingRenderBriefs"> & { stale: boolean }; busy: boolean; action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null> }) {
+function RenderBriefCard({ projectId, generationLimitMinor, currency, brief, busy, action }: { projectId: string; generationLimitMinor: number; currency: string; brief: Doc<"marketingRenderBriefs"> & { stale: boolean }; busy: boolean; action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null> }) {
   const [environmentId, setEnvironmentId] = useState("");
   const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState("");
@@ -1612,30 +1718,95 @@ function RenderBriefCard({ projectId, brief, busy, action }: { projectId: string
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [jobState, setJobState] = useState("");
   const [receiptAvailable, setReceiptAvailable] = useState(false);
+  const [requestMessage, setRequestMessage] = useState("");
+  const [renderRightsAuthorized, setRenderRightsAuthorized] = useState(false);
+  const [renderSpendAuthorized, setRenderSpendAuthorized] = useState(false);
+  const stagedQuality = brief.renderRequest?.quality;
+  const stagedSettings = brief.renderRequest?.settings;
+  const stagedImageWidth = stagedSettings && "width" in stagedSettings ? stagedSettings.width : 2048;
+  const stagedImageHeight = stagedSettings && "height" in stagedSettings ? stagedSettings.height : 2048;
   return <details className="rounded-xl border border-line p-3 text-xs">
-    <summary className="font-bold">{brief.format} · {brief.channel} · {brief.modelId}{brief.renderState === "ready" ? " · ready in project media" : brief.renderState === "failed" ? " · render or import failed" : brief.renderState === "importing" ? " · import in progress" : brief.renderState === "tracked" ? ` · Hyper job ${brief.renderProviderState ?? "linked"}` : " · brief only"}{brief.stale ? " · plan or brief changed since saving" : ""}</summary>
-    <p className="whitespace-pre-wrap pt-2 text-ink-dim">{brief.prompt}</p>
+    <summary className="font-bold">{brief.format} · {brief.channel} · {brief.modelId}{brief.renderState === "ready" ? " · ready in project media" : brief.renderState === "failed" ? " · render or import failed" : brief.renderState === "importing" ? " · import in progress" : brief.renderState === "tracked" ? ` · Hyper ${brief.renderProviderState === "connection-required" ? "waiting for project connection" : brief.renderProviderState === "service-temporarily-unavailable" ? "service temporarily unavailable" : brief.renderProviderState === "observation-window-ended" ? "automatic check paused" : `job ${brief.renderProviderState ?? "linked"}`}` : brief.renderRequest ? " · Hyper request staged, not submitted" : " · brief only"}{brief.renderError ? ` · ${brief.renderError.replaceAll("_", " ").toLowerCase()}` : ""}{brief.stale ? " · plan or brief changed since saving" : ""}</summary>
+    <p className="whitespace-pre-wrap pt-2 text-ink-dim"><span className="font-semibold">Prompt for the new Hyper GPU service:</span> {brief.prompt}</p>
+    {brief.script ? <details className="pt-2 text-ink-dim"><summary>Human-readable video script</summary><p className="whitespace-pre-wrap">{brief.script}</p></details> : null}
+    {brief.renderRequest ? <div className="grid gap-1 pt-2 text-ink-dim">
+      <p role="status">Request staged for the new Hyper {brief.renderRequest.modelId === "minimax-h3" ? "video" : "image"} service. No GPU job was submitted.</p>
+      {stagedQuality?.kind === "video" ? <p>Output: {stagedQuality.durationSeconds}s, {stagedQuality.width}×{stagedQuality.height} at {stagedQuality.fps} fps, finalized to {stagedQuality.postprocess.finalWidth}×{stagedQuality.postprocess.finalHeight}. The renderer pins this quality; Media Engine cannot override it.</p>
+        : stagedQuality?.kind === "image" ? <p>Output: {stagedQuality.outputResolution}px quality profile at {stagedImageWidth}×{stagedImageHeight} PNG. The renderer pins the quality profile; this workflow supplies no reference images or logos.</p> : null}
+      <p>Request fingerprint: <span className="font-mono">{brief.renderRequest.requestHash.slice(0, 16)}</span> · checked {new Date(brief.renderRequest.checkedAt).toISOString()}</p>
+      {brief.renderRequest.blockers.length ? <p>Waiting on: {brief.renderRequest.blockers.map(blocker => blocker.replaceAll("-", " ")).join("; ")}.</p> : null}
+      {brief.renderRequest.modelId === "minimax-h3" ? <p>The H3 guide accepts prompt text only and no image/logo inputs. Portrait requests such as Reels and Stories remain blocked until a qualified compatible route exists.</p>
+        : <p>The Qwen guide allows optional reference images, but this MVP stages prompt-only requests until project asset IDs can be passed through the renderer contract.</p>}
+      <div className="grid gap-2 border-t border-line pt-3">
+        <p>Preparing a request never starts a render. Submission is a separate one-time action for this exact request and remains unavailable while any live readiness blocker is present.</p>
+        <label className="flex gap-2 text-ink-dim"><input type="checkbox" checked={renderRightsAuthorized} onChange={event => setRenderRightsAuthorized(event.target.checked)} />I confirm I have the rights to use the prompt and any referenced material in this render.</label>
+        <label className="flex gap-2 text-ink-dim"><input type="checkbox" checked={renderSpendAuthorized} onChange={event => setRenderSpendAuthorized(event.target.checked)} />I authorize one render up to the project generation allowance of {amount(generationLimitMinor, currency)}. Submission stays blocked unless the backend can enforce this limit.</label>
+        <button type="button" className={buttonClass} disabled={busy || checking || brief.stale || (brief.renderRequest.blockers?.length ?? 0) > 0 || brief.renderRequest.environmentId !== (environmentId.trim() || undefined) || !renderRightsAuthorized || !renderSpendAuthorized} onClick={async () => {
+          setChecking(true); setRequestMessage("");
+          try {
+            const result = await action("submit-hyper-media", { projectId, briefId: brief._id,
+              ...(environmentId.trim() ? { environmentId: environmentId.trim() } : {}),
+              expectedRequestHash: brief.renderRequest!.requestHash, rightsConfirmed: true, spendAuthorized: true });
+            const submission = result?.renderSubmission as { submitted?: boolean; blockers?: string[]; job?: { id: string; state: string; monitoring: "queued" | "unconfirmed" } } | undefined;
+            if (!submission) throw new Error("The Hyper submission state was not returned.");
+            if (!submission.submitted) {
+              setRequestMessage(`No GPU job was submitted. Waiting on: ${(submission.blockers ?? []).map(item => item.replaceAll("-", " ")).join("; ") || "a refreshed readiness check"}.`);
+            } else {
+              setRequestMessage(`Hyper job ${submission.job?.state ?? "submitted"} · ${submission.job?.id ?? "ID pending"}. ${submission.job?.monitoring === "queued" ? "Automatic monitoring and verified project-media import are queued." : "Monitoring could not be confirmed; link the same job to retry status tracking."}`);
+              window.dispatchEvent(new Event("marketing-render-briefs-changed"));
+            }
+          } catch (error) { setRequestMessage(error instanceof Error ? error.message : "The Hyper request was not submitted."); }
+          finally { setChecking(false); }
+        }}>{checking ? "Checking render authorization…" : "Authorize and submit this exact render"}</button>
+      </div>
+    </div> : null}
+    {brief.modelId === "minimax-h3" || brief.modelId === "qwen-image-2-1" ? <div className="grid gap-2 pt-3">
+      <p className="leading-5 text-ink-dim">This prepares and records the exact {brief.modelId === "minimax-h3" ? "H3 video" : "Qwen image"} request from the live Hyper catalogue. It never submits a GPU job.</p>
+      <button type="button" className={buttonClass} disabled={busy || checking || brief.stale} onClick={async () => {
+        setChecking(true); setRequestMessage("");
+        setRenderRightsAuthorized(false); setRenderSpendAuthorized(false);
+        try {
+          const result = await action("stage-hyper-media", { projectId, briefId: brief._id, ...(environmentId.trim() ? { environmentId: environmentId.trim() } : {}) });
+          const staged = result?.renderRequest as { request?: { blockers?: string[]; requestHash?: string }; quality?: { kind: "video"; durationSeconds: number; width: number; height: number; postprocess: { finalWidth: number; finalHeight: number } } | { kind: "image"; outputResolution: number }; settings?: { width: number; height: number } | Record<string, never>; submitted?: boolean; job?: { id: string; state: string; monitoring?: "queued" | "unconfirmed" }; unavailable?: string } | undefined;
+          if (staged?.unavailable) throw new Error(staged.unavailable);
+          if (!staged?.request) throw new Error("The Hyper request was not staged.");
+          const blockers = staged.request.blockers ?? [];
+          const dimensions = staged.settings && "width" in staged.settings ? `${staged.settings.width}×${staged.settings.height}` : "2048×2048";
+          const output = staged.quality?.kind === "video" ? `${staged.quality.durationSeconds}s ${staged.quality.width}×${staged.quality.height} → ${staged.quality.postprocess.finalWidth}×${staged.quality.postprocess.finalHeight}. ` : staged.quality?.kind === "image" ? `${staged.quality.outputResolution}px at ${dimensions}. ` : "";
+          const dispatchState = staged.submitted
+            ? `Hyper job ${staged.job?.state ?? "submitted"} (${staged.job?.id ?? "ID pending"}). ${staged.job?.monitoring === "queued" ? "Automatic status checks and verified output import are queued." : "Automatic monitoring was not confirmed; link the same job again to retry monitoring."}`
+            : "No GPU job was submitted.";
+          setRequestMessage(`Saved request ${staged.request.requestHash?.slice(0, 16) ?? ""}. ${output}${blockers.length ? `Waiting on: ${blockers.map(item => item.replaceAll("-", " ")).join("; ")}. ` : ""}${dispatchState}`);
+          window.dispatchEvent(new Event("marketing-render-briefs-changed"));
+        } catch (error) { setRequestMessage(error instanceof Error ? error.message : "The Hyper request could not be staged."); }
+        finally { setChecking(false); }
+      }}>{checking ? "Checking Hyper contract…" : brief.renderRequest ? "Refresh Hyper request readiness" : `Prepare Hyper ${brief.modelId === "minimax-h3" ? "video" : "image"} request`}</button>
+      {requestMessage ? <p className="leading-5 text-ink-dim" role="status">{requestMessage}</p> : null}
+    </div> : null}
     <form className="grid gap-2 pt-3" onSubmit={async event => {
       event.preventDefault(); setChecking(true); setMessage("");
       try {
         const query = new URLSearchParams({ projectId, briefId: brief._id });
         if (environmentId.trim()) query.set("environmentId", environmentId.trim());
         const body = await responseJson(await fetch(`/api/marketing/hyper-preflight?${query}`, { cache: "no-store" }));
-        const model = body.model as null | { nativeQualified: boolean };
+        const model = body.model as null | { nativeQualified: boolean; qualifiedGpuTypes?: string[] };
         const environment = body.environment as null | { modelMatches: boolean; prepared: boolean };
         const connection = String(body.projectConnection);
-        setMessage(`${body.briefStale ? "This brief is from an older plan or project version. " : ""}${model ? (model.nativeQualified ? "Model has a native qualification. " : "Model has no native qualification. ") : body.catalogueAvailable === true ? "Model is not in the current catalogue. " : "Model catalogue is unavailable. "}${connection === "missing" ? "Project connection is missing. " : connection === "verified" ? "Project connection verified. " : "Project connection status is unavailable. "}${environment ? (environment.modelMatches ? (environment.prepared ? "Environment is prepared and matches the model. " : "Environment matches but is not prepared. ") : "Environment uses a different model. ") : "No environment checked. "}Capacity, spending controls and output delivery are not verified. No GPU job was submitted.`);
+        const gpuStatus = model?.qualifiedGpuTypes?.length
+          ? `Qualified GPU types for this model: ${model.qualifiedGpuTypes.join(", ")}. `
+          : model ? "No GPU type is qualified for this model yet. " : "";
+        setMessage(`${body.briefStale ? "This brief is from an older plan or project version. " : ""}${model ? (model.nativeQualified ? "Model has a native qualification. " : "Model has no native qualification. ") : body.catalogueAvailable === true ? "Model is not in the current catalogue. " : "Model catalogue is unavailable. "}${gpuStatus}${connection === "missing" ? "Project connection is missing. " : connection === "verified" ? "Project connection verified. " : "Project connection status is unavailable. "}${environment ? (environment.modelMatches ? (environment.prepared ? "Environment is prepared and matches the model. " : "Environment matches but is not prepared. ") : "Environment uses a different model. ") : "No environment checked. "}Capacity, spending controls and output delivery are not verified. No GPU job was submitted.`);
       } catch { setMessage("The project connection or environment could not be checked. Confirm the environment ID and try again."); }
       finally { setChecking(false); }
     }}>
       <label className="grid gap-1 text-ink-dim">Existing renderer environment ID (optional)
-        <input className={inputClass} value={environmentId} maxLength={36} onChange={event => { setEnvironmentId(event.target.value); setMessage(""); }} placeholder="Environment UUID" />
+        <input className={inputClass} value={environmentId} maxLength={36} onChange={event => { setEnvironmentId(event.target.value); setMessage(""); setRenderRightsAuthorized(false); setRenderSpendAuthorized(false); }} placeholder="Environment UUID" />
       </label>
       <button className={buttonClass} disabled={checking}>{checking ? "Checking…" : "Check render readiness"}</button>
       {message ? <p className="leading-5 text-ink-dim" role="status">{message}</p> : null}
     </form>
     <div className="grid gap-2 border-t border-line pt-3">
-      <p className="leading-5 text-ink-dim">Rendering uses the new 3090/5090 service. Media Engine does not submit GPU jobs here; link a job already created for this project and model.</p>
+      <p className="leading-5 text-ink-dim">New marketing images and videos use the Hyper service only, never the legacy Render Engine. The live status above distinguishes its initial and planned GPU hardware; neither means a model or worker is ready. Once a matching job is linked, Media Engine monitors it and imports completed output only after verifying the project receipt and hash.</p>
       <label className="grid gap-1 text-ink-dim" htmlFor={`hyper-job-${brief._id}`}>Existing new-service job ID
         <input id={`hyper-job-${brief._id}`} className={inputClass} value={jobId} maxLength={36} onChange={event => { setJobId(event.target.value); setJobState(""); setReceiptAvailable(false); setJobMessage(""); }} placeholder="Job UUID" />
       </label>
@@ -1644,14 +1815,14 @@ function RenderBriefCard({ projectId, brief, busy, action }: { projectId: string
         setChecking(true); setJobMessage("");
         try {
           const result = await action("track-hyper-render", { projectId, briefId: brief._id, jobId: jobId.trim(), rightsConfirmed: true });
-          const body = result?.result as { job?: { state: string; modelId: string; errorCode?: string | null; receipt?: { available: boolean } | null }; tracked?: { status: string } } | undefined;
+          const body = result?.result as { job?: { state: string; modelId: string; errorCode?: string | null; receipt?: { available: boolean } | null }; tracked?: { status: string }; monitoring?: "queued" | "unconfirmed" } | undefined;
           if (!body?.job) throw new Error("The render job could not be matched to this brief.");
           setJobState(body.job.state); setReceiptAvailable(body.job.receipt?.available === true);
-          setJobMessage(`Linked job · ${body.job.state}${body.job.errorCode ? ` · ${body.job.errorCode}` : ""}${body.job.receipt?.available ? " · output receipt available; import to verify it in project storage." : " · output is not ready to import."}`);
+          setJobMessage(`Linked job · ${body.job.state}${body.job.errorCode ? ` · ${body.job.errorCode}` : ""}${body.monitoring === "queued" ? " · automatic monitoring is active; completed output will be verified and imported." : " · automatic monitoring could not be confirmed; check again or use the manual import action when output is ready."}`);
           window.dispatchEvent(new Event("marketing-render-briefs-changed"));
         } catch { setJobMessage("Could not verify a matching project job. Check the connection, job ID and selected model."); }
         finally { setChecking(false); }
-      }}>{checking ? "Checking…" : "Check and link existing job"}</button>
+      }}>{checking ? "Checking…" : "Link and monitor existing job"}</button>
       {jobState === "completed" && receiptAvailable ? <button type="button" className={buttonClass} disabled={busy || checking || !rightsConfirmed || brief.stale} onClick={async () => {
         setChecking(true);
         try {

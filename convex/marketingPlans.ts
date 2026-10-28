@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { findDefaultOrganization } from "./controlPlaneModel";
-import { assertOwned, localPublicationTime, MAX_CONTENT_ROWS, text } from "./marketingPolicy";
+import { assertOwned, localPublicationTime, MAX_CONTENT_ROWS, snapshotHash, text } from "./marketingPolicy";
 
 // Read the existing global kill switch only through the authenticated gateway.
 // Retired public settings functions intentionally always reject their callers.
@@ -94,7 +94,139 @@ export const getRenderBrief = internalQuery({
     assertOwned(projectId, brief);
     if (!brief) throw new Error("Render brief not found");
     const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", projectId)).order("desc").first();
-    return { modelId: brief.modelId, stale: latest?._id !== brief.planId || brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0) };
+    return { modelId: brief.modelId, prompt: brief.prompt, format: brief.format,
+      stale: latest?._id !== brief.planId || brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0) };
+  },
+});
+
+export const stageHyperMediaRequest = internalMutation({
+  args: {
+    projectId: v.id("marketingProjects"),
+    briefId: v.id("marketingRenderBriefs"),
+    modelId: v.union(v.literal("minimax-h3"), v.literal("qwen-image-2-1")),
+    requestGuideHash: v.string(),
+    environmentId: v.optional(v.string()),
+    quality: v.union(
+      v.object({
+        kind: v.literal("video"), steps: v.number(), width: v.number(), height: v.number(), frames: v.number(), fps: v.number(),
+        durationSeconds: v.number(), precision: v.string(), approximateCache: v.boolean(),
+        postprocess: v.object({ latentScale: v.number(), videoRestoration: v.string(), finalWidth: v.number(), finalHeight: v.number(), required: v.boolean() }),
+      }),
+      v.object({
+        kind: v.literal("image"), precision: v.string(), steps: v.number(), cfg: v.number(), outputResolution: v.number(),
+        useKvCache: v.boolean(), cpuOffload: v.boolean(), defaultSeed: v.number(),
+      }),
+    ),
+    settings: v.union(v.object({}), v.object({ width: v.number(), height: v.number() })),
+    blockers: v.array(v.union(
+      v.literal("native-model-unqualified"),
+      v.literal("project-connection-missing"),
+      v.literal("project-connection-unavailable"),
+      v.literal("environment-required"),
+      v.literal("environment-model-mismatch"),
+      v.literal("environment-not-prepared"),
+      v.literal("requested-format-not-supported"),
+      v.literal("capacity-unverified"),
+      v.literal("spend-control-unverified"),
+      v.literal("output-delivery-unverified"),
+      v.literal("dispatch-disabled"),
+    )),
+  },
+  handler: async (ctx, args) => {
+    if (args.blockers.length > 16) throw new Error("Too many Hyper render readiness blockers");
+    const [project, organization, brief] = await Promise.all([
+      ctx.db.get(args.projectId), findDefaultOrganization(ctx), ctx.db.get(args.briefId),
+    ]);
+    if (!project || !organization || project.organizationId !== organization._id)
+      throw new Error("Marketing project not found");
+    assertOwned(project._id, brief);
+    if (!brief) throw new Error("Render brief not found");
+    if (brief.modelId !== args.modelId)
+      throw new Error("The selected Hyper model does not match this marketing brief");
+    if (args.quality.kind !== (args.modelId === "minimax-h3" ? "video" : "image"))
+      throw new Error("The Hyper quality profile does not match the selected model");
+    if (!/^[a-f0-9]{64}$/.test(args.requestGuideHash))
+      throw new Error("The live Hyper request guide fingerprint is invalid");
+    if (args.environmentId && !/^[0-9a-f-]{36}$/i.test(args.environmentId))
+      throw new Error("The Hyper environment ID is invalid");
+    const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", project._id)).order("desc").first();
+    if (latest?._id !== brief.planId || brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0))
+      throw new Error("Review and save the current plan before staging its media request");
+    const prompt = text(brief.prompt, "creative prompt", args.modelId === "minimax-h3" ? 20_000 : 10_000);
+    const outputContentType = args.modelId === "minimax-h3" ? "video/mp4" as const : "image/png" as const;
+    const requestHash = snapshotHash({
+      projectId: project._id,
+      briefId: brief._id,
+      modelId: brief.modelId,
+      outputContentType,
+      format: brief.format,
+      requestGuideHash: args.requestGuideHash,
+      environmentId: args.environmentId ?? null,
+      quality: args.quality,
+      inputs: { prompt },
+      settings: args.settings,
+      inputRefs: [],
+      outputKind: "final",
+      finalRetention: "project-default",
+    });
+    const requestKey = `media-engine-hyper:${brief._id}:${requestHash.slice(0, 24)}`;
+    const renderRequest = {
+      state: "staged" as const,
+      requestHash,
+      requestKey,
+      requestGuideHash: args.requestGuideHash,
+      modelId: args.modelId,
+      outputContentType,
+      ...(args.environmentId ? { environmentId: args.environmentId } : {}),
+      quality: args.quality,
+      settings: args.settings,
+      blockers: args.blockers,
+      checkedAt: Date.now(),
+    };
+    const reused = brief.renderRequest?.requestHash === requestHash;
+    await ctx.db.patch(brief._id, { renderRequest });
+    return { request: renderRequest, reused };
+  },
+});
+
+export const authorizeHyperMediaRequest = internalMutation({
+  args: {
+    projectId: v.id("marketingProjects"),
+    briefId: v.id("marketingRenderBriefs"),
+    requestHash: v.string(),
+    rightsConfirmed: v.literal(true),
+    spendAuthorized: v.literal(true),
+  },
+  handler: async (ctx, args) => {
+    const [project, organization, brief] = await Promise.all([
+      ctx.db.get(args.projectId), findDefaultOrganization(ctx), ctx.db.get(args.briefId),
+    ]);
+    if (!project || !organization || project.organizationId !== organization._id)
+      throw new Error("Marketing project not found");
+    assertOwned(project._id, brief);
+    if (!brief) throw new Error("Render brief not found");
+    const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", project._id)).order("desc").first();
+    if (latest?._id !== brief.planId || brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0))
+      throw new Error("Review and save the current strategy before authorizing this render");
+    const request = brief.renderRequest;
+    if (!request || request.state !== "staged" || request.requestHash !== args.requestHash)
+      throw new Error("The exact Hyper request changed. Refresh and review it before authorizing");
+    if (Date.now() - request.checkedAt > 5 * 60_000)
+      throw new Error("Hyper readiness is stale. Refresh the request before authorizing");
+    if (request.blockers.length > 0)
+      throw new Error(`Hyper submission is blocked: ${request.blockers.join(", ")}`);
+    if (!Number.isSafeInteger(project.generationLimitMinor) || project.generationLimitMinor <= 0)
+      throw new Error("Set a positive project generation allowance before authorizing a render");
+
+    const authorization = {
+      requestHash: request.requestHash,
+      authorizedAt: Date.now(),
+      generationLimitMinor: project.generationLimitMinor,
+      currency: project.currency,
+      source: "owner-action" as const,
+    };
+    await ctx.db.patch(brief._id, { renderRequest: { ...request, authorization } });
+    return { authorizedAt: authorization.authorizedAt, generationLimitMinor: authorization.generationLimitMinor, currency: authorization.currency };
   },
 });
 
@@ -113,14 +245,29 @@ export const createRenderBrief = internalMutation({
     try { entries = JSON.parse(plan.calendar); } catch { throw new Error("The saved calendar is not structured"); }
     if (!Array.isArray(entries) || entries.length > 28) throw new Error("The saved calendar is invalid");
     const entry = entries[args.entryIndex];
-    if (!entry || typeof entry !== "object" || typeof entry.videoScript !== "string" || !entry.videoScript.trim() || entry.videoScript.length > 10_000 ||
-        typeof entry.channel !== "string" || entry.channel.length > 40 || typeof entry.format !== "string" || entry.format.length > 200)
-      throw new Error("This calendar entry needs a bounded creative script");
+    if (!entry || typeof entry !== "object" || typeof entry.channel !== "string" || entry.channel.length > 40 ||
+        typeof entry.format !== "string" || entry.format.length > 200)
+      throw new Error("This calendar entry is not a supported creative item");
+    const row = entry as Record<string, unknown>;
+    const videoScript = typeof row.videoScript === "string" ? row.videoScript.trim() : "";
+    const videoPrompt = typeof row.videoPrompt === "string" ? row.videoPrompt.trim() : "";
+    const imagePrompt = typeof row.imagePrompt === "string" ? row.imagePrompt.trim() : "";
+    const prompt = args.modelId === "minimax-h3" ? (videoPrompt || videoScript) : imagePrompt;
+    const promptLimit = args.modelId === "minimax-h3" ? 20_000 : 10_000;
+    if (!prompt || prompt.length > promptLimit)
+      throw new Error(args.modelId === "minimax-h3"
+        ? "This video entry needs a separate bounded render prompt or a legacy video script"
+        : "This calendar entry needs a separate bounded image-generation prompt");
+    if (args.modelId === "minimax-h3" && (!videoScript || videoScript.length > 10_000))
+      throw new Error("This video entry needs a bounded human-readable script");
+    if (args.modelId === "qwen-image-2-1" && videoScript && !imagePrompt)
+      throw new Error("A video script cannot be used as an image-generation prompt");
     const existing = await ctx.db.query("marketingRenderBriefs").withIndex("by_plan_entry_model", q => q.eq("planId", plan._id).eq("entryIndex", args.entryIndex).eq("modelId", args.modelId)).unique();
     if (existing) return { briefId: existing._id, reused: true };
     const briefId = await ctx.db.insert("marketingRenderBriefs", { organizationId: organization._id, projectId: project._id,
       planId: plan._id, entryIndex: args.entryIndex, projectVersion: project.version, researchVersion: project.researchVersion ?? 0,
-      modelId: args.modelId, prompt: entry.videoScript.trim(), channel: entry.channel, format: entry.format, createdAt: Date.now() });
+      modelId: args.modelId, prompt, ...(args.modelId === "minimax-h3" ? { script: videoScript } : {}),
+      channel: entry.channel, format: entry.format, createdAt: Date.now() });
     return { briefId, reused: false };
   },
 });
@@ -263,6 +410,9 @@ export const createDraft = internalMutation({
         !Array.isArray(entry.hashtags) || entry.hashtags.length > 8 || !entry.hashtags.every(tag => typeof tag === "string" && tag.length <= 100))
       throw new Error("The saved calendar entry is incomplete");
     if (entry.channel !== "instagram" && entry.channel !== "x" && entry.channel !== "reddit") throw new Error("Choose a supported social platform");
+    const localTime = entry.localTime === undefined ? "09:00" : entry.localTime;
+    if (typeof localTime !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(localTime))
+      throw new Error("The saved calendar entry needs a local posting time in HH:MM format");
     const platform = entry.channel;
     const account = channel ? await ctx.db.get(channel.accountId) : null;
     if (args.channelId && (!channel || !account || account.platform !== platform))
@@ -274,12 +424,23 @@ export const createDraft = internalMutation({
     const asset = project.defaultAssetId ? await ctx.db.get(project.defaultAssetId) : null;
     if (asset) { assertOwned(project._id, asset); if (!asset.rightsConfirmed) throw new Error("Confirm media rights first"); }
     if (channel && platform === "instagram" && !asset) throw new Error("Add verified project media before preparing an Instagram draft");
+    const sections = [entry.caption.trim()];
+    for (const field of ["cta", "promotion"] as const) {
+      const value = entry[field];
+      if (value === undefined || value === "") continue;
+      const maxLength = field === "cta" ? 300 : 500;
+      if (typeof value !== "string" || value.length > maxLength)
+        throw new Error(`The saved calendar entry has an invalid ${field}`);
+      if (!entry.caption.toLowerCase().includes(value.trim().toLowerCase()) &&
+          !sections.some(section => section.toLowerCase().includes(value.trim().toLowerCase())))
+        sections.push(value.trim());
+    }
     const tags = (entry.hashtags as string[]).map(tag => tag.trim()).filter(Boolean).join(" ");
-    const content = text(`${entry.caption}${tags ? `\n\n${tags}` : ""}`, "Content", platform === "x" ? 280 : platform === "instagram" ? 2200 : 10000);
+    const content = text(`${[...sections, ...(tags ? [tags] : [])].join("\n\n")}`, "Content", platform === "x" ? 280 : platform === "instagram" ? 2200 : 10000);
     const now = Date.now();
     const itemId = await ctx.db.insert("marketingItems", { organizationId: project.organizationId, projectId: project._id,
       planId: plan._id, planEntryIndex: args.entryIndex, ...(channel ? { channelId: channel._id } : {}), intendedPlatform: platform, kind: "post", title: text(entry.format, "Format", 200),
-      content, scheduledAt: localPublicationTime(now, Number(entry.day), project.timezone),
+      content, scheduledAt: localPublicationTime(now, Number(entry.day), project.timezone, localTime),
       ...(asset ? { assetId: asset._id } : {}), version: 1, status: "draft", idempotencyKey,
       heldIntegrationMinor: 0, heldAdvertisingMinor: 0, nextCheckAt: now, createdAt: now, updatedAt: now });
     await ctx.db.patch(project._id, { openItemCount: project.openItemCount + 1, updatedAt: now });

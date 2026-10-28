@@ -40,18 +40,23 @@ export async function providerClient() {
   return new ZernioClient(apiKey);
 }
 
-export async function refreshProviderAccounts() {
+export function assertCurrentProviderPricing(now = Date.now()): number {
   const pricingVerifiedAt = Date.parse(
     process.env.MARKETING_PRICING_VERIFIED_AT ?? "",
   );
   if (
     !Number.isFinite(pricingVerifiedAt) ||
-    pricingVerifiedAt > Date.now() ||
-    pricingVerifiedAt < Date.now() - 30 * 86_400_000
+    pricingVerifiedAt > now ||
+    pricingVerifiedAt < now - 30 * 86_400_000
   )
     throw new Error(
       "Set MARKETING_PRICING_VERIFIED_AT after checking current Zernio pricing and X usage rates",
     );
+  return pricingVerifiedAt;
+}
+
+export async function refreshProviderAccounts() {
+  const pricingVerifiedAt = assertCurrentProviderPricing();
   const client = await providerClient();
   const [inventory, billing] = await Promise.all([
     client.listAccounts(),
