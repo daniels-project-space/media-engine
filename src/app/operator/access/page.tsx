@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 /**
@@ -8,7 +7,6 @@ import { useEffect, useState } from "react";
  * so browsers do not send it to the server in a request URL or Referer header.
  */
 export default function OperatorAccessPage() {
-  const router = useRouter();
   const [message, setMessage] = useState("Connecting your private workspace…");
 
   useEffect(() => {
@@ -41,15 +39,17 @@ export default function OperatorAccessPage() {
           );
           return;
         }
-        router.replace(hubHandoff ? "/marketing" : "/");
-        router.refresh();
+        // The shell may have prefetched a private-page redirect before this
+        // session existed. A document navigation rechecks the new HttpOnly
+        // cookie instead of reusing that unauthenticated router cache.
+        window.location.replace(hubHandoff ? "/marketing" : "/");
       } catch {
         setMessage(
           "The private workspace could not be connected. Generate a fresh owner-access link and try again.",
         );
       }
     })();
-  }, [router]);
+  }, []);
 
   return (
     <main className="grid min-h-screen place-items-center bg-void p-6">
