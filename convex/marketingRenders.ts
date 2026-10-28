@@ -266,6 +266,7 @@ export const settleImport = internalMutation({
     const assetId =
       existing?._id ??
       (await ctx.db.insert("marketingAssets", {
+        organizationId: project.organizationId,
         projectId: project._id,
         key: item!.destinationKey,
         sha256: item!.sha256,

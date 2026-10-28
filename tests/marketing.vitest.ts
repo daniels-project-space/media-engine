@@ -99,6 +99,206 @@ async function item(
 }
 
 describe("marketing isolation and dispatch invariants", () => {
+  it("admin cleanup refuses connected projects and removes only an exact unused draft", async () => {
+    const f = await projects();
+    await expect(
+      f.t.mutation(mutation("removeEmptyProject"), {
+        projectId: f.a,
+        expectedName: "alpha",
+      }),
+    ).rejects.toThrow(/content or connections/);
+    const empty = await f.t.mutation(
+      mutation("createProject"),
+      draft("unused"),
+    );
+    await expect(
+      f.t.mutation(mutation("removeEmptyProject"), {
+        projectId: empty,
+        expectedName: "wrong",
+      }),
+    ).rejects.toThrow(/unused draft/);
+    expect(
+      await f.t.mutation(mutation("removeEmptyProject"), {
+        projectId: empty,
+        expectedName: "unused",
+      }),
+    ).toEqual({ removed: true });
+  });
+
+  it("replays the same onboarding request without creating a duplicate or accepting a different brief", async () => {
+    const t = convexTest(schema, modules),
+      input = {
+        ...draft("idempotent"),
+        onboardingKey: "12345678-1234-1234-1234-123456789abc",
+      };
+    const id = await t.mutation(mutation("createProject"), input);
+    expect(await t.mutation(mutation("createProject"), input)).toBe(id);
+    await expect(
+      t.mutation(mutation("createProject"), {
+        ...input,
+        offer: "Different offer",
+      }),
+    ).rejects.toThrow(/conflicts/);
+    expect((await t.query(query("listWorkspace"), {})).projects).toHaveLength(
+      1,
+    );
+  });
+
+  it("updates a paused/draft brief with optimistic version checks and retires stale approvals", async () => {
+    const f = await projects(),
+      id = await item(f);
+    await f.t.mutation(mutation("approveItem"), { projectId: f.a, itemId: id });
+    const definition = Object.fromEntries(
+      Object.entries(draft("alpha")).filter(
+        ([key]) => !["goal", "currency", "conversionTokenHash"].includes(key),
+      ),
+    );
+    const edit = {
+      ...definition,
+      projectId: f.a,
+      expectedVersion: 1,
+      offer: "A revised owned offer",
+      advertisingLimitMinor: 1_500,
+    };
+    expect((await f.t.mutation(mutation("updateProject"), edit)).version).toBe(
+      2,
+    );
+    const workspace = await f.t.query(query("listWorkspace"), {
+      projectId: f.a,
+    });
+    expect(workspace.items[0].status).toBe("cancelled");
+    expect(
+      workspace.projects.find((row: { _id: string }) => row._id === f.a).offer,
+    ).toBe(edit.offer);
+    await expect(f.t.mutation(mutation("updateProject"), edit)).rejects.toThrow(
+      /changed/,
+    );
+    await f.t.mutation(mutation("setProjectStatus"), {
+      projectId: f.a,
+      status: "active",
+    });
+    await expect(
+      f.t.mutation(mutation("updateProject"), { ...edit, expectedVersion: 2 }),
+    ).rejects.toThrow(/Pause/);
+  });
+
+  it("keeps lifetime widget metrics and conversions exactly once across provider/event replays", async () => {
+    const f = await projects(),
+      id = await item(f);
+    await f.t.mutation(mutation("setProjectStatus"), {
+      projectId: f.a,
+      status: "active",
+    });
+    await f.t.mutation(mutation("approveItem"), { projectId: f.a, itemId: id });
+    await f.t.mutation(mutation("claimItem"), {
+      projectId: f.a,
+      itemId: id,
+      workerRunId: "widget-worker",
+    });
+    const outcome = {
+      projectId: f.a,
+      itemId: id,
+      status: "published",
+      providerId: "widget-post",
+      publicationUrl: "https://x.com/owned/status/1",
+      metrics: {
+        clicks: 4,
+        impressions: 30,
+        spendMinor: 0,
+        currency: "USD",
+        capturedAt: Date.now(),
+      },
+    };
+    await f.t.mutation(mutation("recordOutcome"), outcome);
+    await f.t.mutation(mutation("recordOutcome"), outcome);
+    const event = {
+      projectId: f.a,
+      tokenHash: draft("alpha").conversionTokenHash,
+      eventId: "widget-conversion",
+      event: "signup",
+      valueMinor: 500,
+      currency: "USD",
+      occurredAt: Date.now(),
+    };
+    await f.t.mutation(mutation("ingestConversion"), event);
+    await f.t.mutation(mutation("ingestConversion"), event);
+    const overview = await f.t.query(
+      makeFunctionReference<"query">("marketingOverview:overview"),
+      {},
+    );
+    const alpha = overview.projects.find(
+        (row: { id: string }) => row.id === f.a,
+      ),
+      beta = overview.projects.find((row: { id: string }) => row.id === f.b);
+    expect(alpha.stats).toMatchObject({
+      published: 1,
+      clicks: 4,
+      impressions: 30,
+      conversions: 1,
+      valueMinor: 500,
+    });
+    expect(beta.stats).toMatchObject({
+      published: 0,
+      clicks: 0,
+      conversions: 0,
+    });
+    const table = await f.t.query(
+      makeFunctionReference<"query">("marketingOverview:contentTable"),
+      { kind: "content", paginationOpts: { cursor: null, numItems: 25 } },
+    );
+    expect(
+      table.page.find((row: { _id: string }) => row._id === id)?.projectName,
+    ).toBe("alpha");
+  });
+
+  it("deduplicates actual subscription charges, separates currencies and voids without deleting receipts", async () => {
+    const f = await projects(),
+      record = makeFunctionReference<"mutation">(
+        "marketingOverview:recordCost",
+      ),
+      read = makeFunctionReference<"query">("marketingOverview:overview");
+    const charge = {
+      label: "Owned subscription",
+      category: "subscription",
+      amountMinor: 1800,
+      currency: "USD",
+      occurredAt: Date.now(),
+      reference: "invoice-widget-1",
+    };
+    const entry = await f.t.mutation(record, charge);
+    expect((await f.t.mutation(record, charge)).reused).toBe(true);
+    await expect(
+      f.t.mutation(record, { ...charge, amountMinor: 1801 }),
+    ).rejects.toThrow(/reference/);
+    await f.t.mutation(record, {
+      ...charge,
+      currency: "EUR",
+      amountMinor: 900,
+      reference: "invoice-widget-2",
+    });
+    let snapshot = await f.t.query(read, {});
+    expect(
+      snapshot.costs.find((row: { currency: string }) => row.currency === "USD")
+        .subscription,
+    ).toBe(1800);
+    expect(
+      snapshot.costs.find((row: { currency: string }) => row.currency === "EUR")
+        .subscription,
+    ).toBe(900);
+    const voidEntry = makeFunctionReference<"mutation">(
+      "marketingOverview:voidCost",
+    );
+    await f.t.mutation(voidEntry, { costId: entry.id });
+    expect((await f.t.mutation(voidEntry, { costId: entry.id })).reused).toBe(
+      true,
+    );
+    snapshot = await f.t.query(read, {});
+    expect(
+      snapshot.costs.find((row: { currency: string }) => row.currency === "USD")
+        .subscription,
+    ).toBe(0);
+  });
+
   it("prepares one week atomically with real item campaign IDs and holds draft-project approvals until start", async () => {
     const f = await projects();
     const planned = await f.t.mutation(mutation("generateWeek"), {

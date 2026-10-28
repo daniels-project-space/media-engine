@@ -13,6 +13,10 @@ import {
   type FormEvent,
   type ReactElement,
 } from "react";
+import MarketingOverview, {
+  MarketingLibrary,
+} from "@/components/marketing-overview";
+import MarketingOnboarding from "@/components/marketing-onboarding";
 import type { Doc } from "../../../convex/_generated/dataModel";
 
 type Project = Omit<Doc<"marketingProjects">, "conversionTokenHash">;
@@ -87,19 +91,141 @@ async function responseJson(
   return body;
 }
 
+function ProjectSettings({
+  project,
+  busy,
+  action,
+}: {
+  project: Project;
+  busy: boolean;
+  action: (
+    name: string,
+    payload: Record<string, unknown>,
+  ) => Promise<Record<string, unknown> | null>;
+}) {
+  const fields = [
+    ["name", "Project name", project.name],
+    ["website", "Website URL", project.website],
+    ["offer", "Offer", project.offer],
+    ["audience", "Audience", project.audience],
+    ["tone", "Voice", project.tone],
+    ["timezone", "Timezone", project.timezone],
+  ];
+  return (
+    <details className="rounded-xl border border-line p-4">
+      <summary className="cursor-pointer text-sm font-semibold">
+        Edit project brief & limits
+      </summary>
+      <form
+        key={project.version}
+        className="mt-5 grid gap-4"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          const data = new FormData(event.currentTarget);
+          await action("update-project", {
+            projectId: project._id,
+            expectedVersion: project.version,
+            ...Object.fromEntries(fields.map(([key]) => [key, data.get(key)])),
+            facts: String(data.get("facts"))
+              .split("\n")
+              .map((value) => value.trim())
+              .filter(Boolean),
+            cadence: Number(data.get("cadence")),
+            generationLimitMinor: Math.round(
+              Number(data.get("generationLimit")) * 100,
+            ),
+            advertisingLimitMinor: Math.round(
+              Number(data.get("advertisingLimit")) * 100,
+            ),
+          });
+        }}
+      >
+        <p className="text-xs leading-5 text-ink-dim">
+          Pause automation before editing. Saving retires pending drafts and
+          approvals so your next week uses the updated brief. Currency and
+          conversion goal stay fixed for consistent reporting.
+        </p>
+        {fields.map(([key, label, value]) => (
+          <Field key={key} label={label}>
+            <input
+              name={key}
+              type={key === "website" ? "url" : "text"}
+              defaultValue={value}
+              required
+              className={inputClass}
+            />
+          </Field>
+        ))}
+        <Field label="Confirmed facts · one per line">
+          <textarea
+            name="facts"
+            rows={3}
+            required
+            defaultValue={project.facts.join("\n")}
+            className={inputClass}
+          />
+        </Field>
+        <Field label="Posts per channel / week">
+          <input
+            name="cadence"
+            type="number"
+            min={1}
+            max={7}
+            required
+            defaultValue={project.cadence}
+            className={inputClass}
+          />
+        </Field>
+        <Field label={`Generation / month (${project.currency})`}>
+          <input
+            name="generationLimit"
+            type="number"
+            min={0}
+            step="0.01"
+            required
+            defaultValue={project.generationLimitMinor / 100}
+            className={inputClass}
+          />
+        </Field>
+        <Field label={`Advertising / month (${project.currency})`}>
+          <input
+            name="advertisingLimit"
+            type="number"
+            min={0}
+            step="0.01"
+            required
+            defaultValue={project.advertisingLimitMinor / 100}
+            className={inputClass}
+          />
+        </Field>
+        <label className="flex gap-2 text-xs leading-5 text-ink-dim">
+          <input type="checkbox" required />I confirm the updated facts and
+          understand that pending drafts will be retired.
+        </label>
+        <button
+          className={buttonClass}
+          disabled={busy || project.status === "active"}
+        >
+          Save project changes
+        </button>
+      </form>
+    </details>
+  );
+}
+
 export default function Marketing() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [projectId, setProjectId] = useState("");
-  const [tab, setTab] = useState<"projects" | "content" | "results">(
-    "projects",
-  );
+  const [tab, setTab] = useState<
+    "overview" | "projects" | "content" | "results" | "library"
+  >("overview");
   const [creating, setCreating] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [conversionToken, setConversionToken] = useState("");
   const requestNumber = useRef(0);
-  const projectForm = useRef<HTMLFormElement>(null);
+
   const load = useCallback(async (selected: string, signal?: AbortSignal) => {
     const sequence = ++requestNumber.current;
     const response = await fetch(
@@ -203,68 +329,6 @@ export default function Marketing() {
     }
   }
 
-  async function inspectWebsite() {
-    const form = projectForm.current;
-    if (!form) return;
-    const url = String(new FormData(form).get("website") ?? "");
-    setBusy(true);
-    setError("");
-    try {
-      const data = await responseJson(
-        await fetch("/api/marketing/inspect", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ url }),
-        }),
-      );
-      for (const name of ["name", "website", "offer"]) {
-        const field = form.elements.namedItem(name);
-        if (
-          (field instanceof HTMLInputElement ||
-            field instanceof HTMLTextAreaElement) &&
-          typeof data[name] === "string"
-        )
-          field.value = data[name] as string;
-      }
-      setNotice(
-        "Website metadata imported. Confirm the offer and add substantiated product facts before saving.",
-      );
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Website inspection failed",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createProject(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await action("create-project", {
-      name: form.get("name"),
-      website: form.get("website"),
-      offer: form.get("offer"),
-      audience: form.get("audience"),
-      facts: String(form.get("facts"))
-        .split("\n")
-        .map((value) => value.trim())
-        .filter(Boolean),
-      goal: form.get("goal"),
-      tone: form.get("tone"),
-      timezone: form.get("timezone"),
-      cadence: Number(form.get("cadence")),
-      currency: form.get("currency"),
-      generationLimitMinor: Math.round(
-        Number(form.get("generationLimit")) * 100,
-      ),
-      advertisingLimitMinor: Math.round(
-        Number(form.get("advertisingLimit")) * 100,
-      ),
-    });
-  }
-
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -290,26 +354,88 @@ export default function Marketing() {
     }
   }
 
+  const onboarding =
+    creating ||
+    (!!workspace && workspace.projects.length === 0 && tab === "projects");
+  useEffect(() => {
+    const update = () => {
+      const value = location.hash.slice(1);
+      if (
+        value === "overview" ||
+        value === "projects" ||
+        value === "content" ||
+        value === "results" ||
+        value === "library"
+      ) {
+        setTab(value);
+        if (value !== "projects") setCreating(false);
+      }
+    };
+    update();
+    window.addEventListener("hashchange", update);
+    return () => window.removeEventListener("hashchange", update);
+  }, []);
+
+  if (onboarding && workspace)
+    return (
+      <MarketingOnboarding
+        accounts={workspace.accounts}
+        onRefresh={async () => {
+          const response = await fetch("/api/marketing", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "refresh-accounts", payload: {} }),
+          });
+          await responseJson(response);
+          await load(projectId);
+        }}
+        onComplete={async (id, token) => {
+          setProjectId(id);
+          setConversionToken(token);
+          setCreating(false);
+          setTab("projects");
+          window.location.hash = "projects";
+          await load(id);
+          setNotice(
+            "Project created. Add owned media and prepare your first week when your channels are ready.",
+          );
+        }}
+        onCancel={
+          workspace.projects.length ? () => setCreating(false) : undefined
+        }
+      />
+    );
+
+  function startProject() {
+    setCreating(true);
+    setTab("projects");
+    window.location.hash = "projects";
+  }
+  function openProject(id: string) {
+    setProjectId(id);
+    setCreating(false);
+    setTab("projects");
+    window.location.hash = "projects";
+  }
   return (
-    <main className="mx-auto min-w-0 w-full max-w-6xl space-y-7 pb-12">
+    <main className="mk-workspace min-w-0 w-full space-y-7 pb-12">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-[.22em] text-signal">
-            Media Engine / Marketing
-          </p>
+          <p className="mk-workspace-title">Your marketing workspace</p>
           <h1 className="display mt-3 text-4xl font-extrabold">
-            One project. A clear next step.
+            {tab === "overview"
+              ? "A clear view of everything."
+              : tab === "library"
+                ? "Your media. All organised."
+                : "Your projects. Ready to grow."}
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-ink-dim">
-            Define an offer, prepare its content, and keep publishing and
-            advertising accountable to real results.
+            Everything you need to plan content, manage channels and see what’s
+            working.
           </p>
         </div>
-        <button
-          className={primaryClass}
-          disabled={busy}
-          onClick={() => setCreating((value) => !value)}
-        >
+        <button className={primaryClass} disabled={busy} onClick={startProject}>
           Add project
         </button>
       </header>
@@ -321,10 +447,10 @@ export default function Marketing() {
           <p>{error}</p>
           {error.includes("session") ? (
             <Link
-              href="/operator/access"
+              href="https://project-hub-olive-pi.vercel.app/media-engine"
               className="mt-2 inline-block underline"
             >
-              Open operator access
+              Unlock through Project Hub
             </Link>
           ) : null}
         </div>
@@ -336,151 +462,6 @@ export default function Marketing() {
         >
           {notice}
         </p>
-      ) : null}
-      {creating ? (
-        <section className="rounded-2xl border border-line bg-panel p-6">
-          <h2 className="display text-2xl font-bold">Define a project</h2>
-          <p className="mt-2 text-sm text-ink-dim">
-            Use verified facts from your website. Templates use only what you
-            confirm here.
-          </p>
-          <form
-            ref={projectForm}
-            onSubmit={createProject}
-            className="mt-6 grid gap-4 md:grid-cols-2"
-          >
-            <Field label="Project name">
-              <input
-                name="name"
-                required
-                maxLength={120}
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Website">
-              <input
-                name="website"
-                type="url"
-                required
-                placeholder="https://your-project.com"
-                className={inputClass}
-              />
-            </Field>
-            <div className="md:col-span-2">
-              <button
-                type="button"
-                disabled={busy}
-                className={buttonClass}
-                onClick={() => void inspectWebsite()}
-              >
-                Import name and offer from URL
-              </button>
-            </div>
-            <Field label="What is the offer?">
-              <textarea
-                name="offer"
-                required
-                maxLength={2000}
-                rows={3}
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Who is it for?">
-              <textarea
-                name="audience"
-                required
-                maxLength={1000}
-                rows={3}
-                className={inputClass}
-              />
-            </Field>
-            <div className="md:col-span-2">
-              <Field label="Confirmed product facts — one per line">
-                <textarea
-                  name="facts"
-                  required
-                  rows={4}
-                  className={inputClass}
-                  placeholder="Facts you can substantiate; avoid promised results or invented reviews."
-                />
-              </Field>
-            </div>
-            <Field label="One measurable goal">
-              <select name="goal" className={inputClass}>
-                <option value="signup">Signups</option>
-                <option value="lead">Qualified leads / bookings</option>
-                <option value="purchase">Purchases</option>
-              </select>
-            </Field>
-            <Field label="Voice">
-              <input
-                name="tone"
-                required
-                defaultValue="Clear, useful and direct"
-                maxLength={300}
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Timezone">
-              <input
-                name="timezone"
-                required
-                defaultValue="Europe/Zurich"
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Posts per channel per week">
-              <input
-                name="cadence"
-                type="number"
-                min={1}
-                max={7}
-                defaultValue={3}
-                required
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Currency">
-              <select name="currency" className={inputClass}>
-                {["USD", "GBP", "EUR", "CHF"].map((currency) => (
-                  <option key={currency}>{currency}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Monthly generation allowance — separate from software">
-              <input
-                name="generationLimit"
-                type="number"
-                min={0}
-                step="0.01"
-                defaultValue={0}
-                required
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Monthly advertising allowance — separate from software">
-              <input
-                name="advertisingLimit"
-                type="number"
-                min={0}
-                step="0.01"
-                defaultValue={0}
-                required
-                className={inputClass}
-              />
-            </Field>
-            <label className="flex items-center gap-3 text-xs text-ink-dim md:col-span-2">
-              <input type="checkbox" required />I confirm the product facts,
-              offer and usage rights are accurate.
-            </label>
-            <button
-              disabled={busy}
-              className={`${primaryClass} justify-self-start`}
-            >
-              Save project
-            </button>
-          </form>
-        </section>
       ) : null}
       {conversionToken ? (
         <section className="rounded-xl border border-amber/40 p-5">
@@ -502,666 +483,714 @@ export default function Marketing() {
       ) : null}
       {workspace ? (
         <>
-          <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-line bg-panel p-4">
-            <Field label="Current project">
-              <select
-                aria-label="Current project"
-                className={`${inputClass} min-w-60`}
-                value={projectId}
-                disabled={busy}
-                onChange={(event) => {
-                  setProjectId(event.target.value);
-                  setConversionToken("");
-                  setNotice("");
-                }}
-              >
-                {workspace.projects.length ? (
-                  workspace.projects.map((row) => (
-                    <option key={row._id} value={row._id}>
-                      {row.name}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">Add your first project</option>
-                )}
-              </select>
-            </Field>
-            <div className="text-right text-xs leading-6 text-ink-dim">
-              <p>
-                Integration target:{" "}
-                <strong className="text-ink">$30/month</strong>
-              </p>
-              <p>
-                {workspace.inventory
-                  ? `${workspace.inventory.accountCount} provider accounts · ${amount(workspace.inventory.baseMinor)} estimated base + metered X usage`
-                  : "Account inventory has not been verified"}
-              </p>
-              {workspace.inventory?.periodSpendMinor !== undefined ? (
-                <p>
-                  {amount(workspace.inventory.periodSpendMinor)} reported this
-                  provider billing period · X cap{" "}
-                  {workspace.inventory.xSpendLimitMinor === null
-                    ? "unset"
-                    : amount(workspace.inventory.xSpendLimitMinor ?? 0)}
-                  . Tax and ad-platform spend are separate.
-                </p>
-              ) : null}
-            </div>
-          </section>
-          <nav
-            aria-label="Marketing views"
-            className="flex flex-wrap gap-2 border-b border-line pb-3"
-          >
-            {(["projects", "content", "results"] as const).map((value) => (
-              <button
-                key={value}
-                className={`${buttonClass} capitalize ${tab === value ? "border-signal text-signal" : "text-ink-dim"}`}
-                aria-current={tab === value ? "page" : undefined}
-                onClick={() => setTab(value)}
-              >
-                {value === "content"
-                  ? "Content & calendar"
-                  : value === "projects"
-                    ? "Projects"
-                    : "Results"}
-              </button>
-            ))}
-            <button
-              className={`${buttonClass} ml-auto`}
-              disabled={busy}
-              onClick={() =>
-                void load(projectId).catch((cause) => setError(String(cause)))
-              }
-            >
-              Refresh
-            </button>
-          </nav>
-          {!workspace.readiness.qualified ||
-          !workspace.readiness.publishingEnabled ? (
-            <aside className="rounded-xl border border-amber/30 bg-amber/5 p-4 text-xs leading-6 text-ink-dim">
-              Planning is available. Public dispatch stays gated until the
-              selected accounts and provider have been live-qualified and
-              authorised. Saving a draft or enabling a project does not prove a
-              post was published.
-            </aside>
-          ) : null}
-          {workspace.inventory?.error ? (
-            <p
-              role="alert"
-              className="rounded-xl border border-amber/30 p-4 text-xs text-amber"
-            >
-              Account refresh needs attention: {workspace.inventory.error}
-            </p>
-          ) : null}
-          {project?.planningError ? (
-            <p
-              role="alert"
-              className="rounded-xl border border-amber/30 p-4 text-xs text-amber"
-            >
-              Planning stopped: {project.planningError}. Correct the project
-              setup, then prepare the week again.
-            </p>
-          ) : null}
-          {project && tab === "projects" ? (
-            <section className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
-              <div className="space-y-5 rounded-2xl border border-line bg-panel p-6">
-                <div className="flex items-start justify-between gap-3">
-                  <h2 className="display text-2xl font-bold">{project.name}</h2>
-                  <span className="rounded-full border border-line-2 px-3 py-1 text-xs capitalize">
-                    {project.status}
-                  </span>
-                </div>
-                <a
-                  href={project.website}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="break-all text-xs text-scope underline"
-                >
-                  {project.website}
-                </a>
-                <p className="text-sm leading-6">{project.offer}</p>
-                <p className="text-xs leading-6 text-ink-dim">
-                  Audience: {project.audience}
-                  <br />
-                  Goal: {project.goal} · {project.cadence} posts/week/channel
-                  <br />
-                  Generation:{" "}
-                  {amount(project.generationLimitMinor, project.currency)}/month
-                  · Advertising:{" "}
-                  {amount(project.advertisingLimitMinor, project.currency)}
-                  /month
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <button
+          {tab === "overview" ? (
+            <MarketingOverview
+              onOpenProject={openProject}
+              onAddProject={startProject}
+            />
+          ) : tab === "library" ? (
+            <MarketingLibrary onOpenProject={openProject} />
+          ) : (
+            <>
+              <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-line bg-panel p-4">
+                <Field label="Current project">
+                  <select
+                    aria-label="Current project"
+                    className={`${inputClass} min-w-60`}
+                    value={projectId}
                     disabled={busy}
-                    className={primaryClass}
-                    onClick={() =>
-                      void action("set-project-status", {
-                        projectId,
-                        status: "active",
-                      })
-                    }
+                    onChange={(event) => {
+                      setProjectId(event.target.value);
+                      setConversionToken("");
+                      setNotice("");
+                    }}
                   >
-                    Start project automation
-                  </button>
-                  <button
-                    disabled={busy}
-                    className={buttonClass}
-                    onClick={() =>
-                      void action("set-project-status", {
-                        projectId,
-                        status: "paused",
-                      })
-                    }
-                  >
-                    Pause & cancel queue
-                  </button>
-                </div>
-                <p className="text-xs leading-5 text-ink-dim">
-                  Remote cancellations remain visible until the publisher
-                  confirms them.
-                </p>
-                <form
-                  onSubmit={upload}
-                  className="grid gap-3 border-t border-line pt-5"
-                >
-                  <h3 className="text-sm font-bold">Project media</h3>
-                  <input
-                    name="file"
-                    aria-label="Project image"
-                    type="file"
-                    required
-                    accept="image/jpeg,image/png,image/webp"
-                    className="max-w-full text-xs"
-                  />
-                  <label className="flex gap-2 text-xs leading-5 text-ink-dim">
-                    <input type="checkbox" required />I own or have permission
-                    to advertise with this image.
-                  </label>
-                  <button disabled={busy} className={buttonClass}>
-                    Upload original image
-                  </button>
-                  <p className="text-xs text-ink-dim">
-                    {assets.length} verified assets · Images up to 4 MB
+                    {workspace.projects.length ? (
+                      workspace.projects.map((row) => (
+                        <option key={row._id} value={row._id}>
+                          {row.name}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">Add your first project</option>
+                    )}
+                  </select>
+                </Field>
+                <div className="text-right text-xs leading-6 text-ink-dim">
+                  <p>
+                    Integration target:{" "}
+                    <strong className="text-ink">$30/month</strong>
                   </p>
-                </form>
-                <RenderReuse
-                  key={projectId}
-                  projectId={projectId}
-                  imports={selected ? workspace.renderImports : []}
-                  busy={busy}
-                  action={action}
-                />
-              </div>
-              <div className="rounded-2xl border border-line bg-panel p-6">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="display text-2xl font-bold">Channels</h2>
-                  <button
-                    className={buttonClass}
-                    disabled={busy}
-                    onClick={() => void action("refresh-accounts")}
-                  >
-                    Refresh accounts
-                  </button>
-                </div>
-                <p className="mt-3 text-xs leading-6 text-ink-dim">
-                  Connect owned accounts in{" "}
-                  <a
-                    className="text-scope underline"
-                    href="https://zernio.com/dashboard"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Zernio
-                  </a>
-                  , then map them here. Dedicated social and ad accounts each
-                  count toward the software fee.
-                </p>
-                <div
-                  role="list"
-                  aria-label="Configured channels"
-                  className="mt-5 space-y-3"
-                >
-                  {channels.map((channel) => {
-                    const account = accountById.get(channel.accountId);
-                    return (
-                      <div
-                        role="listitem"
-                        key={channel._id}
-                        className="flex justify-between gap-3 rounded-lg border border-line p-3 text-xs"
-                      >
-                        <span>
-                          {labels[account?.platform ?? ""]} ·{" "}
-                          {account?.label ?? "Refresh account"}
-                        </span>
-                        <span
-                          className={
-                            channel.mode === "automatic"
-                              ? "text-signal"
-                              : "text-ink-dim"
-                          }
-                        >
-                          {channel.mode}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <form
-                  key={projectId}
-                  className="mt-6 grid gap-4"
-                  onSubmit={async (event) => {
-                    event.preventDefault();
-                    const form = new FormData(event.currentTarget);
-                    const selectedMode = String(form.get("mode"));
-                    await action("save-channel", {
-                      projectId,
-                      accountId: form.get("accountId"),
-                      mode: selectedMode,
-                      communityApproved: form.get("communityApproved") === "on",
-                      ...(form.get("subreddit")
-                        ? { subreddit: form.get("subreddit") }
-                        : {}),
-                      ...(form.get("adAccountId")
-                        ? { adAccountId: form.get("adAccountId") }
-                        : {}),
-                      ...(form.get("pageId")
-                        ? { pageId: form.get("pageId") }
-                        : {}),
-                      ...(selectedMode === "automatic"
-                        ? {
-                            authorisedUntil:
-                              Date.now() + 30 * 86_400_000 - 60_000,
-                          }
-                        : {}),
-                    });
-                  }}
-                >
-                  <Field label="Connected account">
-                    <select required name="accountId" className={inputClass}>
-                      <option value="">Select an account</option>
-                      {workspace.accounts
-                        .filter((account) => account.connected)
-                        .map((account) => (
-                          <option key={account._id} value={account._id}>
-                            {labels[account.platform]} · {account.label}
-                          </option>
-                        ))}
-                    </select>
-                  </Field>
-                  <Field label="Channel mode">
-                    <select name="mode" className={inputClass}>
-                      <option value="draft">Draft only</option>
-                      <option value="automatic">Automatic for 30 days</option>
-                      <option value="off">Off</option>
-                    </select>
-                  </Field>
-                  <Field label="Reddit community, when applicable">
-                    <input
-                      name="subreddit"
-                      placeholder="community_name"
-                      className={inputClass}
-                    />
-                  </Field>
-                  <label className="flex gap-2 text-xs leading-5 text-ink-dim">
-                    <input name="communityApproved" type="checkbox" />
-                    For Reddit: this account and community permit these
-                    promotional posts.
-                  </label>
-                  <Field label="Verified ad account ID, for Google/Meta">
-                    <input name="adAccountId" className={inputClass} />
-                  </Field>
-                  <Field label="Verified Facebook Page ID, for Meta">
-                    <input name="pageId" className={inputClass} />
-                  </Field>
-                  <label className="flex gap-2 text-xs leading-5 text-ink-dim">
-                    <input type="checkbox" required />I authorise this account’s
-                    selected mode and project cadence. Ad launches still require
-                    individual review and an advertising allowance.
-                  </label>
-                  <button disabled={busy} className={buttonClass}>
-                    Save channel policy
-                  </button>
-                </form>
-              </div>
-            </section>
-          ) : null}
-          {project && tab === "content" ? (
-            <section className="space-y-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="display text-2xl font-bold">The next week</h2>
-                  <p className="mt-2 text-xs text-ink-dim">
-                    Brand templates · confirmed facts · no AI charge
+                  <p>
+                    {workspace.inventory
+                      ? `${workspace.inventory.accountCount} provider accounts · ${amount(workspace.inventory.baseMinor)} estimated base + metered X usage`
+                      : "Account inventory has not been verified"}
                   </p>
+                  {workspace.inventory?.periodSpendMinor !== undefined ? (
+                    <p>
+                      {amount(workspace.inventory.periodSpendMinor)} reported
+                      this provider billing period · X cap{" "}
+                      {workspace.inventory.xSpendLimitMinor === null
+                        ? "unset"
+                        : amount(workspace.inventory.xSpendLimitMinor ?? 0)}
+                      . Tax and ad-platform spend are separate.
+                    </p>
+                  ) : null}
                 </div>
-                <button
-                  disabled={busy}
-                  className={primaryClass}
-                  onClick={() => void action("generate-week", { projectId })}
-                >
-                  Prepare first / next week
-                </button>
-              </div>
-              {!items.length ? (
-                <div className="rounded-2xl border border-dashed border-line-2 p-10 text-sm text-ink-dim">
-                  Add channels and owned media, then prepare the first week.
-                </div>
-              ) : null}
-              <div className="grid gap-4 md:grid-cols-2">
-                {items.map((item) => {
-                  const channel = channels.find(
-                      (row) => row._id === item.channelId,
-                    ),
-                    account = channel
-                      ? accountById.get(channel.accountId)
-                      : undefined;
-                  const asset = assets.find(
-                    (asset) => asset._id === item.assetId,
-                  );
-                  const previewUrl = asset
-                    ? `/api/marketing/media?projectId=${projectId}&assetId=${asset._id}`
-                    : "";
-                  return (
-                    <article
-                      key={item._id}
-                      className="min-w-0 rounded-xl border border-line bg-panel p-5"
-                    >
-                      <div className="flex flex-wrap justify-between gap-2 text-xs">
-                        <span className="text-scope">
-                          {labels[account?.platform ?? ""]} ·{" "}
-                          {item.kind === "ad"
-                            ? "Paid campaign"
-                            : "Organic post"}
-                        </span>
-                        <span className="capitalize text-ink-dim">
-                          {item.status.replaceAll("_", " ")}
-                        </span>
-                      </div>
-                      <h3 className="mt-4 font-bold">{item.title}</h3>
-                      <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-6 text-ink-dim">
-                        {item.content}
-                      </p>
-                      {asset ? (
-                        <div className="mt-4 rounded-lg border border-line bg-void p-2">
-                          {asset.contentType === "video/mp4" ? (
-                            <video
-                              controls
-                              playsInline
-                              preload="none"
-                              className="max-h-96 w-full"
-                              src={previewUrl}
-                            />
-                          ) : (
-                            <Image
-                              unoptimized
-                              width={640}
-                              height={640}
-                              className="max-h-96 w-full object-contain"
-                              alt={`Approved media for ${item.title}`}
-                              src={previewUrl}
-                            />
-                          )}
-                        </div>
-                      ) : null}
-                      {item.ad ? (
-                        <dl className="mt-4 grid gap-2 rounded-lg border border-line p-3 text-xs leading-5">
-                          <div>
-                            <dt className="text-ink-faint">Headline</dt>
-                            <dd>{item.ad.headline}</dd>
-                          </div>
-                          <div>
-                            <dt className="text-ink-faint">
-                              Destination and account
-                            </dt>
-                            <dd className="break-all">
-                              {project.website} · {account?.label} ·{" "}
-                              {channel?.adAccountId}
-                              {channel?.pageId
-                                ? ` · Page ${channel.pageId}`
-                                : ""}
-                            </dd>
-                          </div>
-                          <div>
-                            <dt className="text-ink-faint">Targeting</dt>
-                            <dd>
-                              {item.ad.countries.join(", ")}
-                              {item.ad.keywords.length
-                                ? ` · ${item.ad.keywords.join(", ")}`
-                                : ""}
-                            </dd>
-                          </div>
-                          <div>
-                            <dt className="text-ink-faint">
-                              Budget and duration
-                            </dt>
-                            <dd>
-                              {amount(
-                                item.ad.dailyBudgetMinor,
-                                project.currency,
-                              )}
-                              /day reference · {item.ad.durationDays} days ·{" "}
-                              {amount(item.ad.maxSpendMinor, project.currency)}{" "}
-                              maximum admitted exposure.{" "}
-                              {account?.platform === "googleads"
-                                ? "Google can overdeliver daily; the reserved exposure includes this."
-                                : "Meta uses the displayed total as a lifetime budget."}
-                            </dd>
-                          </div>
-                        </dl>
-                      ) : null}
-                      <p className="mt-4 text-xs text-ink-faint">
-                        {new Date(item.scheduledAt).toLocaleString("en-GB", {
-                          timeZone: project.timezone,
-                        })}{" "}
-                        · {project.timezone}
-                      </p>
-                      {item.error ? (
-                        <p className="mt-3 text-xs leading-5 text-amber">
-                          {item.error}
-                        </p>
-                      ) : null}
-                      {item.metrics ? (
-                        <p className="mt-3 text-xs text-ink-faint">
-                          Provider metrics received{" "}
-                          {new Date(item.metrics.capturedAt).toLocaleString(
-                            "en-GB",
-                            { timeZone: project.timezone },
-                          )}
-                          . {item.metrics.clicks} clicks ·{" "}
-                          {amount(
-                            item.metrics.spendMinor,
-                            item.metrics.currency,
-                          )}{" "}
-                          reported spend.
-                        </p>
-                      ) : null}
-                      {item.status === "draft" && item.kind === "post" ? (
-                        <DraftEditor
-                          key={`${item._id}:${item.version}`}
-                          item={item}
-                          busy={busy}
-                          save={(payload) =>
-                            action("edit-draft", { projectId, ...payload })
-                          }
-                        />
-                      ) : null}
-                      {item.kind === "ad" && item.status === "paused" ? (
-                        <AdBillingReceipt
-                          item={item}
-                          currency={project.currency}
-                          busy={busy}
-                          action={(name, payload) =>
-                            action(name, { projectId, ...payload })
-                          }
-                        />
-                      ) : null}
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {["blocked", "uncertain", "cancel_pending"].includes(
-                          item.status,
-                        ) ? (
-                          <button
-                            disabled={busy}
-                            className={buttonClass}
-                            onClick={() =>
-                              void action("recheck-item", {
-                                projectId,
-                                itemId: item._id,
-                              })
-                            }
-                          >
-                            {item.reservationMonth
-                              ? "Recheck original request"
-                              : "Return to draft review"}
-                          </button>
-                        ) : null}
-                        {item.status === "draft" ? (
-                          <button
-                            disabled={busy || channel?.mode !== "automatic"}
-                            className={buttonClass}
-                            onClick={() =>
-                              void action("approve-item", {
-                                projectId,
-                                itemId: item._id,
-                              })
-                            }
-                          >
-                            Approve exact version
-                          </button>
-                        ) : null}
-                        {item.publicationUrl ? (
-                          <a
-                            className={`${buttonClass} text-signal`}
-                            href={item.publicationUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            View published post
-                          </a>
-                        ) : null}
-                      </div>
-                      {item.status === "draft" &&
-                      channel?.mode !== "automatic" ? (
-                        <p className="mt-3 text-xs text-ink-faint">
-                          Channel is draft-only. Change its policy before
-                          approving publication.
-                        </p>
-                      ) : null}
-                    </article>
-                  );
-                })}
-              </div>
-              <AdTemplate
-                project={project}
-                channels={channels}
-                accounts={workspace.accounts}
-                assets={assets}
-                busy={busy}
-                onSave={(payload) => action("create-item", payload)}
-              />
-            </section>
-          ) : null}
-          {project && tab === "results" ? (
-            <section className="space-y-5">
-              <h2 className="display text-2xl font-bold">
-                Results with receipts
-              </h2>
-              <div className="grid gap-4 sm:grid-cols-3">
-                {[
-                  [
-                    "Verified conversions this month",
-                    String(workspace.results?.conversions ?? 0),
-                  ],
-                  [
-                    "Reported spend — shown campaigns",
-                    items.some((item) => item.kind === "ad" && item.metrics)
-                      ? amount(
-                          items.reduce(
-                            (sum, item) =>
-                              sum + (item.metrics?.spendMinor ?? 0),
-                            0,
-                          ),
-                          project.currency,
-                        )
-                      : "Not measured",
-                  ],
-                  [
-                    "Reported clicks — shown content",
-                    items.some((item) => item.metrics)
-                      ? String(
-                          items.reduce(
-                            (sum, item) => sum + (item.metrics?.clicks ?? 0),
-                            0,
-                          ),
-                        )
-                      : "Not measured",
-                  ],
-                ].map(([label, value]) => (
-                  <div
-                    key={label}
-                    className="rounded-xl border border-line bg-panel p-5"
+              </section>
+              <nav
+                aria-label="Marketing views"
+                className="flex flex-wrap gap-2 border-b border-line pb-3"
+              >
+                {(["projects", "content", "results"] as const).map((value) => (
+                  <button
+                    key={value}
+                    className={`${buttonClass} capitalize ${tab === value ? "border-signal text-signal" : "text-ink-dim"}`}
+                    aria-current={tab === value ? "page" : undefined}
+                    onClick={() => {
+                      setTab(value);
+                      window.location.hash = value;
+                    }}
                   >
-                    <p className="text-xs leading-5 text-ink-dim">{label}</p>
-                    <p className="display mt-3 text-3xl font-bold">{value}</p>
-                  </div>
+                    {value === "content"
+                      ? "Content & calendar"
+                      : value === "projects"
+                        ? "Projects"
+                        : "Results"}
+                  </button>
                 ))}
-              </div>
-              <p className="text-xs leading-6 text-ink-dim">
-                Conversion month: {workspace.resultsMonth}. Content totals cover
-                the latest 200 items and only metrics the provider returned.
-                Missing metrics are unverified; these figures are not invoices
-                or a cross-platform revenue attribution claim. X insights
-                refresh weekly to bound metered reads; other organic insights
-                refresh daily. Running ads reconcile every five minutes, subject
-                to provider reporting delays.
-              </p>
-              <div className="rounded-xl border border-line p-5">
-                <h3 className="font-bold">
-                  Connect your website’s server events
-                </h3>
-                <p className="mt-3 text-xs leading-6 text-ink-dim">
-                  After a real {project.goal}, POST its unique event ID to{" "}
-                  <code>/api/marketing/conversions</code> with this project ID
-                  and the server-only conversion token. Repeat deliveries are
-                  deduplicated. Do not send names, email addresses or browser
-                  credentials.
-                </p>
-                <pre className="mt-4 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded bg-void p-4 text-xs leading-6">
-                  {JSON.stringify(
-                    {
-                      projectId,
-                      eventId: "your-real-event-id",
-                      event: project.goal,
-                      valueMinor: 0,
-                      currency: project.currency,
-                      occurredAt: "Unix time in milliseconds",
-                      itemId: "optional original marketing item ID",
-                    },
-                    null,
-                    2,
-                  )}
-                </pre>
-              </div>
-              {workspace.allowances.map((allowance) => (
-                <div
-                  key={allowance._id}
-                  className="flex flex-wrap justify-between gap-3 rounded-lg border border-line p-4 text-xs"
+                <button
+                  className={`${buttonClass} ml-auto`}
+                  disabled={busy}
+                  onClick={() =>
+                    void load(projectId).catch((cause) =>
+                      setError(String(cause)),
+                    )
+                  }
                 >
-                  <span>
-                    {allowance.scope.startsWith("advertising")
-                      ? "Advertising admission allowance"
-                      : allowance.scope}{" "}
-                    · {allowance.month}
-                  </span>
-                  <span>
-                    {amount(allowance.spentMinor, allowance.currency)} accounted
-                    · {amount(allowance.heldMinor, allowance.currency)} held /{" "}
-                    {amount(allowance.limitMinor, allowance.currency)}
-                  </span>
-                </div>
-              ))}
-            </section>
-          ) : null}
+                  Refresh
+                </button>
+              </nav>
+              {!workspace.readiness.qualified ||
+              !workspace.readiness.publishingEnabled ? (
+                <aside className="rounded-xl border border-amber/30 bg-amber/5 p-4 text-xs leading-6 text-ink-dim">
+                  Draft mode is ready. Publishing and paid campaigns will stay
+                  off until your selected accounts are verified and activated.
+                </aside>
+              ) : null}
+              {workspace.inventory?.error ? (
+                <p
+                  role="alert"
+                  className="rounded-xl border border-amber/30 p-4 text-xs text-amber"
+                >
+                  Account refresh needs attention: {workspace.inventory.error}
+                </p>
+              ) : null}
+              {project?.planningError ? (
+                <p
+                  role="alert"
+                  className="rounded-xl border border-amber/30 p-4 text-xs text-amber"
+                >
+                  Planning stopped: {project.planningError}. Correct the project
+                  setup, then prepare the week again.
+                </p>
+              ) : null}
+              {project && tab === "projects" ? (
+                <section className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
+                  <div className="space-y-5 rounded-2xl border border-line bg-panel p-6">
+                    <div className="flex items-start justify-between gap-3">
+                      <h2 className="display text-2xl font-bold">
+                        {project.name}
+                      </h2>
+                      <span className="rounded-full border border-line-2 px-3 py-1 text-xs capitalize">
+                        {project.status}
+                      </span>
+                    </div>
+                    <a
+                      href={project.website}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="break-all text-xs text-scope underline"
+                    >
+                      {project.website}
+                    </a>
+                    <p className="text-sm leading-6">{project.offer}</p>
+                    <p className="text-xs leading-6 text-ink-dim">
+                      Audience: {project.audience}
+                      <br />
+                      Goal: {project.goal} · {project.cadence}{" "}
+                      posts/week/channel
+                      <br />
+                      Generation:{" "}
+                      {amount(project.generationLimitMinor, project.currency)}
+                      /month · Advertising:{" "}
+                      {amount(project.advertisingLimitMinor, project.currency)}
+                      /month
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        disabled={busy}
+                        className={primaryClass}
+                        onClick={() =>
+                          void action("set-project-status", {
+                            projectId,
+                            status: "active",
+                          })
+                        }
+                      >
+                        Start project automation
+                      </button>
+                      <button
+                        disabled={busy}
+                        className={buttonClass}
+                        onClick={() =>
+                          void action("set-project-status", {
+                            projectId,
+                            status: "paused",
+                          })
+                        }
+                      >
+                        Pause & cancel queue
+                      </button>
+                    </div>
+                    <p className="text-xs leading-5 text-ink-dim">
+                      Remote cancellations remain visible until the publisher
+                      confirms them.
+                    </p>
+                    <ProjectSettings
+                      project={project}
+                      busy={busy}
+                      action={action}
+                    />
+                    <form
+                      onSubmit={upload}
+                      className="grid gap-3 border-t border-line pt-5"
+                    >
+                      <h3 className="text-sm font-bold">Project media</h3>
+                      <input
+                        name="file"
+                        aria-label="Project image"
+                        type="file"
+                        required
+                        accept="image/jpeg,image/png,image/webp"
+                        className="max-w-full text-xs"
+                      />
+                      <label className="flex gap-2 text-xs leading-5 text-ink-dim">
+                        <input type="checkbox" required />I own or have
+                        permission to advertise with this image.
+                      </label>
+                      <button disabled={busy} className={buttonClass}>
+                        Upload original image
+                      </button>
+                      <p className="text-xs text-ink-dim">
+                        {assets.length} verified assets · Images up to 4 MB
+                      </p>
+                    </form>
+                    <RenderReuse
+                      key={projectId}
+                      projectId={projectId}
+                      imports={selected ? workspace.renderImports : []}
+                      busy={busy}
+                      action={action}
+                    />
+                  </div>
+                  <div className="rounded-2xl border border-line bg-panel p-6">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h2 className="display text-2xl font-bold">Channels</h2>
+                      <button
+                        className={buttonClass}
+                        disabled={busy}
+                        onClick={() => void action("refresh-accounts")}
+                      >
+                        Refresh accounts
+                      </button>
+                    </div>
+                    <p className="mt-3 text-xs leading-6 text-ink-dim">
+                      Connect owned accounts in{" "}
+                      <a
+                        className="text-scope underline"
+                        href="https://zernio.com/dashboard"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Zernio
+                      </a>
+                      , then map them here. Dedicated social and ad accounts
+                      each count toward the software fee.
+                    </p>
+                    <div
+                      role="list"
+                      aria-label="Configured channels"
+                      className="mt-5 space-y-3"
+                    >
+                      {channels.map((channel) => {
+                        const account = accountById.get(channel.accountId);
+                        return (
+                          <div
+                            role="listitem"
+                            key={channel._id}
+                            className="flex justify-between gap-3 rounded-lg border border-line p-3 text-xs"
+                          >
+                            <span>
+                              {labels[account?.platform ?? ""]} ·{" "}
+                              {account?.label ?? "Refresh account"}
+                            </span>
+                            <span
+                              className={
+                                channel.mode === "automatic"
+                                  ? "text-signal"
+                                  : "text-ink-dim"
+                              }
+                            >
+                              {channel.mode}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <form
+                      key={projectId}
+                      className="mt-6 grid gap-4"
+                      onSubmit={async (event) => {
+                        event.preventDefault();
+                        const form = new FormData(event.currentTarget);
+                        const selectedMode = String(form.get("mode"));
+                        await action("save-channel", {
+                          projectId,
+                          accountId: form.get("accountId"),
+                          mode: selectedMode,
+                          communityApproved:
+                            form.get("communityApproved") === "on",
+                          ...(form.get("subreddit")
+                            ? { subreddit: form.get("subreddit") }
+                            : {}),
+                          ...(form.get("adAccountId")
+                            ? { adAccountId: form.get("adAccountId") }
+                            : {}),
+                          ...(form.get("pageId")
+                            ? { pageId: form.get("pageId") }
+                            : {}),
+                          ...(selectedMode === "automatic"
+                            ? {
+                                authorisedUntil:
+                                  Date.now() + 30 * 86_400_000 - 60_000,
+                              }
+                            : {}),
+                        });
+                      }}
+                    >
+                      <Field label="Connected account">
+                        <select
+                          required
+                          name="accountId"
+                          className={inputClass}
+                        >
+                          <option value="">Select an account</option>
+                          {workspace.accounts
+                            .filter((account) => account.connected)
+                            .map((account) => (
+                              <option key={account._id} value={account._id}>
+                                {labels[account.platform]} · {account.label}
+                              </option>
+                            ))}
+                        </select>
+                      </Field>
+                      <Field label="Channel mode">
+                        <select name="mode" className={inputClass}>
+                          <option value="draft">Draft only</option>
+                          <option value="automatic">
+                            Automatic for 30 days
+                          </option>
+                          <option value="off">Off</option>
+                        </select>
+                      </Field>
+                      <Field label="Reddit community, when applicable">
+                        <input
+                          name="subreddit"
+                          placeholder="community_name"
+                          className={inputClass}
+                        />
+                      </Field>
+                      <label className="flex gap-2 text-xs leading-5 text-ink-dim">
+                        <input name="communityApproved" type="checkbox" />
+                        For Reddit: this account and community permit these
+                        promotional posts.
+                      </label>
+                      <Field label="Verified ad account ID, for Google/Meta">
+                        <input name="adAccountId" className={inputClass} />
+                      </Field>
+                      <Field label="Verified Facebook Page ID, for Meta">
+                        <input name="pageId" className={inputClass} />
+                      </Field>
+                      <label className="flex gap-2 text-xs leading-5 text-ink-dim">
+                        <input type="checkbox" required />I authorise this
+                        account’s selected mode and project cadence. Ad launches
+                        still require individual review and an advertising
+                        allowance.
+                      </label>
+                      <button disabled={busy} className={buttonClass}>
+                        Save channel policy
+                      </button>
+                    </form>
+                  </div>
+                </section>
+              ) : null}
+              {project && tab === "content" ? (
+                <section className="space-y-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="display text-2xl font-bold">
+                        The next week
+                      </h2>
+                      <p className="mt-2 text-xs text-ink-dim">
+                        Brand templates · confirmed facts · no AI charge
+                      </p>
+                    </div>
+                    <button
+                      disabled={busy}
+                      className={primaryClass}
+                      onClick={() =>
+                        void action("generate-week", { projectId })
+                      }
+                    >
+                      Prepare first / next week
+                    </button>
+                  </div>
+                  {!items.length ? (
+                    <div className="rounded-2xl border border-dashed border-line-2 p-10 text-sm text-ink-dim">
+                      Add channels and owned media, then prepare the first week.
+                    </div>
+                  ) : null}
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {items.map((item) => {
+                      const channel = channels.find(
+                          (row) => row._id === item.channelId,
+                        ),
+                        account = channel
+                          ? accountById.get(channel.accountId)
+                          : undefined;
+                      const asset = assets.find(
+                        (asset) => asset._id === item.assetId,
+                      );
+                      const previewUrl = asset
+                        ? `/api/marketing/media?projectId=${projectId}&assetId=${asset._id}`
+                        : "";
+                      return (
+                        <article
+                          key={item._id}
+                          className="min-w-0 rounded-xl border border-line bg-panel p-5"
+                        >
+                          <div className="flex flex-wrap justify-between gap-2 text-xs">
+                            <span className="text-scope">
+                              {labels[account?.platform ?? ""]} ·{" "}
+                              {item.kind === "ad"
+                                ? "Paid campaign"
+                                : "Organic post"}
+                            </span>
+                            <span className="capitalize text-ink-dim">
+                              {item.status.replaceAll("_", " ")}
+                            </span>
+                          </div>
+                          <h3 className="mt-4 font-bold">{item.title}</h3>
+                          <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-6 text-ink-dim">
+                            {item.content}
+                          </p>
+                          {asset ? (
+                            <div className="mt-4 rounded-lg border border-line bg-void p-2">
+                              {asset.contentType === "video/mp4" ? (
+                                <video
+                                  controls
+                                  playsInline
+                                  preload="none"
+                                  className="max-h-96 w-full"
+                                  src={previewUrl}
+                                />
+                              ) : (
+                                <Image
+                                  unoptimized
+                                  width={640}
+                                  height={640}
+                                  className="max-h-96 w-full object-contain"
+                                  alt={`Approved media for ${item.title}`}
+                                  src={previewUrl}
+                                />
+                              )}
+                            </div>
+                          ) : null}
+                          {item.ad ? (
+                            <dl className="mt-4 grid gap-2 rounded-lg border border-line p-3 text-xs leading-5">
+                              <div>
+                                <dt className="text-ink-faint">Headline</dt>
+                                <dd>{item.ad.headline}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-ink-faint">
+                                  Destination and account
+                                </dt>
+                                <dd className="break-all">
+                                  {project.website} · {account?.label} ·{" "}
+                                  {channel?.adAccountId}
+                                  {channel?.pageId
+                                    ? ` · Page ${channel.pageId}`
+                                    : ""}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-ink-faint">Targeting</dt>
+                                <dd>
+                                  {item.ad.countries.join(", ")}
+                                  {item.ad.keywords.length
+                                    ? ` · ${item.ad.keywords.join(", ")}`
+                                    : ""}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-ink-faint">
+                                  Budget and duration
+                                </dt>
+                                <dd>
+                                  {amount(
+                                    item.ad.dailyBudgetMinor,
+                                    project.currency,
+                                  )}
+                                  /day reference · {item.ad.durationDays} days ·{" "}
+                                  {amount(
+                                    item.ad.maxSpendMinor,
+                                    project.currency,
+                                  )}{" "}
+                                  maximum admitted exposure.{" "}
+                                  {account?.platform === "googleads"
+                                    ? "Google can overdeliver daily; the reserved exposure includes this."
+                                    : "Meta uses the displayed total as a lifetime budget."}
+                                </dd>
+                              </div>
+                            </dl>
+                          ) : null}
+                          <p className="mt-4 text-xs text-ink-faint">
+                            {new Date(item.scheduledAt).toLocaleString(
+                              "en-GB",
+                              {
+                                timeZone: project.timezone,
+                              },
+                            )}{" "}
+                            · {project.timezone}
+                          </p>
+                          {item.error ? (
+                            <p className="mt-3 text-xs leading-5 text-amber">
+                              {item.error}
+                            </p>
+                          ) : null}
+                          {item.metrics ? (
+                            <p className="mt-3 text-xs text-ink-faint">
+                              Provider metrics received{" "}
+                              {new Date(item.metrics.capturedAt).toLocaleString(
+                                "en-GB",
+                                { timeZone: project.timezone },
+                              )}
+                              . {item.metrics.clicks} clicks ·{" "}
+                              {amount(
+                                item.metrics.spendMinor,
+                                item.metrics.currency,
+                              )}{" "}
+                              reported spend.
+                            </p>
+                          ) : null}
+                          {item.status === "draft" && item.kind === "post" ? (
+                            <DraftEditor
+                              key={`${item._id}:${item.version}`}
+                              item={item}
+                              busy={busy}
+                              save={(payload) =>
+                                action("edit-draft", { projectId, ...payload })
+                              }
+                            />
+                          ) : null}
+                          {item.kind === "ad" && item.status === "paused" ? (
+                            <AdBillingReceipt
+                              item={item}
+                              currency={project.currency}
+                              busy={busy}
+                              action={(name, payload) =>
+                                action(name, { projectId, ...payload })
+                              }
+                            />
+                          ) : null}
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {[
+                              "blocked",
+                              "uncertain",
+                              "cancel_pending",
+                            ].includes(item.status) ? (
+                              <button
+                                disabled={busy}
+                                className={buttonClass}
+                                onClick={() =>
+                                  void action("recheck-item", {
+                                    projectId,
+                                    itemId: item._id,
+                                  })
+                                }
+                              >
+                                {item.reservationMonth
+                                  ? "Recheck original request"
+                                  : "Return to draft review"}
+                              </button>
+                            ) : null}
+                            {item.status === "draft" ? (
+                              <button
+                                disabled={busy || channel?.mode !== "automatic"}
+                                className={buttonClass}
+                                onClick={() =>
+                                  void action("approve-item", {
+                                    projectId,
+                                    itemId: item._id,
+                                  })
+                                }
+                              >
+                                Approve exact version
+                              </button>
+                            ) : null}
+                            {item.publicationUrl ? (
+                              <a
+                                className={`${buttonClass} text-signal`}
+                                href={item.publicationUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                View published post
+                              </a>
+                            ) : null}
+                          </div>
+                          {item.status === "draft" &&
+                          channel?.mode !== "automatic" ? (
+                            <p className="mt-3 text-xs text-ink-faint">
+                              Channel is draft-only. Change its policy before
+                              approving publication.
+                            </p>
+                          ) : null}
+                        </article>
+                      );
+                    })}
+                  </div>
+                  <AdTemplate
+                    project={project}
+                    channels={channels}
+                    accounts={workspace.accounts}
+                    assets={assets}
+                    busy={busy}
+                    onSave={(payload) => action("create-item", payload)}
+                  />
+                </section>
+              ) : null}
+              {project && tab === "results" ? (
+                <section className="space-y-5">
+                  <h2 className="display text-2xl font-bold">
+                    Results with receipts
+                  </h2>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    {[
+                      [
+                        "Verified conversions this month",
+                        String(workspace.results?.conversions ?? 0),
+                      ],
+                      [
+                        "Reported spend — shown campaigns",
+                        items.some((item) => item.kind === "ad" && item.metrics)
+                          ? amount(
+                              items.reduce(
+                                (sum, item) =>
+                                  sum + (item.metrics?.spendMinor ?? 0),
+                                0,
+                              ),
+                              project.currency,
+                            )
+                          : "Not measured",
+                      ],
+                      [
+                        "Reported clicks — shown content",
+                        items.some((item) => item.metrics)
+                          ? String(
+                              items.reduce(
+                                (sum, item) =>
+                                  sum + (item.metrics?.clicks ?? 0),
+                                0,
+                              ),
+                            )
+                          : "Not measured",
+                      ],
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        className="rounded-xl border border-line bg-panel p-5"
+                      >
+                        <p className="text-xs leading-5 text-ink-dim">
+                          {label}
+                        </p>
+                        <p className="display mt-3 text-3xl font-bold">
+                          {value}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs leading-6 text-ink-dim">
+                    Conversion month: {workspace.resultsMonth}. Content totals
+                    cover the latest 200 items and only metrics the provider
+                    returned. Missing metrics are unverified; these figures are
+                    not invoices or a cross-platform revenue attribution claim.
+                    X insights refresh weekly to bound metered reads; other
+                    organic insights refresh daily. Running ads reconcile every
+                    five minutes, subject to provider reporting delays.
+                  </p>
+                  <div className="rounded-xl border border-line p-5">
+                    <h3 className="font-bold">
+                      Connect your website’s server events
+                    </h3>
+                    <p className="mt-3 text-xs leading-6 text-ink-dim">
+                      After a real {project.goal}, POST its unique event ID to{" "}
+                      <code>/api/marketing/conversions</code> with this project
+                      ID and the server-only conversion token. Repeat deliveries
+                      are deduplicated. Do not send names, email addresses or
+                      browser credentials.
+                    </p>
+                    <pre className="mt-4 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded bg-void p-4 text-xs leading-6">
+                      {JSON.stringify(
+                        {
+                          projectId,
+                          eventId: "your-real-event-id",
+                          event: project.goal,
+                          valueMinor: 0,
+                          currency: project.currency,
+                          occurredAt: "Unix time in milliseconds",
+                          itemId: "optional original marketing item ID",
+                        },
+                        null,
+                        2,
+                      )}
+                    </pre>
+                  </div>
+                  {workspace.allowances.map((allowance) => (
+                    <div
+                      key={allowance._id}
+                      className="flex flex-wrap justify-between gap-3 rounded-lg border border-line p-4 text-xs"
+                    >
+                      <span>
+                        {allowance.scope.startsWith("advertising")
+                          ? "Advertising admission allowance"
+                          : allowance.scope}{" "}
+                        · {allowance.month}
+                      </span>
+                      <span>
+                        {amount(allowance.spentMinor, allowance.currency)}{" "}
+                        accounted ·{" "}
+                        {amount(allowance.heldMinor, allowance.currency)} held /{" "}
+                        {amount(allowance.limitMinor, allowance.currency)}
+                      </span>
+                    </div>
+                  ))}
+                </section>
+              ) : null}
+            </>
+          )}
         </>
       ) : !error ? (
         <p className="py-12 text-sm text-ink-dim" role="status">

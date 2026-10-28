@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Bricolage_Grotesque, Martian_Mono } from "next/font/google";
+import { Bricolage_Grotesque, Inter, Martian_Mono } from "next/font/google";
 import "./globals.css";
 import Providers from "./providers";
 import Shell from "@/components/shell";
@@ -9,6 +9,8 @@ const bricolage = Bricolage_Grotesque({
   variable: "--font-bricolage",
   weight: ["500", "700", "800"],
 });
+
+const marketing = Inter({ subsets: ["latin"], variable: "--font-marketing" });
 
 const martian = Martian_Mono({
   subsets: ["latin"],
@@ -22,10 +24,16 @@ export const metadata: Metadata = {
     "Unified marketing & media engine: persona growth, product ads, shorts factory, email.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en">
-      <body className={`${bricolage.variable} ${martian.variable} antialiased`}>
+      <body
+        className={`${bricolage.variable} ${martian.variable} ${marketing.variable} antialiased`}
+      >
         <Providers>
           <Shell>{children}</Shell>
         </Providers>

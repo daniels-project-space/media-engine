@@ -81,7 +81,7 @@ try {
   assert.equal(session.status(), 200);
   await page.goto(`${origin}/marketing`);
   await expect(
-    page.getByRole("heading", { name: "One project. A clear next step." }),
+    page.getByRole("heading", { name: "A clear view of everything." }),
   ).toBeVisible();
 
   async function addProject(name: string, inspect: boolean) {
@@ -89,16 +89,12 @@ try {
       .getByRole("button", { name: "Add project", exact: true })
       .click();
     await page
-      .getByLabel("Website", { exact: true })
+      .getByLabel("Website URL", { exact: true })
       .fill("https://media-engine-seven.vercel.app/");
     if (inspect) {
-      await page
-        .getByRole("button", { name: "Import name and offer from URL" })
-        .click();
+      await page.getByRole("button", { name: "Import website" }).click();
       await expect(
-        page
-          .getByRole("status")
-          .filter({ hasText: "Website metadata imported" }),
+        page.getByRole("status").filter({ hasText: "Website imported" }),
       ).toBeVisible({ timeout: 20_000 });
       assert.notEqual(
         await page.getByLabel("Project name", { exact: true }).inputValue(),
@@ -110,30 +106,35 @@ try {
     }
     await page.getByLabel("Project name", { exact: true }).fill(name);
     await page
-      .getByLabel("What is the offer?", { exact: true })
+      .getByLabel("One-line offer", { exact: true })
       .fill(
         "A local end-to-end verification project. Never publish this fixture.",
       );
     await page
-      .getByLabel("Who is it for?", { exact: true })
+      .getByLabel("Audience", { exact: true })
       .fill("The operator testing project isolation");
     await page
-      .getByLabel("Monthly advertising allowance — separate from software", {
+      .getByLabel("Conversion goal", { exact: true })
+      .selectOption("signup");
+    await page.getByRole("button", { name: "Continue to channels" }).click();
+    await page.getByRole("button", { name: "Review project" }).click();
+    await page
+      .getByLabel("Advertising allowance / month", {
         exact: true,
       })
       .fill("10");
     await page
-      .getByLabel("Confirmed product facts — one per line")
+      .getByLabel("Confirmed product facts · one per line")
       .fill(
         "This project is a local verification fixture.\nIt is isolated from the production database.\nPublic publishing is disabled.",
       );
     await page
       .getByLabel(
-        "I confirm the product facts, offer and usage rights are accurate.",
+        "I confirm these facts, usage rights and selected channel policies.",
       )
       .check();
     await page
-      .getByRole("button", { name: "Save project", exact: true })
+      .getByRole("button", { name: "Create project", exact: true })
       .click();
     await expect(
       page.getByRole("heading", { name, exact: true }),
@@ -430,6 +431,89 @@ try {
   checks.push(
     "Pause atomically cancels local approved/draft work without remote calls",
   );
+  await page.setViewportSize({ width: 1513, height: 1040 });
+  await page.goto(`${origin}/marketing#overview`);
+  await expect(
+    page.getByRole("heading", { name: "All your projects", exact: true }),
+  ).toBeVisible();
+  const baseline = await (
+    await context.request.get("/api/marketing?view=overview")
+  ).json();
+  const beforeSubscriptions =
+    baseline.costs.find((row: { currency: string }) => row.currency === "USD")
+      ?.subscription ?? 0;
+  const costForm = page.locator(".mk-cost-form");
+  await costForm.locator("summary").click();
+  await costForm
+    .getByLabel("Charge name", { exact: true })
+    .fill(`Local fixture subscription ${run}`);
+  await costForm.getByLabel("Amount paid", { exact: true }).fill("18");
+  await costForm
+    .getByLabel("Invoice / receipt reference", { exact: true })
+    .fill(`local-fixture-invoice-${run}`);
+  await costForm
+    .getByRole("button", { name: "Record charge", exact: true })
+    .click();
+  await expect(costForm.getByRole("status")).toHaveText(
+    "Charge recorded in your spending totals.",
+  );
+  const after = await (
+    await context.request.get("/api/marketing?view=overview")
+  ).json();
+  assert.equal(
+    after.costs.find((row: { currency: string }) => row.currency === "USD")
+      .subscription,
+    beforeSubscriptions + 1800,
+  );
+  const library = page.locator(".mk-library");
+  await library.getByRole("button", { name: "Charges", exact: true }).click();
+  const chargeRow = library
+    .getByRole("row")
+    .filter({ hasText: `Local fixture subscription ${run}` });
+  await expect(chargeRow).toBeVisible();
+  await chargeRow.getByRole("button", { name: "Void", exact: true }).click();
+  await library
+    .getByRole("button", { name: "Void charge", exact: true })
+    .click();
+  await expect(
+    library
+      .getByRole("row")
+      .filter({ hasText: `Local fixture subscription ${run}` })
+      .getByText("Voided", { exact: true }),
+  ).toBeVisible();
+  const voided = await (
+    await context.request.get("/api/marketing?view=overview")
+  ).json();
+  assert.equal(
+    voided.costs.find((row: { currency: string }) => row.currency === "USD")
+      .subscription,
+    beforeSubscriptions,
+  );
+  await library.getByRole("button", { name: "Content", exact: true }).click();
+  await expect(
+    library
+      .getByRole("row")
+      .filter({ hasText: "Reviewed local fixture title" })
+      .first(),
+  ).toBeVisible();
+  await page.screenshot({
+    path: `${proof}/overview-desktop.png`,
+    fullPage: false,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth > innerWidth,
+    ),
+    false,
+  );
+  await page.screenshot({
+    path: `${proof}/overview-mobile.png`,
+    fullPage: false,
+  });
+  checks.push(
+    "Overview widgets show real project state; recorded subscription charges update totals once, can be voided with an audit record, and the content table works on mobile",
+  );
   assert.deepEqual(errors, []);
   await writeFile(
     `${proof}/local-e2e.json`,
@@ -449,6 +533,11 @@ try {
     ),
   );
   console.log(JSON.stringify({ passed: checks.length, checks, proof }));
+} catch (cause) {
+  await page
+    .screenshot({ path: `${proof}/failure.png`, fullPage: false })
+    .catch(() => undefined);
+  throw cause;
 } finally {
   await browser.close();
 }

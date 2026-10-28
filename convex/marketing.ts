@@ -1,3 +1,4 @@
+import { emptyMarketingStats, incrementMarketingStats } from "./marketingStats";
 import { v } from "convex/values";
 import {
   internalMutation,
@@ -144,12 +145,36 @@ export const createProject = internalMutation({
     advertisingLimitMinor: v.number(),
     currency: v.string(),
     conversionTokenHash: v.string(),
+    onboardingKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const organization = await ensureDefaultOrganization(ctx);
     if (!organization)
       throw new Error("Marketing organization could not be initialized");
     const organizationId = organization._id;
+    const onboardingHash = snapshotHash({ ...args, conversionTokenHash: null });
+    if (args.onboardingKey) {
+      if (!/^[a-f0-9-]{36}$/.test(args.onboardingKey))
+        throw new Error("Invalid onboarding request key");
+      const previous = await ctx.db
+        .query("marketingProjects")
+        .withIndex("by_organization_onboarding", (q) =>
+          q
+            .eq("organizationId", organizationId)
+            .eq("onboardingKey", args.onboardingKey),
+        )
+        .unique();
+      if (previous) {
+        if (
+          previous.onboardingHash !== onboardingHash ||
+          previous.conversionTokenHash !== args.conversionTokenHash
+        )
+          throw new Error(
+            "This onboarding request conflicts with its original saved project",
+          );
+        return previous._id;
+      }
+    }
     const existing = await ctx.db
       .query("marketingProjects")
       .withIndex("by_organization", (q) =>
@@ -174,6 +199,7 @@ export const createProject = internalMutation({
     return await ctx.db.insert("marketingProjects", {
       ...args,
       organizationId,
+      ...(args.onboardingKey ? { onboardingHash } : {}),
       name: text(args.name, "Project name", 120),
       website: website(args.website),
       offer: text(args.offer, "Offer", 2_000),
@@ -186,6 +212,7 @@ export const createProject = internalMutation({
       version: 1,
       factsConfirmedAt: now,
       openItemCount: 0,
+      stats: emptyMarketingStats(now),
       createdAt: now,
       updatedAt: now,
       nextPlanAt: now,
@@ -312,6 +339,150 @@ export const listWorkspace = internalQuery({
         conversionsTruncated: conversions.length === 200,
       },
     };
+  },
+});
+
+export const updateProject = internalMutation({
+  args: {
+    projectId: v.id("marketingProjects"),
+    expectedVersion: v.number(),
+    name: v.string(),
+    website: v.string(),
+    offer: v.string(),
+    audience: v.string(),
+    facts: v.array(v.string()),
+    tone: v.string(),
+    timezone: v.string(),
+    cadence: v.number(),
+    generationLimitMinor: v.number(),
+    advertisingLimitMinor: v.number(),
+  },
+  handler: async (ctx, { projectId, expectedVersion, ...input }) => {
+    const project = await projectFor(ctx, projectId);
+    if (project.version !== expectedVersion)
+      throw new Error("This project changed. Refresh before editing again.");
+    if (project.status === "active")
+      throw new Error(
+        "Pause project automation before editing its brief or limits.",
+      );
+    if (
+      !Number.isInteger(input.cadence) ||
+      input.cadence < 1 ||
+      input.cadence > 7
+    )
+      throw new Error("Choose 1–7 posts per channel per week");
+    new Intl.DateTimeFormat("en", { timeZone: input.timezone });
+    if (input.facts.length < 1 || input.facts.length > 12)
+      throw new Error("Confirm between 1 and 12 product facts");
+    const open = (
+      await Promise.all(
+        OPEN_STATUSES.map((status) =>
+          ctx.db
+            .query("marketingItems")
+            .withIndex("by_project_status", (q) =>
+              q.eq("projectId", projectId).eq("status", status),
+            )
+            .take(MAX_CONTENT_ROWS),
+        ),
+      )
+    ).flat();
+    if (
+      open.some(
+        (item) =>
+          item.reservationMonth || !["draft", "approved"].includes(item.status),
+      )
+    )
+      throw new Error(
+        "Wait for confirmed remote cancellation before changing this project.",
+      );
+    const values = {
+      ...input,
+      name: text(input.name, "Project name", 120),
+      website: website(input.website),
+      offer: text(input.offer, "Offer", 2_000),
+      audience: text(input.audience, "Audience", 1_000),
+      tone: text(input.tone, "Tone", 300),
+      facts: input.facts.map((fact) => text(fact, "Product fact", 500)),
+      generationLimitMinor: money(input.generationLimitMinor),
+      advertisingLimitMinor: money(input.advertisingLimitMinor),
+    };
+    for (const item of open)
+      await cancelQueuedItem(
+        ctx,
+        item,
+        "Project brief changed; prepare fresh drafts before approval",
+      );
+    const now = Date.now();
+    await ctx.db.patch(projectId, {
+      ...values,
+      version: project.version + 1,
+      factsConfirmedAt: now,
+      openItemCount: 0,
+      nextPlanAt: now,
+      planningError: undefined,
+      updatedAt: now,
+    });
+    return {
+      projectId,
+      version: project.version + 1,
+      retiredDrafts: open.length,
+    };
+  },
+});
+
+/** Admin-only cleanup of an unused onboarding record. Deliberately absent from
+ * the browser/service gateway; never deletes content, credentials in use or bills. */
+export const removeEmptyProject = internalMutation({
+  args: { projectId: v.id("marketingProjects"), expectedName: v.string() },
+  handler: async (ctx, args) => {
+    const project = await projectFor(ctx, args.projectId);
+    if (
+      project.name !== args.expectedName ||
+      project.version !== 1 ||
+      project.status !== "draft" ||
+      project.openItemCount ||
+      Object.entries(project.stats ?? {}).some(
+        ([key, value]) => !["since", "metricsAt"].includes(key) && value > 0,
+      )
+    )
+      throw new Error("Only an unchanged, unused draft project can be removed");
+    const children = await Promise.all([
+      ctx.db
+        .query("marketingItems")
+        .withIndex("by_project_status", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingAssets")
+        .withIndex("by_project", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingChannels")
+        .withIndex("by_project", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingConversions")
+        .withIndex("by_project_received", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingRenderImports")
+        .withIndex("by_project_created", (q) => q.eq("projectId", project._id))
+        .first(),
+    ]);
+    if (children.some(Boolean))
+      throw new Error(
+        "This project has content or connections and cannot be removed",
+      );
+    // Costs are separate immutable records; an assigned charge also prevents cleanup.
+    const costs = await ctx.db
+      .query("marketingCosts")
+      .withIndex("by_project", (q) => q.eq("projectId", project._id))
+      .first();
+    if (costs)
+      throw new Error(
+        "This project has recorded charges and cannot be removed",
+      );
+    await ctx.db.delete(project._id);
+    return { removed: true };
   },
 });
 
@@ -666,6 +837,7 @@ export const createItem = internalMutation({
       throw new Error("Organic content cannot carry an ad budget");
     const now = Date.now();
     const id = await ctx.db.insert("marketingItems", {
+      organizationId: project.organizationId,
       ...args,
       status: "draft",
       version: 1,
@@ -883,6 +1055,7 @@ export const generateWeek = internalMutation({
           project.timezone,
         );
         const itemId = await ctx.db.insert("marketingItems", {
+          organizationId: project.organizationId,
           projectId: project._id,
           channelId: channel._id,
           kind: "post",
@@ -1293,6 +1466,34 @@ export const recordOutcome = internalMutation({
         heldAdvertisingMinor: item.heldAdvertisingMinor - released,
       });
     }
+    if (
+      args.metrics ||
+      (status === "published" && item.status !== "published")
+    ) {
+      await incrementMarketingStats(ctx, project, {
+        published:
+          status === "published" && item.status !== "published" ? 1 : 0,
+        ...(args.metrics
+          ? {
+              impressions:
+                args.metrics.impressions - (item.metrics?.impressions ?? 0),
+              clicks: args.metrics.clicks - (item.metrics?.clicks ?? 0),
+              metricsAt: args.metrics.capturedAt,
+              advertisingMinor:
+                item.kind === "ad"
+                  ? Math.max(
+                      0,
+                      args.metrics.spendMinor -
+                        Math.max(
+                          item.metrics?.spendMinor ?? 0,
+                          item.billingSettlement?.finalSpendMinor ?? 0,
+                        ),
+                    )
+                  : 0,
+            }
+          : {}),
+      });
+    }
     if (args.retryAfterMs !== undefined && !Number.isFinite(args.retryAfterMs))
       throw new Error("Invalid retry delay");
     const failures = args.error ? (item.reconciliationFailures ?? 0) + 1 : 0;
@@ -1530,6 +1731,10 @@ export const ingestConversion = internalMutation({
         currency: args.currency,
         updatedAt: now,
       });
+    await incrementMarketingStats(ctx, project, {
+      conversions: 1,
+      valueMinor: args.valueMinor,
+    });
     return { id, reused: false };
   },
 });
@@ -1764,6 +1969,9 @@ export const settleAdBilling = internalMutation({
       },
       updatedAt: Date.now(),
     });
+    await incrementMarketingStats(ctx, project, {
+      advertisingMinor: args.finalSpendMinor - reported,
+    });
     return { reused: false, releasedMinor: item.heldAdvertisingMinor };
   },
 });
@@ -1944,7 +2152,7 @@ export const registerAsset = internalMutation({
     rightsConfirmed: v.boolean(),
   },
   handler: async (ctx, args) => {
-    await projectFor(ctx, args.projectId);
+    const project = await projectFor(ctx, args.projectId);
     if (
       !args.rightsConfirmed ||
       !args.key.startsWith(`marketing/${args.projectId}/`) ||
@@ -1981,6 +2189,7 @@ export const registerAsset = internalMutation({
     if (assets.length >= 100)
       throw new Error("MVP project media limit reached");
     const assetId = await ctx.db.insert("marketingAssets", {
+      organizationId: project.organizationId,
       ...args,
       createdAt: Date.now(),
     });

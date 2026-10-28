@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyHubHandoff } from "@/lib/operator-hub-handoff";
 import {
   createOperatorAccessCode,
   createOperatorSession,
@@ -15,13 +16,29 @@ export const dynamic = "force-dynamic";
  * HttpOnly, signed session cookie for the browser workspace.
  */
 export async function POST(request: NextRequest) {
-  const body = (await request.json().catch(() => ({}))) as { accessCode?: unknown };
-  const accessCode = typeof body.accessCode === "string" ? body.accessCode : undefined;
+  const body = (await request.json().catch(() => ({}))) as {
+    accessCode?: unknown;
+    hubHandoff?: unknown;
+  };
+  const accessCode =
+    typeof body.accessCode === "string" ? body.accessCode : undefined;
   const denied = verifyOperatorActivation(request);
-  if (denied && !verifyOperatorAccessCode(accessCode)) return denied;
+  if (
+    denied &&
+    !verifyOperatorAccessCode(accessCode) &&
+    !verifyHubHandoff(body.hubHandoff)
+  )
+    return denied;
   const session = createOperatorSession();
-  if (!session) return NextResponse.json({ error: "Operator access is not configured" }, { status: 503 });
-  const response = NextResponse.json({ ok: true, expiresInSeconds: 8 * 60 * 60 });
+  if (!session)
+    return NextResponse.json(
+      { error: "Operator access is not configured" },
+      { status: 503 },
+    );
+  const response = NextResponse.json(
+    { ok: true, expiresInSeconds: 8 * 60 * 60 },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
   response.cookies.set(operatorSessionCookie(session));
   return response;
 }
@@ -35,7 +52,11 @@ export async function PUT(request: NextRequest) {
   const denied = verifyOperatorActivation(request);
   if (denied) return denied;
   const accessCode = createOperatorAccessCode();
-  if (!accessCode) return NextResponse.json({ error: "Operator access is not configured" }, { status: 503 });
+  if (!accessCode)
+    return NextResponse.json(
+      { error: "Operator access is not configured" },
+      { status: 503 },
+    );
   return NextResponse.json({ accessCode, expiresInSeconds: 10 * 60 });
 }
 

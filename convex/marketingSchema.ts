@@ -49,14 +49,29 @@ export const marketingTables = {
     advertisingLimitMinor: v.number(),
     currency: v.string(),
     conversionTokenHash: v.string(),
+    onboardingKey: v.optional(v.string()),
+    onboardingHash: v.optional(v.string()),
     openItemCount: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
     nextPlanAt: v.number(),
     planningError: v.optional(v.string()),
     defaultAssetId: v.optional(v.id("marketingAssets")),
+    stats: v.optional(
+      v.object({
+        published: v.number(),
+        impressions: v.number(),
+        clicks: v.number(),
+        advertisingMinor: v.number(),
+        conversions: v.number(),
+        valueMinor: v.number(),
+        metricsAt: v.optional(v.number()),
+        since: v.number(),
+      }),
+    ),
   })
     .index("by_organization", ["organizationId"])
+    .index("by_organization_onboarding", ["organizationId", "onboardingKey"])
     .index("by_status_next_plan", ["status", "nextPlanAt"]),
 
   marketingProviderAccounts: defineTable({
@@ -88,6 +103,7 @@ export const marketingTables = {
     .index("by_account", ["accountId"]),
 
   marketingAssets: defineTable({
+    organizationId: v.optional(v.id("organizations")),
     projectId: v.id("marketingProjects"),
     key: v.string(),
     sha256: v.string(),
@@ -98,7 +114,8 @@ export const marketingTables = {
     createdAt: v.number(),
   })
     .index("by_project", ["projectId"])
-    .index("by_key", ["key"]),
+    .index("by_key", ["key"])
+    .index("by_organization_created", ["organizationId", "createdAt"]),
 
   marketingRenderImports: defineTable({
     projectId: v.id("marketingProjects"),
@@ -124,6 +141,7 @@ export const marketingTables = {
     .index("by_project_job", ["projectId", "renderJobId"]),
 
   marketingItems: defineTable({
+    organizationId: v.optional(v.id("organizations")),
     projectId: v.id("marketingProjects"),
     channelId: v.id("marketingChannels"),
     kind: v.union(v.literal("post"), v.literal("ad")),
@@ -199,7 +217,36 @@ export const marketingTables = {
     .index("by_provider_id", ["providerId"])
     .index("by_provider_campaign_key", ["providerCampaignKey"])
     .index("by_provider_native_ad_key", ["providerNativeAdKey"])
-    .index("by_idempotency", ["idempotencyKey"]),
+    .index("by_idempotency", ["idempotencyKey"])
+    .index("by_organization_created", ["organizationId", "createdAt"]),
+
+  marketingCosts: defineTable({
+    organizationId: v.id("organizations"),
+    projectId: v.optional(v.id("marketingProjects")),
+    label: v.string(),
+    category: v.union(
+      v.literal("subscription"),
+      v.literal("generation"),
+      v.literal("hosting"),
+    ),
+    amountMinor: v.number(),
+    currency: v.string(),
+    occurredAt: v.number(),
+    reference: v.string(),
+    createdAt: v.number(),
+    voidedAt: v.optional(v.number()),
+  })
+    .index("by_organization_created", ["organizationId", "createdAt"])
+    .index("by_project", ["projectId"])
+    .index("by_organization_reference", ["organizationId", "reference"]),
+  marketingCostTotals: defineTable({
+    organizationId: v.id("organizations"),
+    currency: v.string(),
+    subscription: v.number(),
+    generation: v.number(),
+    hosting: v.number(),
+    updatedAt: v.number(),
+  }).index("by_organization_currency", ["organizationId", "currency"]),
 
   marketingAllowances: defineTable({
     scope: v.string(),

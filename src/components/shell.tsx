@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import MarketingFrame from "./marketing-frame";
 
 type NavigationItem = { href: string; label: string; detail: string };
 type NavigationSection = { label: string; items: NavigationItem[] };
@@ -79,6 +80,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   }, [publicPage]);
 
   if (publicPage) return <>{children}</>;
+  if (path === "/marketing") return <MarketingFrame>{children}</MarketingFrame>;
 
   return (
     <div className="min-h-screen bg-void md:flex">

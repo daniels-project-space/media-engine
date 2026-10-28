@@ -1,4 +1,5 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
+import { creativeServiceToken } from "@/lib/creative-service";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireOperator } from "@/lib/operator-auth";
@@ -32,6 +33,7 @@ const projectInput = z
     generationLimitMinor: z.number().int().min(0),
     advertisingLimitMinor: z.number().int().min(0),
     currency: z.enum(["USD", "GBP", "EUR", "CHF"]),
+    onboardingKey: z.string().uuid().optional(),
   })
   .strict();
 
@@ -39,6 +41,33 @@ export async function GET(request: NextRequest) {
   const denied = requireOperator(request);
   if (denied) return denied;
   try {
+    const view = request.nextUrl.searchParams.get("view");
+    if (view === "overview")
+      return NextResponse.json(
+        await marketingCall("overview", {
+          asOfMinute: Math.floor(Date.now() / 60_000),
+        }),
+        {
+          headers,
+        },
+      );
+    if (view === "table") {
+      const kind = z
+        .enum(["uploads", "content", "costs"])
+        .parse(request.nextUrl.searchParams.get("kind"));
+      const cursor = z
+        .string()
+        .max(10_000)
+        .nullable()
+        .parse(request.nextUrl.searchParams.get("cursor"));
+      return NextResponse.json(
+        await marketingCall("contentTable", {
+          kind,
+          paginationOpts: { cursor, numItems: 25 },
+        }),
+        { headers },
+      );
+    }
     const projectId = request.nextUrl.searchParams.get("projectId");
     const data = await marketingCall<Record<string, unknown>>(
       "listWorkspace",
@@ -69,7 +98,11 @@ export async function POST(request: NextRequest) {
       .parse(await boundedJson(request));
     if (input.action === "create-project") {
       const payload = projectInput.parse(input.payload),
-        conversionToken = randomBytes(32).toString("hex");
+        conversionToken = payload.onboardingKey
+          ? createHmac("sha256", await creativeServiceToken())
+              .update(`marketing-conversion:v1:${payload.onboardingKey}`)
+              .digest("hex")
+          : randomBytes(32).toString("hex");
       const projectId = await marketingCall<string>("createProject", {
         ...payload,
         conversionTokenHash: snapshotHash(conversionToken),
@@ -82,6 +115,37 @@ export async function POST(request: NextRequest) {
     if (input.action === "refresh-accounts") {
       const result = await refreshProviderAccounts();
       return NextResponse.json(result, { headers });
+    }
+    if (input.action === "record-cost") {
+      const payload = z
+        .object({
+          projectId: id.optional(),
+          label: z.string().min(1).max(120),
+          category: z.enum(["subscription", "generation", "hosting"]),
+          amountMinor: z.number().int().nonnegative(),
+          currency: z.enum(["USD", "GBP", "EUR", "CHF"]),
+          occurredAt: z.number().int(),
+          reference: z.string().min(1).max(160),
+        })
+        .strict()
+        .parse(input.payload);
+      return NextResponse.json(await marketingCall("recordCost", payload), {
+        headers,
+      });
+    }
+    if (input.action === "void-cost") {
+      const payload = z.object({ costId: id }).strict().parse(input.payload);
+      return NextResponse.json(await marketingCall("voidCost", payload), {
+        headers,
+      });
+    }
+    if (input.action === "update-project") {
+      const payload = projectInput
+        .omit({ currency: true, goal: true, onboardingKey: true })
+        .extend({ projectId: id, expectedVersion: z.number().int().min(1) })
+        .parse(input.payload);
+      const result = await marketingCall("updateProject", payload);
+      return NextResponse.json({ result }, { headers });
     }
     if (input.action === "available-renders") {
       const result = await marketingCall("availableRenders", {

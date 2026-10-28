@@ -176,3 +176,47 @@ The workspace-wide cloud guard also reports pre-existing legacy full-table
 readers. They were not hidden behind scan exceptions. The new marketing CI guard
 enforces this change's query boundary; no production savings are claimed from
 source checks alone.
+
+## Personal workspace and overview
+
+The new interface follows `docs/design/marketing-onboarding-reference.png`, generated
+with the built-in GPT Image tool. A real three-step form imports website metadata,
+selects connected accounts, and confirms facts, cadence and independent limits.
+Onboarding retries use an immutable request key; the same server-derived conversion
+credential and project are recovered instead of creating a duplicate. A saved brief
+can be edited while automation is stopped, with optimistic version checking and
+retirement of old drafts/approvals. Pending remote cleanup blocks an edit.
+
+The overview at `/marketing#overview` shows a widget for each onboarded marketing
+project. Transactional lifetime counters preserve publication, metrics, advertising
+and first-party conversion totals across repeated deliveries. Active campaign counts
+require a recent native status timestamp; old status is shown as needing attention.
+The minute bucket prevents cached query results from keeping an old status current.
+
+Actual subscription/provider, generation and hosting charges can be recorded with an
+invoice/receipt reference. Immutable reference checks prevent duplicates. Voiding
+retains the audit row and reverses its category total once. These are operator-recorded
+costs, not payments or automatic invoice verification. Currencies stay separate;
+unknown hosting, generation and historic costs are excluded and disclosed. Current
+provider usage is shown separately until reconciled against a recorded charge.
+The library paginates uploaded media, content and recorded charges with indexed,
+organization-scoped reads. It never scans the full history for each widget.
+
+Project Hub's Media Engine carousel entry opens its `/media-engine` owner handoff.
+It uses the existing Hub vault-control login, an isolated shared server secret and a
+60-second audience-bound fragment code. Media Engine mints its usual HttpOnly owner
+session; the existing operator token and service/provider credentials are unchanged.
+`MEDIA_ENGINE_HUB_HANDOFF_SECRET` is server-only in both projects and both scoped vault
+services. No credential is embedded in the tile URL or public browser bundle.
+
+The existing live website uses `blissful-sardine-231`, labelled a development deployment
+by Convex. Its named default production deployment is `grand-ferret-295`; it is not
+used for this rollout. Always scope deployment to the backend actually used by the
+website, rather than relying on the CLI's default production selection. No indexes
+are removed. The live marketing-project table was empty before this rollout, so
+lifetime counters begin at project creation without migrating old marketing history.
+
+An internal administrator-only empty-draft cleanup function is deliberately absent
+from the operator/service gateway. It refuses projects with any content, media,
+connections, conversions, imports, recorded costs or activity, and is used to clean
+up the exact empty production onboarding verification record.
