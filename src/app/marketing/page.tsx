@@ -1446,6 +1446,8 @@ function RenderReuse({
   const [renderStatus, setRenderStatus] = useState<string>(
     "Checking the new rendering service…",
   );
+  const [connectionStatus, setConnectionStatus] = useState("");
+  const [hyperJobId, setHyperJobId] = useState("");
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/marketing/render-readiness", { signal: controller.signal })
@@ -1477,6 +1479,22 @@ function RenderReuse({
       <p className="text-xs leading-5 text-ink-dim">
         Marketing video and image generation will use the new service once the project connection and render workflow are qualified. No GPU job is submitted by this status check.
       </p>
+      <div className="grid gap-2">
+        <label className="text-xs text-ink-dim" htmlFor="hyper-job-id">Optional existing new-service job ID</label>
+        <input id="hyper-job-id" className={inputClass} value={hyperJobId} onChange={(event) => setHyperJobId(event.target.value)} placeholder="Job ID" />
+        <button type="button" className={buttonClass} disabled={busy} onClick={async () => {
+          setConnectionStatus("Checking project connection…");
+          try {
+            const params = new URLSearchParams({ projectId });
+            if (hyperJobId.trim()) params.set("jobId", hyperJobId.trim());
+            const data = await responseJson(await fetch(`/api/marketing/hyper-project?${params}`, { cache: "no-store" }));
+            if (!data.connected) { setConnectionStatus("This project has no configured new-service connection."); return; }
+            const job = data.job as null | { state: string; modelId: string; receipt: null | { available: boolean } };
+            setConnectionStatus(job ? `Job ${job.state} · ${job.modelId}. ${job.receipt ? "A project-scoped receipt exists; Media Engine has not independently verified its object hash." : "No output receipt yet."}` : "Project credential and storage scope verified. Render submission remains disabled.");
+          } catch { setConnectionStatus("Could not verify the project connection or job. Check its setup and try again."); }
+        }}>Check new-service connection</button>
+        {connectionStatus ? <p className="text-xs leading-5 text-ink-dim" role="status">{connectionStatus}</p> : null}
+      </div>
       <h3 className="text-sm font-bold">Reuse an approved final video</h3>
       <p className="text-xs leading-5 text-ink-dim">
         Import a previously approved video from the existing library. This preserves the completed original, verifies its R2 hash, and selects it for future posts. No render is launched here.
