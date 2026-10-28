@@ -1368,16 +1368,43 @@ function RenderReuse({
   const [renders, setRenders] = useState<
     Array<{ jobId: string; title: string }>
   >([]);
+  const [renderStatus, setRenderStatus] = useState<string>(
+    "Checking the new rendering service…",
+  );
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/marketing/render-readiness", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("unavailable");
+        return response.json() as Promise<{
+          models: Array<{ nativeQualified: boolean }>;
+          hardware: { initial: string; future: string };
+        }>;
+      })
+      .then((result) => {
+        const qualified = result.models.filter((model) => model.nativeQualified).length;
+        setRenderStatus(
+          `${qualified} of ${result.models.length} model routes have native qualification. ` +
+            `Hardware: ${result.hardware.initial.toUpperCase()} initially; ${result.hardware.future.toUpperCase()} planned. ` +
+            "Project connection, available capacity, output delivery and permission to spend still require verification.",
+        );
+      })
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setRenderStatus("The new rendering service status is unavailable. No render can be launched here.");
+      });
+    return () => controller.abort();
+  }, []);
   return (
     <div className="grid gap-3 border-t border-line pt-5">
+      <h3 className="text-sm font-bold">New GPU rendering service</h3>
+      <p className="text-xs leading-5 text-ink-dim" role="status">{renderStatus}</p>
+      <p className="text-xs leading-5 text-ink-dim">
+        Marketing video and image generation will use the new service once the project connection and render workflow are qualified. No GPU job is submitted by this status check.
+      </p>
       <h3 className="text-sm font-bold">Reuse an approved final video</h3>
       <p className="text-xs leading-5 text-ink-dim">
-        Use the existing{" "}
-        <Link className="text-scope underline" href="/work">
-          storyboard and render workflow
-        </Link>{" "}
-        for new videos. Import preserves the completed original, verifies its R2
-        hash, and selects it for future posts. No render is launched here.
+        Import a previously approved video from the existing library. This preserves the completed original, verifies its R2 hash, and selects it for future posts. No render is launched here.
       </p>
       <button
         className={buttonClass}
