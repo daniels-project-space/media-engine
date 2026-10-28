@@ -106,7 +106,7 @@ export const claim = internalMutation({
       offer: project.offer, audience: project.audience, facts: project.facts,
       goal: project.goal, tone: project.tone, timezone: project.timezone, cadence: project.cadence,
       research: research.filter(source => source.kind !== "project" || new URL(source.url).hostname === new URL(project.website).hostname)
-        .map(({ url, title, description, excerpt, kind, capturedAt }) => ({ url, title, description, excerpt, kind, capturedAt })) };
+        .map(({ url, title, description, excerpt, kind, origin, capturedAt }) => ({ url, title, description, excerpt, kind, origin: origin ?? (kind === "project" ? "project" : "manual"), capturedAt })) };
   },
 });
 

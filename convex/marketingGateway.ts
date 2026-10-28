@@ -7,6 +7,8 @@ import { v } from "convex/values";
 const mutations = {
   savePlan: "marketingPlans:save",
   saveResearch: "marketingResearch:save",
+  startDiscovery: "marketingResearch:startDiscovery",
+  finishDiscovery: "marketingResearch:finishDiscovery",
   createPlanDraft: "marketingPlans:createDraft",
   startPlan: "marketingPlans:start",
   claimPlan: "marketingPlans:claim",

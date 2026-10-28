@@ -14,6 +14,7 @@ import {
 import { snapshotHash } from "../../../../convex/marketingPolicy";
 import { vaultService } from "@/lib/vault";
 import { inspectResearchWebsite } from "@/lib/marketing/website";
+import { discoverProjectResearch } from "@/lib/marketing/discover-project";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -189,6 +190,10 @@ export async function POST(request: NextRequest) {
       const result = await marketingCall("saveResearch", { projectId: payload.projectId, expectedProjectVersion: project.version, ...source, kind });
       return NextResponse.json({ result }, { headers });
     }
+    if (input.action === "discover-research") {
+      const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
+      return NextResponse.json({ result: await discoverProjectResearch(payload.projectId, payload.requestKey) }, { headers });
+    }
     if (input.action === "generate-plan") {
       const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
       const previous = await marketingCall<{ requestKey: string; status: string; recoverable?: boolean } | null>("latestPlanRun", { projectId: payload.projectId, asOfMinute: Math.floor(Date.now() / 60_000) });
@@ -196,15 +201,21 @@ export async function POST(request: NextRequest) {
         throw new Error("A planning run is already in progress; check its status before retrying.");
       let researchNotice: string | undefined;
       if (previous?.requestKey !== payload.requestKey) {
-        try {
+        const captureProject = async () => {
           const workspace = await marketingCall<{ projects: Array<{ _id: string; version: number; website: string }> }>("listWorkspace", { projectId: payload.projectId });
           const project = workspace.projects.find(row => row._id === payload.projectId);
           if (!project) throw new Error("Marketing project not found");
           const source = await inspectResearchWebsite(project.website);
           await marketingCall("saveResearch", { projectId: payload.projectId, expectedProjectVersion: project.version, ...source, kind: "project" });
-        } catch {
-          researchNotice = "The project website could not be captured; the plan will use the saved brief and any existing sources.";
-        }
+        };
+        const enabled = process.env.MARKETING_TAVILY_DISCOVERY_ENABLED === "true";
+        const [siteResult, discoveryResult] = await Promise.allSettled([
+          captureProject(), enabled ? discoverProjectResearch(payload.projectId, payload.requestKey) : Promise.resolve(null),
+        ]);
+        const warnings = [];
+        if (siteResult.status === "rejected") warnings.push("The project website could not be captured.");
+        if (enabled && discoveryResult.status === "rejected") warnings.push("Market discovery was unavailable or reached its daily limit.");
+        if (warnings.length) researchNotice = `${warnings.join(" ")} The plan will use the saved brief and sources.`;
       }
       const run = await marketingCall<{ runId: string; status: string }>("startPlan", payload);
       if (run.status === "queued") {
@@ -213,7 +224,7 @@ export async function POST(request: NextRequest) {
         const response = await fetch("https://api.trigger.dev/api/v1/tasks/marketing-ai-plan/trigger", {
           method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
           body: JSON.stringify({ payload: { runId: run.runId }, options: { idempotencyKey: `marketing-plan:${run.runId}`, idempotencyKeyTTL: "7d" } }),
-          signal: AbortSignal.timeout(15_000), redirect: "error",
+          signal: AbortSignal.timeout(8_000), redirect: "error",
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || typeof result.id !== "string")

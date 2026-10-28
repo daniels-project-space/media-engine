@@ -115,8 +115,15 @@ export const marketingTables = {
   marketingResearch: defineTable({
     projectId: v.id("marketingProjects"), url: v.string(), title: v.string(),
     description: v.string(), excerpt: v.string(), kind: v.union(v.literal("project"), v.literal("reference")),
+    origin: v.optional(v.union(v.literal("project"), v.literal("manual"), v.literal("discovered"))),
     contentHash: v.string(), capturedAt: v.number(),
   }).index("by_project_url", ["projectId", "url"]).index("by_project", ["projectId"]),
+
+  marketingResearchDiscoveries: defineTable({
+    projectId: v.id("marketingProjects"), requestKey: v.string(), projectVersion: v.number(),
+    status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
+    captured: v.number(), createdAt: v.number(), updatedAt: v.number(),
+  }).index("by_project_request", ["projectId", "requestKey"]).index("by_project_created", ["projectId", "createdAt"]),
 
   marketingProviderAccounts: defineTable({
     providerAccountId: v.string(),

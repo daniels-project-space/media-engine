@@ -15,7 +15,7 @@ const planSchema = z.object({
 
 type Brief = { name: string; website: string; offer: string; audience: string; facts: string[];
   goal: string; tone: string; timezone: string; cadence: number;
-  research?: Array<{ url: string; title: string; description: string; excerpt: string; kind: "project" | "reference"; capturedAt: number }> };
+  research?: Array<{ url: string; title: string; description: string; excerpt: string; kind: "project" | "reference"; origin?: "project" | "manual" | "discovered"; capturedAt: number }> };
 
 export async function generateMarketingPlan(brief: Brief, model: typeof chat = chat) {
   const { research = [], ...confirmedBrief } = brief;
@@ -32,6 +32,6 @@ export async function generateMarketingPlan(brief: Brief, model: typeof chat = c
   return {
     strategy: JSON.stringify(strategy, null, 2),
     calendar: JSON.stringify(calendar.sort((a, b) => a.day - b.day), null, 2),
-    sources: `Owner-confirmed project brief, version at generation. Website: ${brief.website}. Generated with the existing Codex subscription worker; its active model and usage are not reported by this workflow. ${research.length ? `Captured source pages (unverified claims):\n${research.map(source => `${source.kind}: ${source.title} — ${source.url} — captured ${new Date(source.capturedAt).toISOString()}`).join("\n")}` : "No source pages were captured."} ${research.some(source => source.kind === "reference") ? "Reference pages were supplied by the owner; automatic discovery is not yet available." : "No independent market research was collected for this draft."}`,
+    sources: `Owner-confirmed project brief, version at generation. Website: ${brief.website}. Generated with the existing Codex subscription worker; its active model and usage are not reported by this workflow. ${research.length ? `Captured source pages (unverified claims):\n${research.map(source => `${source.origin ?? source.kind}: ${source.title} — ${source.url} — captured ${new Date(source.capturedAt).toISOString()}`).join("\n")}` : "No source pages were captured."} ${research.some(source => source.kind === "reference") ? "Reference pages are attributed claims and require review." : "No independent market research was collected for this draft."}`,
   };
 }

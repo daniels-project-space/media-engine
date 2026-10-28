@@ -33,6 +33,7 @@ try {
   await page.getByRole("combobox", { name: "Current project" }).selectOption(projectId);
   await expect(page.getByRole("heading", { name: `Local plan ${run}`, exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Strategy and content plan" })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Discover market sources" })).toBeDisabled();
   await page.getByLabel("Public research URL").fill("https://media-engine-seven.vercel.app/");
   await page.getByRole("button", { name: "Capture source" }).click();
   await expect.poll(async () => (await call("listResearch", { projectId }) as unknown[]).length, { timeout: 20_000 }).toBe(1);
@@ -45,6 +46,7 @@ try {
   await expect(page.getByRole("heading", { name: "Calendar drafts" })).toBeVisible();
   await expect(page.getByText("A private fixture draft", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Create review draft" }).click();
+  await expect.poll(async () => ((await call("listWorkspace", { projectId })) as { items: unknown[] }).items.length).toBe(1);
   const final = await call("listWorkspace", { projectId }) as { items: Array<{ status: string; content: string }> };
   assert.equal(final.items.length, 1);
   assert.equal(final.items[0].status, "draft");

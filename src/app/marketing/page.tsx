@@ -36,6 +36,7 @@ type Workspace = {
     qualified: boolean;
     publishingEnabled: boolean;
     advertisingEnabled: boolean;
+    researchDiscoveryEnabled: boolean;
     integrationLimitMinor: number;
     integrationCurrency: string;
   };
@@ -665,7 +666,7 @@ export default function Marketing() {
                       action={action}
                     />
                     <div key={`plan-${project._id}`}>
-                      <ProjectResearch project={project} busy={busy} action={action} />
+                      <ProjectResearch project={project} discoveryEnabled={workspace.readiness.researchDiscoveryEnabled} busy={busy} action={action} />
                       <ProjectPlan project={project} channels={channels} accounts={workspace.accounts} busy={busy} action={action} />
                     </div>
                     <form
@@ -1357,14 +1358,15 @@ function DraftEditor({
   );
 }
 
-type ResearchSource = { _id: string; url: string; title: string; description: string; excerpt: string; kind: string; capturedAt: number };
-function ProjectResearch({ project, busy, action }: {
-  project: Project; busy: boolean;
+type ResearchSource = { _id: string; url: string; title: string; description: string; excerpt: string; kind: string; origin?: string; capturedAt: number };
+function ProjectResearch({ project, discoveryEnabled, busy, action }: {
+  project: Project; discoveryEnabled: boolean; busy: boolean;
   action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
 }) {
   const [sources, setSources] = useState<ResearchSource[]>([]);
   const [reload, setReload] = useState(0);
   const [failure, setFailure] = useState(false);
+  const [discoveryStatus, setDiscoveryStatus] = useState("");
   useEffect(() => {
     const controller = new AbortController();
     fetch(`/api/marketing?view=research&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store", signal: controller.signal })
@@ -1375,6 +1377,15 @@ function ProjectResearch({ project, busy, action }: {
   return <div className="grid gap-3 border-t border-line pt-5">
     <h3 className="text-sm font-bold">Research sources</h3>
     <p className="text-xs leading-5 text-ink-dim">Add useful public competitor or market pages. The project website is captured when AI planning starts. Page excerpts are source claims and need review.</p>
+    <button type="button" className={buttonClass} disabled={busy || !discoveryEnabled} onClick={async () => {
+      const result = await action("discover-research", { projectId: project._id, requestKey: crypto.randomUUID() });
+      if (result) {
+        const run = result.result as { status: string; captured: number };
+        setDiscoveryStatus(run.status === "completed" ? `${run.captured} source pages captured; review their claims and relevance.` : `Discovery status: ${run.status}.`);
+        setReload(value => value + 1);
+      }
+    }}>Discover market sources</button>
+    <p className="text-xs text-ink-dim" role="status">{discoveryStatus || (discoveryEnabled ? "Discovery checks the free search plan and runs at most once per project per day." : "Automatic discovery is not connected; add public source URLs below.")}</p>
     <form className="grid gap-2" onSubmit={async event => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -1386,7 +1397,7 @@ function ProjectResearch({ project, busy, action }: {
     </form>
     {failure ? <p role="alert" className="text-xs text-ink-dim">Research sources could not be loaded.</p> : null}
     {sources.map(source => <details key={source._id} className="text-xs text-ink-dim">
-      <summary>{source.title} · {source.kind === "project" && new URL(source.url).hostname !== new URL(project.website).hostname ? "old project site, excluded from planning" : source.kind} · {new Date(source.capturedAt).toLocaleDateString()}</summary>
+      <summary>{source.title} · {source.kind === "project" && new URL(source.url).hostname !== new URL(project.website).hostname ? "old project site, excluded from planning" : source.origin ?? source.kind} · {new Date(source.capturedAt).toLocaleDateString()}</summary>
       <a href={source.url} target="_blank" rel="noreferrer" className="break-all text-scope underline">{source.url}</a>
       <p className="whitespace-pre-wrap">{source.description}{source.excerpt ? `\n${source.excerpt}` : ""}</p>
     </details>)}
@@ -1456,7 +1467,7 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
     }
   }}>
     <h3 className="text-sm font-bold">Strategy and content plan</h3>
-    <p className="text-xs leading-5 text-ink-dim">Save or edit this project’s strategy and two-week content plan. AI drafts use the confirmed brief and captured source pages; automatic market discovery is not yet available.</p>
+    <p className="text-xs leading-5 text-ink-dim">Save or edit this project’s strategy and two-week content plan. AI drafts use the confirmed brief and captured source pages.</p>
     <button type="button" className={buttonClass} disabled={busy || loadState !== "ready" || (run?.status === "running" && !run.recoverable)} onClick={async () => {
       const requestKey = run?.status === "queued" ? run.requestKey : crypto.randomUUID();
       const result = await action("generate-plan", { projectId: project._id, requestKey });

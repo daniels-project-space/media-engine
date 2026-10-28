@@ -678,6 +678,19 @@ describe("cost and source policy", () => {
 });
 
 describe("project planning revisions", () => {
+  it("deduplicates and rate-limits project research discovery attempts", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("discovery"));
+    const start = makeFunctionReference<"mutation">("marketingResearch:startDiscovery");
+    const finish = makeFunctionReference<"mutation">("marketingResearch:finishDiscovery");
+    const args = { projectId, expectedProjectVersion: 1, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" };
+    const first = await t.mutation(start, args);
+    expect(first.canRun).toBe(true);
+    expect(await t.mutation(start, args)).toMatchObject({ discoveryId: first.discoveryId, canRun: false });
+    await expect(t.mutation(start, { ...args, requestKey: "6c23d114-ef9b-41a8-aee4-2728e9fa6dab" })).rejects.toThrow(/one attempt/);
+    await t.mutation(finish, { projectId, discoveryId: first.discoveryId, success: true, captured: 2 });
+    expect(await t.mutation(start, args)).toMatchObject({ canRun: false, status: "completed", captured: 2 });
+  });
   it("isolates attributed research and fences planning if source evidence changes", async () => {
     const t = convexTest(schema, modules);
     const a = await t.mutation(mutation("createProject"), draft("research-a"));
