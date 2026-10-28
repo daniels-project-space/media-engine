@@ -89,6 +89,7 @@ async function itemContext(
   const project = await projectFor(ctx, projectId);
   const item = await ctx.db.get(itemId);
   assertOwned(projectId, item);
+  if (!item!.channelId) throw new Error("Assign a matching channel before approval or publishing");
   const channel = await ctx.db.get(item!.channelId);
   assertOwned(projectId, channel);
   const account = await ctx.db.get(channel!.accountId);
@@ -945,6 +946,25 @@ export const approveItem = internalMutation({
   },
 });
 
+export const assignDraftChannel = internalMutation({
+  args: { projectId: v.id("marketingProjects"), itemId: v.id("marketingItems"), channelId: v.id("marketingChannels"), expectedVersion: v.number() },
+  handler: async (ctx, args) => {
+    const project = await projectFor(ctx, args.projectId);
+    const [item, channel] = await Promise.all([ctx.db.get(args.itemId), ctx.db.get(args.channelId)]);
+    assertOwned(project._id, item); assertOwned(project._id, channel);
+    if (!item || !channel || item.kind !== "post" || item.status !== "draft" || item.channelId || item.reservationMonth || item.version !== args.expectedVersion)
+      throw new Error("Only the current unassigned draft may be assigned");
+    const account = await ctx.db.get(channel.accountId);
+    if (!account || !item.intendedPlatform || account.platform !== item.intendedPlatform) throw new Error("Choose a matching project social channel");
+    const assetId = item.assetId ?? project.defaultAssetId;
+    const asset = assetId ? await ctx.db.get(assetId) : null;
+    if (assetId) { assertOwned(project._id, asset); if (!asset?.rightsConfirmed) throw new Error("Confirm media rights first"); }
+    if (item.intendedPlatform === "instagram" && !asset) throw new Error("Add verified project media before assigning an Instagram draft");
+    await ctx.db.patch(item._id, { channelId: channel._id, ...(asset ? { assetId: asset._id } : {}), version: item.version + 1, updatedAt: Date.now() });
+    return item._id;
+  },
+});
+
 export const editDraft = internalMutation({
   args: {
     projectId: v.id("marketingProjects"),
@@ -955,11 +975,12 @@ export const editDraft = internalMutation({
     scheduledAt: v.number(),
   },
   handler: async (ctx, args) => {
-    const { item, account } = await itemContext(
-      ctx,
-      args.projectId,
-      args.itemId,
-    );
+    await projectFor(ctx, args.projectId);
+    const item = await ctx.db.get(args.itemId);
+    assertOwned(args.projectId, item);
+    if (!item) throw new Error("Marketing item not found");
+    const platform = item.channelId ? (await itemContext(ctx, args.projectId, args.itemId)).account.platform : item.intendedPlatform;
+    if (!platform) throw new Error("Draft platform is missing");
     if (
       item.status !== "draft" ||
       item.version !== args.expectedVersion ||
@@ -974,9 +995,9 @@ export const editDraft = internalMutation({
     text(
       args.content,
       "Content",
-      account.platform === "x"
+      platform === "x"
         ? 280
-        : account.platform === "instagram"
+        : platform === "instagram"
           ? 2_200
           : 10_000,
     );
@@ -2278,7 +2299,7 @@ export const ingestWebhook = internalMutation({
               .unique()
           : null;
     if (item) {
-      const channel = await ctx.db.get(item.channelId),
+      const channel = item.channelId ? await ctx.db.get(item.channelId) : null,
         account = channel ? await ctx.db.get(channel.accountId) : null;
       if (
         !account ||

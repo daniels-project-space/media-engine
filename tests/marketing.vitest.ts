@@ -800,6 +800,43 @@ describe("project planning revisions", () => {
     await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 1, strategy: "Revised strategy", calendar, sources: "Owner brief" });
     await expect(f.t.mutation(create, args)).rejects.toThrow(/current plan/);
   });
+  it("prepares, edits and safely assigns an account-free plan draft", async () => {
+    const f = await projects();
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const create = makeFunctionReference<"mutation">("marketingPlans:createDraft");
+    const calendar = JSON.stringify([{ day: 2, channel: "x", format: "Introduction", rationale: "Explain the offer", caption: "Meet our tool", hashtags: [], videoScript: "" }]);
+    const plan = await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 0, strategy: "Strategy", calendar, sources: "Owner brief" });
+    const args = { projectId: f.a, planId: plan.planId, entryIndex: 0 };
+    const result = await f.t.mutation(create, args);
+    expect(await f.t.mutation(create, args)).toEqual({ itemId: result.itemId, reused: true });
+    const item = (await f.t.query(query("listWorkspace"), { projectId: f.a })).items[0];
+    expect(item).toMatchObject({ status: "draft", intendedPlatform: "x" });
+    expect(item.channelId).toBeUndefined();
+    await expect(f.t.mutation(mutation("approveItem"), { projectId: f.a, itemId: item._id })).rejects.toThrow(/Assign a matching channel/);
+    await expect(f.t.mutation(mutation("assignDraftChannel"), { projectId: f.a, itemId: item._id, channelId: f.channelB, expectedVersion: 1 })).rejects.toThrow(/does not belong/);
+    await expect(f.t.mutation(mutation("editDraft"), { projectId: f.b, itemId: item._id, expectedVersion: 1, title: "Edited", content: "Updated", scheduledAt: Date.now() + 86400000 })).rejects.toThrow(/does not belong/);
+    await f.t.mutation(mutation("editDraft"), { projectId: f.a, itemId: item._id, expectedVersion: 1, title: "Edited", content: "Updated", scheduledAt: Date.now() + 86400000 });
+    await f.t.mutation(mutation("assignDraftChannel"), { projectId: f.a, itemId: item._id, channelId: f.channelA, expectedVersion: 2 });
+    const assigned = (await f.t.query(query("listWorkspace"), { projectId: f.a })).items[0];
+    expect(assigned).toMatchObject({ channelId: f.channelA, status: "draft", version: 3, content: "Updated" });
+    expect((await f.t.query(query("listWorkspace"), { projectId: f.b })).items).toHaveLength(0);
+  });
+  it("requires a matching platform and verified media when assigning an Instagram draft", async () => {
+    const f = await projects();
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const create = makeFunctionReference<"mutation">("marketingPlans:createDraft");
+    const calendar = JSON.stringify([{ day: 1, channel: "instagram", format: "Image", caption: "Private draft", hashtags: [] }]);
+    const plan = await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 0, strategy: "Strategy", calendar, sources: "Owner brief" });
+    const result = await f.t.mutation(create, { projectId: f.a, planId: plan.planId, entryIndex: 0 });
+    const assignment = { projectId: f.a, itemId: result.itemId, channelId: f.channelA, expectedVersion: 1 };
+    await expect(f.t.mutation(mutation("assignDraftChannel"), assignment)).rejects.toThrow(/matching project social channel/);
+    await f.t.mutation(mutation("syncAccounts"), { accountCount: 1, pricingVerifiedAt: Date.now(), accounts: [{ providerAccountId: "alpha-instagram", profileId: "alpha-profile", platform: "instagram", label: "Alpha Instagram", connected: true }] });
+    const workspace = await f.t.query(query("listWorkspace"), { projectId: f.a });
+    const instagram = workspace.accounts.find((account: { providerAccountId: string }) => account.providerAccountId === "alpha-instagram");
+    const channelId = await f.t.mutation(mutation("saveChannel"), { projectId: f.a, accountId: instagram._id, mode: "draft", communityApproved: false });
+    await expect(f.t.mutation(mutation("assignDraftChannel"), { ...assignment, channelId })).rejects.toThrow(/verified project media/);
+    await expect(f.t.mutation(mutation("approveItem"), { projectId: f.a, itemId: result.itemId })).rejects.toThrow(/Assign a matching channel/);
+  });
   it("saves a validated worker result as a separate AI revision", async () => {
     const t = convexTest(schema, modules);
     const projectId = await t.mutation(mutation("createProject"), draft("ai-plan"));

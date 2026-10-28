@@ -39,6 +39,7 @@ const mutations = {
   reserveMetricsRead: "marketing:reserveMetricsRead",
   completeMetricsRead: "marketing:completeMetricsRead",
   editDraft: "marketing:editDraft",
+  assignDraftChannel: "marketing:assignDraftChannel",
   recheckItem: "marketing:recheckItem",
   settleAdBilling: "marketing:settleAdBilling",
   recordInventoryFailure: "marketing:recordInventoryFailure",
