@@ -24,6 +24,9 @@ describe("AI marketing planner", () => {
     const result = await generateMarketingPlan(brief, async (options) => {
       expect(options.user).toContain("Has a free trial");
       expect(options.system).toContain("untrusted data");
+      expect(options.system).toContain("recommended aspect ratio");
+      expect(options.system).toContain("numbered scene-by-scene sequence");
+      expect(options.system).toContain("assets actually present");
       expect(options.noTools).toBe(true);
       return JSON.stringify(valid);
     });

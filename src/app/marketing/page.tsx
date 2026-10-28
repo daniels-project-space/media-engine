@@ -1528,7 +1528,7 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
     {revision > 0 ? <p className="text-xs text-ink-dim">Saved revision {revision} · {origin === "ai" ? "AI-generated draft" : "owner-authored"}</p> : null}
   </form>
   <PlanCalendar project={project} planId={planId} calendar={savedCalendar} stale={planProjectVersion !== project.version || planResearchVersion !== (project.researchVersion ?? 0) || calendar !== savedCalendar || strategy !== savedStrategy || sources !== savedSources} channels={channels} accounts={accounts} busy={busy} action={action} />
-  <RenderBriefs project={project} planId={planId} />
+  <RenderBriefs project={project} planId={planId} busy={busy} action={action} />
   </>;
 }
 
@@ -1579,7 +1579,7 @@ function PlanCalendar({ project, planId, calendar, stale, channels, accounts, bu
   </div>;
 }
 
-function RenderBriefs({ project, planId }: { project: Project; planId: string }) {
+function RenderBriefs({ project, planId, busy, action }: { project: Project; planId: string; busy: boolean; action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null> }) {
   const [briefs, setBriefs] = useState<Array<Doc<"marketingRenderBriefs"> & { stale: boolean }>>([]);
   const [error, setError] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -1599,16 +1599,21 @@ function RenderBriefs({ project, planId }: { project: Project; planId: string })
     <h3 className="text-sm font-bold">Render briefs</h3>
     <p className="text-xs leading-5 text-ink-dim">Saved creative scripts for the new GPU service. These are planning briefs only: no render, spend or approval has been initiated. Model qualification, project connection and enforceable spending controls are still required.</p>
     {error ? <p className="text-xs text-amber-600" role="alert">Could not load render briefs.</p> : null}
-    {briefs.map(brief => <RenderBriefCard key={brief._id} projectId={project._id} brief={brief} />)}
+    {briefs.map(brief => <RenderBriefCard key={brief._id} projectId={project._id} brief={brief} busy={busy} action={action} />)}
   </section>;
 }
 
-function RenderBriefCard({ projectId, brief }: { projectId: string; brief: Doc<"marketingRenderBriefs"> & { stale: boolean } }) {
+function RenderBriefCard({ projectId, brief, busy, action }: { projectId: string; brief: Doc<"marketingRenderBriefs"> & { stale: boolean }; busy: boolean; action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null> }) {
   const [environmentId, setEnvironmentId] = useState("");
   const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState("");
+  const [jobMessage, setJobMessage] = useState("");
+  const [jobId, setJobId] = useState(brief.renderJobId ?? "");
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [jobState, setJobState] = useState("");
+  const [receiptAvailable, setReceiptAvailable] = useState(false);
   return <details className="rounded-xl border border-line p-3 text-xs">
-    <summary className="font-bold">{brief.format} · {brief.channel} · {brief.modelId}{brief.stale ? " · plan or brief changed since saving" : ""}</summary>
+    <summary className="font-bold">{brief.format} · {brief.channel} · {brief.modelId}{brief.renderState === "ready" ? " · ready in project media" : brief.renderState === "failed" ? " · render or import failed" : brief.renderState === "importing" ? " · import in progress" : brief.renderState === "tracked" ? ` · Hyper job ${brief.renderProviderState ?? "linked"}` : " · brief only"}{brief.stale ? " · plan or brief changed since saving" : ""}</summary>
     <p className="whitespace-pre-wrap pt-2 text-ink-dim">{brief.prompt}</p>
     <form className="grid gap-2 pt-3" onSubmit={async event => {
       event.preventDefault(); setChecking(true); setMessage("");
@@ -1629,6 +1634,36 @@ function RenderBriefCard({ projectId, brief }: { projectId: string; brief: Doc<"
       <button className={buttonClass} disabled={checking}>{checking ? "Checking…" : "Check render readiness"}</button>
       {message ? <p className="leading-5 text-ink-dim" role="status">{message}</p> : null}
     </form>
+    <div className="grid gap-2 border-t border-line pt-3">
+      <p className="leading-5 text-ink-dim">Rendering uses the new 3090/5090 service. Media Engine does not submit GPU jobs here; link a job already created for this project and model.</p>
+      <label className="grid gap-1 text-ink-dim" htmlFor={`hyper-job-${brief._id}`}>Existing new-service job ID
+        <input id={`hyper-job-${brief._id}`} className={inputClass} value={jobId} maxLength={36} onChange={event => { setJobId(event.target.value); setJobState(""); setReceiptAvailable(false); setJobMessage(""); }} placeholder="Job UUID" />
+      </label>
+      <label className="flex gap-2 text-ink-dim"><input type="checkbox" checked={rightsConfirmed} onChange={event => setRightsConfirmed(event.target.checked)} />I have permission to use this render in this project&apos;s marketing.</label>
+      <button type="button" className={buttonClass} disabled={busy || checking || brief.stale || !rightsConfirmed || !jobId.trim()} onClick={async () => {
+        setChecking(true); setJobMessage("");
+        try {
+          const result = await action("track-hyper-render", { projectId, briefId: brief._id, jobId: jobId.trim(), rightsConfirmed: true });
+          const body = result?.result as { job?: { state: string; modelId: string; errorCode?: string | null; receipt?: { available: boolean } | null }; tracked?: { status: string } } | undefined;
+          if (!body?.job) throw new Error("The render job could not be matched to this brief.");
+          setJobState(body.job.state); setReceiptAvailable(body.job.receipt?.available === true);
+          setJobMessage(`Linked job · ${body.job.state}${body.job.errorCode ? ` · ${body.job.errorCode}` : ""}${body.job.receipt?.available ? " · output receipt available; import to verify it in project storage." : " · output is not ready to import."}`);
+          window.dispatchEvent(new Event("marketing-render-briefs-changed"));
+        } catch { setJobMessage("Could not verify a matching project job. Check the connection, job ID and selected model."); }
+        finally { setChecking(false); }
+      }}>{checking ? "Checking…" : "Check and link existing job"}</button>
+      {jobState === "completed" && receiptAvailable ? <button type="button" className={buttonClass} disabled={busy || checking || !rightsConfirmed || brief.stale} onClick={async () => {
+        setChecking(true);
+        try {
+          const result = await action("import-hyper-render", { projectId, briefId: brief._id, jobId: jobId.trim(), rightsConfirmed: true });
+          const imported = result?.result as { status?: string } | undefined;
+          setJobMessage(imported?.status === "verified" ? "Render verified and ready in project media." : "Verified import queued. Refresh this brief to see when project media is ready.");
+          window.dispatchEvent(new Event("marketing-render-briefs-changed"));
+        } catch { setJobMessage("The completed render could not be verified and imported. Check the project connection and try again."); }
+        finally { setChecking(false); }
+      }}>Verify and import output</button> : null}
+      {jobMessage ? <p className="leading-5 text-ink-dim" role="status">{jobMessage}</p> : null}
+    </div>
   </details>;
 }
 
@@ -1652,9 +1687,6 @@ function RenderReuse({
   const [renderStatus, setRenderStatus] = useState<string>(
     "Checking the new rendering service…",
   );
-  const [connectionStatus, setConnectionStatus] = useState("");
-  const [hyperJobId, setHyperJobId] = useState("");
-  const [hyperRights, setHyperRights] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/marketing/render-readiness", { signal: controller.signal })
@@ -1686,31 +1718,6 @@ function RenderReuse({
       <p className="text-xs leading-5 text-ink-dim">
         Marketing video and image generation will use the new service once the project connection and render workflow are qualified. No GPU job is submitted by this status check.
       </p>
-      <div className="grid gap-2">
-        <label className="text-xs text-ink-dim" htmlFor="hyper-job-id">Optional existing new-service job ID</label>
-        <input id="hyper-job-id" className={inputClass} value={hyperJobId} onChange={(event) => setHyperJobId(event.target.value)} placeholder="Job ID" />
-        <button type="button" className={buttonClass} disabled={busy} onClick={async () => {
-          setConnectionStatus("Checking project connection…");
-          try {
-            const params = new URLSearchParams({ projectId });
-            if (hyperJobId.trim()) params.set("jobId", hyperJobId.trim());
-            const data = await responseJson(await fetch(`/api/marketing/hyper-project?${params}`, { cache: "no-store" }));
-            if (!data.connected) { setConnectionStatus("This project has no configured new-service connection."); return; }
-            const job = data.job as null | { state: string; modelId: string; receipt: null | { available: boolean } };
-            const imported = data.latestImport as null | { status: string; error?: string };
-            setConnectionStatus(job ? `Job ${job.state} · ${job.modelId}. ${job.receipt ? "A project-scoped receipt exists." : "No output receipt yet."}${imported ? ` Import: ${imported.status}${imported.error ? ` · ${imported.error}` : ""}.` : " Object hash not yet verified by Media Engine."}` : "Project credential and storage scope verified. Render submission remains disabled.");
-          } catch { setConnectionStatus("Could not verify the project connection or job. Check its setup and try again."); }
-        }}>Check new-service connection</button>
-        <label className="flex gap-2 text-xs text-ink-dim"><input type="checkbox" checked={hyperRights} onChange={(event) => setHyperRights(event.target.checked)} />I have permission to use this completed job for this project.</label>
-        <button type="button" className={buttonClass} disabled={busy || !hyperRights || !hyperJobId.trim()} onClick={async () => {
-          const result = await action("import-hyper-render", { projectId, jobId: hyperJobId.trim(), rightsConfirmed: true });
-          if (result) {
-            const receipt = result.result as { status?: string } | undefined;
-            setConnectionStatus(receipt?.status === "verified" ? "This render was already verified and imported." : "Import requested. Check the job again to see verification status.");
-          }
-        }}>Verify and import completed render</button>
-        {connectionStatus ? <p className="text-xs leading-5 text-ink-dim" role="status">{connectionStatus}</p> : null}
-      </div>
       <h3 className="text-sm font-bold">Reuse an approved final video</h3>
       <p className="text-xs leading-5 text-ink-dim">
         Import a previously approved video from the existing library. This preserves the completed original, verifies its R2 hash, and selects it for future posts. No render is launched here.

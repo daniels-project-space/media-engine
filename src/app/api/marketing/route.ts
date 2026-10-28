@@ -15,6 +15,7 @@ import { snapshotHash } from "../../../../convex/marketingPolicy";
 import { vaultService } from "@/lib/vault";
 import { inspectResearchWebsite } from "@/lib/marketing/website";
 import { discoverProjectResearch } from "@/lib/marketing/discover-project";
+import { completedBriefRender, hyperProjectConnection, inspectHyperProject } from "@/lib/marketing/hyper-project";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -262,7 +263,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ result: run, researchNotice }, { headers });
     }
     if (input.action === "import-hyper-render") {
-      const payload = z.object({ projectId: id, jobId: z.string().uuid().transform(value => value.toLowerCase()), rightsConfirmed: z.literal(true) }).strict().parse(input.payload);
+      const payload = z.object({ projectId: id, briefId: id, jobId: z.string().uuid().transform(value => value.toLowerCase()), rightsConfirmed: z.literal(true) }).strict().parse(input.payload);
+      const brief = await marketingCall<{ modelId: string; stale: boolean }>("getRenderBrief", { projectId: payload.projectId, briefId: payload.briefId });
+      if (brief.stale) throw new Error("Review the current strategy and recreate this render brief before importing media");
+      const connection = await hyperProjectConnection(payload.projectId);
+      if (!connection) throw new Error("This project has no configured new-service connection");
+      const inspected = await inspectHyperProject(connection, payload.jobId);
+      completedBriefRender(inspected.job, brief.modelId);
       const imported = await marketingCall<{ importId: string; attempt: number; status: string }>("requestHyperImport", payload);
       if (imported.status === "queued") {
         const key = process.env.TRIGGER_SECRET_KEY || (await vaultService("trigger")).TRIGGER_SECRET_KEY_MEDIA_ENGINE;
@@ -277,6 +284,17 @@ export async function POST(request: NextRequest) {
         if (!response.ok || typeof result.id !== "string") throw new Error("Import dispatch is unconfirmed. Retry this same request.");
       }
       return NextResponse.json({ result: imported }, { headers });
+    }
+    if (input.action === "track-hyper-render") {
+      const payload = z.object({ projectId: id, briefId: id, jobId: z.string().uuid().transform(value => value.toLowerCase()), rightsConfirmed: z.literal(true) }).strict().parse(input.payload);
+      const brief = await marketingCall<{ modelId: string; stale: boolean }>("getRenderBrief", { projectId: payload.projectId, briefId: payload.briefId });
+      if (brief.stale) throw new Error("Review the current strategy and recreate this render brief before tracking a job");
+      const connection = await hyperProjectConnection(payload.projectId);
+      if (!connection) throw new Error("This project has no configured new-service connection");
+      const inspected = await inspectHyperProject(connection, payload.jobId);
+      if (!inspected.job || inspected.job.modelId !== brief.modelId) throw new Error("The render job must use the model selected for this creative brief");
+      const tracked = await marketingCall("trackHyperImport", { ...payload, modelId: inspected.job.modelId, providerState: inspected.job.state, errorCode: inspected.job.errorCode ?? undefined });
+      return NextResponse.json({ result: { tracked, job: inspected.job } }, { headers });
     }
     if (input.action === "available-renders") {
       const result = await marketingCall("availableRenders", {

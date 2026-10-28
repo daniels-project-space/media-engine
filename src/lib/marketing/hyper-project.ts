@@ -15,6 +15,12 @@ const jobSchema = z.object({ id: uuid, projectId: uuid, modelId: z.string(), sta
     bytes: z.number().int().positive(), contentType: z.string(), available: z.boolean() }).nullable().optional() });
 type Connection = z.infer<typeof connectionSchema>;
 
+export function completedBriefRender(job: { modelId: string; state: string; receipt: { available: boolean } | null } | null, modelId: string) {
+  if (!job || job.modelId !== modelId) throw new Error("The render job must use the model selected for this creative brief");
+  if (job.state !== "completed" || !job.receipt?.available) throw new Error("Wait for this matching render to finish before importing it");
+  return job;
+}
+
 async function apiGet(path: string, token: string, fetcher: typeof fetch) {
   const response = await fetcher(`${API}${path}`, { headers: { authorization: `Bearer ${token}`, accept: "application/json" },
     cache: "no-store", redirect: "error", signal: AbortSignal.timeout(10_000) });

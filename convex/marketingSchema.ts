@@ -96,6 +96,10 @@ export const marketingTables = {
     planId: v.id("marketingPlans"), entryIndex: v.number(), projectVersion: v.number(),
     researchVersion: v.number(), modelId: v.union(v.literal("minimax-h3"), v.literal("qwen-image-2-1")),
     prompt: v.string(), channel: v.string(), format: v.string(), createdAt: v.number(),
+    renderJobId: v.optional(v.string()),
+    renderState: v.optional(v.union(v.literal("tracked"), v.literal("importing"), v.literal("ready"), v.literal("failed"))),
+    renderProviderState: v.optional(v.string()),
+    renderAssetId: v.optional(v.id("marketingAssets")),
   }).index("by_project_created", ["projectId", "createdAt"])
     .index("by_plan_entry_model", ["planId", "entryIndex", "modelId"]),
 
@@ -123,7 +127,8 @@ export const marketingTables = {
 
   marketingHyperImports: defineTable({
     projectId: v.id("marketingProjects"), jobId: v.string(),
-    status: v.union(v.literal("queued"), v.literal("running"), v.literal("verified"), v.literal("failed")),
+    briefId: v.optional(v.id("marketingRenderBriefs")), modelId: v.optional(v.string()), providerState: v.optional(v.string()),
+    status: v.union(v.literal("tracked"), v.literal("queued"), v.literal("running"), v.literal("verified"), v.literal("failed")),
     attempt: v.number(), workerRunId: v.optional(v.string()),
     assetId: v.optional(v.id("marketingAssets")), error: v.optional(v.string()),
     createdAt: v.number(), updatedAt: v.number(),

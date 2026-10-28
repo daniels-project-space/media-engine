@@ -892,6 +892,44 @@ describe("project planning revisions", () => {
 });
 
 describe("new-service render import", () => {
+  it("links a matching project render to its current brief and exposes import readiness", async () => {
+    const f = await projects();
+    const planSave = makeFunctionReference<"mutation">("marketingPlans:save");
+    const createBrief = makeFunctionReference<"mutation">("marketingPlans:createRenderBrief");
+    const listBriefs = makeFunctionReference<"query">("marketingPlans:listRenderBriefs");
+    const track = makeFunctionReference<"mutation">("marketingHyperImports:track");
+    const request = makeFunctionReference<"mutation">("marketingHyperImports:request");
+    const claim = makeFunctionReference<"mutation">("marketingHyperImports:claim");
+    const settle = makeFunctionReference<"mutation">("marketingHyperImports:settle");
+    const calendar = JSON.stringify([{ day: 1, channel: "instagram", format: "Short video", caption: "Try the tool", videoScript: "Hook; scene 1; voiceover; CTA" }]);
+    const plan = await f.t.mutation(planSave, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0,
+      expectedRevision: 0, strategy: "Introduce the tool", calendar, sources: "Owner facts" });
+    const brief = await f.t.mutation(createBrief, { projectId: f.a, planId: plan.planId, entryIndex: 0, modelId: "minimax-h3" });
+    const jobId = "6c23d114-ef9b-41a8-aee4-2728e9fa6dab";
+    const trackArgs = { projectId: f.a, briefId: brief.briefId, jobId, modelId: "minimax-h3", providerState: "running", rightsConfirmed: true };
+    await expect(f.t.mutation(track, { ...trackArgs, projectId: f.b })).rejects.toThrow();
+    await expect(f.t.mutation(track, { ...trackArgs, modelId: "qwen-image-2-1" })).rejects.toThrow(/differs/);
+    expect(await f.t.mutation(track, trackArgs)).toMatchObject({ status: "tracked", providerState: "running" });
+    expect((await f.t.query(listBriefs, { projectId: f.a }))[0]).toMatchObject({ renderJobId: jobId, renderState: "tracked", renderProviderState: "running" });
+    expect(await f.t.mutation(track, { ...trackArgs, providerState: "completed" })).toMatchObject({ status: "tracked", providerState: "completed" });
+    await expect(f.t.mutation(track, { ...trackArgs, jobId: "7c23d114-ef9b-41a8-aee4-2728e9fa6dab" })).rejects.toThrow(/already has a render/);
+    const laterPlan = await f.t.mutation(planSave, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0,
+      expectedRevision: 1, strategy: "Revised", calendar, sources: "Owner facts" });
+    await expect(f.t.mutation(track, { ...trackArgs, providerState: "completed" })).rejects.toThrow(/current strategy/);
+    const latestBrief = await f.t.mutation(createBrief, { projectId: f.a, planId: laterPlan.planId, entryIndex: 0, modelId: "minimax-h3" });
+    const otherJob = "8c23d114-ef9b-41a8-aee4-2728e9fa6dab";
+    const completed = { ...trackArgs, briefId: latestBrief.briefId, jobId: otherJob, providerState: "completed" };
+    expect(await f.t.mutation(track, completed)).toMatchObject({ status: "tracked", providerState: "completed" });
+    const imported = await f.t.mutation(request, { projectId: f.a, briefId: latestBrief.briefId, jobId: otherJob, rightsConfirmed: true });
+    expect(imported).toMatchObject({ status: "queued", attempt: 1 });
+    expect((await f.t.query(listBriefs, { projectId: f.a }))[0]).toMatchObject({ renderState: "importing" });
+    const identity = { projectId: f.a, importId: imported.importId, attempt: imported.attempt, workerRunId: "worker-brief" };
+    await f.t.mutation(claim, identity);
+    const sha256 = "b".repeat(64), asset = { key: `marketing/${f.a}/assets/${sha256}.mp4`, sha256, bytes: 100, contentType: "video/mp4" };
+    await f.t.mutation(settle, { ...identity, receipt: asset });
+    expect((await f.t.query(listBriefs, { projectId: f.a }))[0]).toMatchObject({ renderJobId: otherJob, renderState: "ready", renderAssetId: expect.any(String) });
+    expect(await f.t.query(listBriefs, { projectId: f.b })).toHaveLength(0);
+  });
   it("requires rights, claims once, fences workers and registers only a scoped verified receipt", async () => {
     const t = convexTest(schema, modules);
     const projectId = await t.mutation(mutation("createProject"), draft("hyper-import"));

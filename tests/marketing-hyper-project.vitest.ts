@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { hyperProjectConnection, inspectHyperEnvironment, inspectHyperProject } from "../src/lib/marketing/hyper-project";
+import { completedBriefRender, hyperProjectConnection, inspectHyperEnvironment, inspectHyperProject } from "../src/lib/marketing/hyper-project";
 import { vaultService } from "../src/lib/vault";
 
 vi.mock("../src/lib/vault", () => ({ vaultService: vi.fn() }));
@@ -13,6 +13,14 @@ const job = { id: jobId, projectId, modelId: "qwen-image-2-1", state: "completed
     sha256: "a".repeat(64), bytes: 123, contentType: "image/png", available: true, downloadUrl: "https://signed.invalid/secret" } };
 
 describe("new rendering service project scope", () => {
+  it("requires completed available media from the model selected for the linked brief", () => {
+    const completed = { modelId: "minimax-h3", state: "completed", receipt: { available: true } };
+    expect(completedBriefRender(completed, "minimax-h3")).toEqual(completed);
+    expect(() => completedBriefRender({ ...completed, state: "running" }, "minimax-h3")).toThrow(/finish/);
+    expect(() => completedBriefRender({ ...completed, receipt: { available: false } }, "minimax-h3")).toThrow(/finish/);
+    expect(() => completedBriefRender({ ...completed, modelId: "qwen-image-2-1" }, "minimax-h3")).toThrow(/selected/);
+    expect(() => completedBriefRender(null, "minimax-h3")).toThrow(/selected/);
+  });
   it("rejects overlapping project mappings from the server-only vault", async () => {
     const first = "a".repeat(25), second = "b".repeat(25);
     vi.mocked(vaultService).mockResolvedValue({ HYPER_RENDER_PROJECT_CONNECTIONS: JSON.stringify({
