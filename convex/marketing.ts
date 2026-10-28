@@ -467,6 +467,34 @@ export const removeEmptyProject = internalMutation({
         .query("marketingRenderImports")
         .withIndex("by_project_created", (q) => q.eq("projectId", project._id))
         .first(),
+      ctx.db
+        .query("marketingPlans")
+        .withIndex("by_project_revision", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingPlanRuns")
+        .withIndex("by_project_created", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingAiChecks")
+        .withIndex("by_project", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingRenderBriefs")
+        .withIndex("by_project_created", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingHyperImports")
+        .withIndex("by_project_created", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingResearch")
+        .withIndex("by_project", (q) => q.eq("projectId", project._id))
+        .first(),
+      ctx.db
+        .query("marketingResearchDiscoveries")
+        .withIndex("by_project_created", (q) => q.eq("projectId", project._id))
+        .first(),
     ]);
     if (children.some(Boolean))
       throw new Error(

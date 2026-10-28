@@ -193,3 +193,34 @@ export async function copyMarketingVideo(input: {
     client.destroy();
   }
 }
+
+/** Re-read both source and copy in the requesting app's bucket before registration. */
+export async function copyHyperMarketingAsset(input: {
+  projectId: string; sourceKey: string; sourcePrefix: string;
+  sha256: string; bytes: number; contentType: string;
+}) {
+  const extensions: Record<string, string> = {
+    "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "video/mp4": "mp4",
+  };
+  const extension = extensions[input.contentType];
+  if (!/^[a-z0-9]{20,64}$/.test(input.projectId) || !extension ||
+      !input.sourcePrefix.endsWith("/") || input.sourcePrefix.startsWith("/") ||
+      input.sourcePrefix.includes("..") || !input.sourceKey.startsWith(input.sourcePrefix) ||
+      input.sourceKey.includes("..") || input.sourceKey.includes("\\") ||
+      !/^[a-f0-9]{64}$/.test(input.sha256) || !Number.isSafeInteger(input.bytes) ||
+      input.bytes < 1 || input.bytes > 500_000_000)
+    throw new Error("Invalid project-owned render receipt");
+  const destinationKey = `marketing/${input.projectId}/assets/${input.sha256}.${extension}`;
+  const cf = await vaultService("cloudflare");
+  const client = new S3Client({ region: "auto", endpoint: cf.R2_ENDPOINT,
+    credentials: { accessKeyId: cf.R2_ACCESS_KEY_ID, secretAccessKey: cf.R2_SECRET_ACCESS_KEY } });
+  try {
+    const etag = await verifiedObject(client, input.sourceKey, input.sha256, input.bytes);
+    const encodedSource = input.sourceKey.split("/").map(encodeURIComponent).join("/");
+    await client.send(new CopyObjectCommand({ Bucket: "media-engine", Key: destinationKey,
+      CopySource: `media-engine/${encodedSource}`, CopySourceIfMatch: etag,
+      MetadataDirective: "REPLACE", ContentType: input.contentType, Metadata: { sha256: input.sha256 } }));
+    await verifiedObject(client, destinationKey, input.sha256, input.bytes);
+    return { key: destinationKey, sha256: input.sha256, bytes: input.bytes, contentType: input.contentType };
+  } finally { client.destroy(); }
+}

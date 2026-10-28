@@ -5,6 +5,21 @@ import { v } from "convex/values";
 // This fixed dispatch table is a server capability boundary, not a public RPC
 // proxy. No caller may choose an arbitrary Convex module or function.
 const mutations = {
+  savePlan: "marketingPlans:save",
+  saveResearch: "marketingResearch:save",
+  startDiscovery: "marketingResearch:startDiscovery",
+  finishDiscovery: "marketingResearch:finishDiscovery",
+  createPlanDraft: "marketingPlans:createDraft",
+  createRenderBrief: "marketingPlans:createRenderBrief",
+  startPlan: "marketingPlans:start",
+  claimPlan: "marketingPlans:claim",
+  finishPlan: "marketingPlans:finish",
+  startAiCheck: "marketingPlans:startAiCheck",
+  claimAiCheck: "marketingPlans:claimAiCheck",
+  finishAiCheck: "marketingPlans:finishAiCheck",
+  requestHyperImport: "marketingHyperImports:request",
+  claimHyperImport: "marketingHyperImports:claim",
+  settleHyperImport: "marketingHyperImports:settle",
   createProject: "marketing:createProject",
   updateProject: "marketing:updateProject",
   recordCost: "marketingOverview:recordCost",
@@ -33,6 +48,13 @@ const mutations = {
   settleRenderImport: "marketingRenders:settleImport",
 } as const;
 const queries = {
+  marketingAiAllowed: "marketingPlans:aiAllowed",
+  latestAiCheck: "marketingPlans:latestAiCheck",
+  latestPlan: "marketingPlans:latest",
+  listRenderBriefs: "marketingPlans:listRenderBriefs",
+  listResearch: "marketingResearch:list",
+  latestPlanRun: "marketingPlans:latestRun",
+  latestHyperImport: "marketingHyperImports:latest",
   overview: "marketingOverview:overview",
   contentTable: "marketingOverview:contentTable",
   listWorkspace: "marketing:listWorkspace",

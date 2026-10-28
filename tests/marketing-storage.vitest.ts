@@ -24,7 +24,7 @@ vi.mock("../src/lib/vault", () => ({
     R2_SECRET_ACCESS_KEY: "fixture",
   })),
 }));
-import { copyMarketingVideo } from "../src/lib/marketing/assets";
+import { copyHyperMarketingAsset, copyMarketingVideo } from "../src/lib/marketing/assets";
 
 describe("R2 original-video copy integrity (simulated storage transport)", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -86,6 +86,29 @@ describe("R2 original-video copy integrity (simulated storage transport)", () =>
         bytes: 4,
       }),
     ).rejects.toThrow(/hash verification/);
+    expect(r2.send).toHaveBeenCalledTimes(2);
+  });
+  it("verifies a new-service image before and after copying into the marketing project", async () => {
+    const bytes = Buffer.from("new-service-image-fixture"), sha256 = createHash("sha256").update(bytes).digest("hex");
+    const projectId = "a".repeat(32), sourceKey = "projects/alpha/jobs/example/output.png";
+    const reads: string[] = [];
+    r2.send.mockImplementation(async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+      if (command.constructor.name === "Head") return { ContentLength: bytes.length, ETag: "source-version" };
+      if (command.constructor.name === "Get") { reads.push(command.input.Key as string); return { Body: (async function* () { yield bytes; })() }; }
+      expect(command.input.CopySourceIfMatch).toBe("source-version");
+      return {};
+    });
+    const result = await copyHyperMarketingAsset({ projectId, sourceKey, sourcePrefix: "projects/alpha/", sha256, bytes: bytes.length, contentType: "image/png" });
+    expect(reads).toEqual([sourceKey, result.key]);
+    expect(result.key).toBe(`marketing/${projectId}/assets/${sha256}.png`);
+    await expect(copyHyperMarketingAsset({ projectId, sourceKey, sourcePrefix: "projects/beta/", sha256, bytes: bytes.length, contentType: "image/png" })).rejects.toThrow(/receipt/);
+  });
+  it("does not copy a new-service output whose bytes disagree with its receipt", async () => {
+    r2.send.mockImplementation(async (command: { constructor: { name: string } }) =>
+      command.constructor.name === "Head" ? { ContentLength: 4, ETag: "source-version" } :
+        { Body: (async function* () { yield Buffer.from("evil"); })() });
+    await expect(copyHyperMarketingAsset({ projectId: "a".repeat(32), sourceKey: "projects/alpha/output.mp4",
+      sourcePrefix: "projects/alpha/", sha256: "b".repeat(64), bytes: 4, contentType: "video/mp4" })).rejects.toThrow(/hash verification/);
     expect(r2.send).toHaveBeenCalledTimes(2);
   });
 });

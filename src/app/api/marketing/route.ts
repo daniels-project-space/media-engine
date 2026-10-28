@@ -13,6 +13,8 @@ import {
 } from "@/lib/marketing/service";
 import { snapshotHash } from "../../../../convex/marketingPolicy";
 import { vaultService } from "@/lib/vault";
+import { inspectResearchWebsite } from "@/lib/marketing/website";
+import { discoverProjectResearch } from "@/lib/marketing/discover-project";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -42,6 +44,27 @@ export async function GET(request: NextRequest) {
   if (denied) return denied;
   try {
     const view = request.nextUrl.searchParams.get("view");
+    if (view === "research") {
+      const projectId = id.parse(request.nextUrl.searchParams.get("projectId"));
+      return NextResponse.json({ sources: await marketingCall("listResearch", { projectId }) }, { headers });
+    }
+    if (view === "plan") {
+      const projectId = id.parse(request.nextUrl.searchParams.get("projectId"));
+      const [plan, run, aiAllowed, aiCheck] = await Promise.all([
+        marketingCall("latestPlan", { projectId }),
+        marketingCall("latestPlanRun", { projectId, asOfMinute: Math.floor(Date.now() / 60_000) }),
+        marketingCall("marketingAiAllowed", {}),
+        marketingCall("latestAiCheck", { projectId, asOfMinute: Math.floor(Date.now() / 60_000) }),
+      ]);
+      return NextResponse.json(
+        { plan, run, aiAllowed: aiAllowed === true, aiCheck },
+        { headers },
+      );
+    }
+    if (view === "render-briefs") {
+      const projectId = id.parse(request.nextUrl.searchParams.get("projectId"));
+      return NextResponse.json({ briefs: await marketingCall("listRenderBriefs", { projectId }) }, { headers });
+    }
     if (view === "overview")
       return NextResponse.json(
         await marketingCall("overview", {
@@ -146,6 +169,114 @@ export async function POST(request: NextRequest) {
         .parse(input.payload);
       const result = await marketingCall("updateProject", payload);
       return NextResponse.json({ result }, { headers });
+    }
+    if (input.action === "save-plan") {
+      const payload = z.object({
+        projectId: id,
+        expectedProjectVersion: z.number().int().min(1),
+        expectedResearchVersion: z.number().int().min(0),
+        expectedRevision: z.number().int().min(0),
+        strategy: z.string().min(1).max(20_000),
+        calendar: z.string().max(20_000),
+        sources: z.string().max(10_000),
+      }).strict().parse(input.payload);
+      return NextResponse.json({ result: await marketingCall("savePlan", payload) }, { headers });
+    }
+    if (input.action === "create-plan-draft") {
+      const payload = z.object({ projectId: id, planId: id, entryIndex: z.number().int().min(0).max(27), channelId: id }).strict().parse(input.payload);
+      return NextResponse.json({ result: await marketingCall("createPlanDraft", payload) }, { headers });
+    }
+    if (input.action === "create-render-brief") {
+      const payload = z.object({ projectId: id, planId: id, entryIndex: z.number().int().min(0).max(27),
+        modelId: z.enum(["minimax-h3", "qwen-image-2-1"]) }).strict().parse(input.payload);
+      return NextResponse.json({ result: await marketingCall("createRenderBrief", payload) }, { headers });
+    }
+    if (input.action === "capture-research") {
+      const payload = z.object({ projectId: id, url: z.string().url().max(700) }).strict().parse(input.payload);
+      const workspace = await marketingCall<{ projects: Array<{ _id: string; version: number; website: string }> }>("listWorkspace", { projectId: payload.projectId });
+      const project = workspace.projects.find(row => row._id === payload.projectId);
+      if (!project) throw new Error("Marketing project not found");
+      const source = await inspectResearchWebsite(payload.url);
+      const kind = new URL(source.url).hostname === new URL(project.website).hostname ? "project" : "reference";
+      const result = await marketingCall("saveResearch", { projectId: payload.projectId, expectedProjectVersion: project.version, ...source, kind });
+      return NextResponse.json({ result }, { headers });
+    }
+    if (input.action === "discover-research") {
+      const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
+      return NextResponse.json({ result: await discoverProjectResearch(payload.projectId, payload.requestKey) }, { headers });
+    }
+    if (input.action === "check-ai-worker") {
+      const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
+      const check = await marketingCall<{ status: string }>("startAiCheck", payload);
+      if (check.status === "queued") {
+        const key = process.env.TRIGGER_SECRET_KEY || (await vaultService("trigger")).TRIGGER_SECRET_KEY_MEDIA_ENGINE;
+        if (!key) throw new Error("Worker check is queued, but the Trigger connection is not configured. Retry this check after setup.");
+        const response = await fetch("https://api.trigger.dev/api/v1/tasks/marketing-ai-check/trigger", {
+          method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify({ payload, options: { idempotencyKey: `marketing-ai-check:${payload.projectId}:${payload.requestKey}`, idempotencyKeyTTL: "1d" } }),
+          signal: AbortSignal.timeout(8_000), redirect: "error",
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || typeof result.id !== "string") throw new Error("Worker check dispatch is unconfirmed. Retry the same check.");
+      }
+      return NextResponse.json({ result: check }, { headers });
+    }
+    if (input.action === "generate-plan") {
+      const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
+      if ((await marketingCall("marketingAiAllowed", {})) !== true)
+        throw new Error("AI planning is paused by the global safety switch. No planning request was created.");
+      const previous = await marketingCall<{ requestKey: string; status: string; recoverable?: boolean } | null>("latestPlanRun", { projectId: payload.projectId, asOfMinute: Math.floor(Date.now() / 60_000) });
+      if (previous && previous.requestKey !== payload.requestKey && (previous.status === "queued" || (previous.status === "running" && !previous.recoverable)))
+        throw new Error("A planning run is already in progress; check its status before retrying.");
+      let researchNotice: string | undefined;
+      if (previous?.requestKey !== payload.requestKey) {
+        const captureProject = async () => {
+          const workspace = await marketingCall<{ projects: Array<{ _id: string; version: number; website: string }> }>("listWorkspace", { projectId: payload.projectId });
+          const project = workspace.projects.find(row => row._id === payload.projectId);
+          if (!project) throw new Error("Marketing project not found");
+          const source = await inspectResearchWebsite(project.website);
+          await marketingCall("saveResearch", { projectId: payload.projectId, expectedProjectVersion: project.version, ...source, kind: "project" });
+        };
+        const enabled = process.env.MARKETING_TAVILY_DISCOVERY_ENABLED === "true";
+        const [siteResult, discoveryResult] = await Promise.allSettled([
+          captureProject(), enabled ? discoverProjectResearch(payload.projectId, payload.requestKey) : Promise.resolve(null),
+        ]);
+        const warnings = [];
+        if (siteResult.status === "rejected") warnings.push("The project website could not be captured.");
+        if (enabled && discoveryResult.status === "rejected") warnings.push("Market discovery was unavailable or reached its daily limit.");
+        if (warnings.length) researchNotice = `${warnings.join(" ")} The plan will use the saved brief and sources.`;
+      }
+      const run = await marketingCall<{ runId: string; status: string }>("startPlan", payload);
+      if (run.status === "queued") {
+        const key = process.env.TRIGGER_SECRET_KEY || (await vaultService("trigger")).TRIGGER_SECRET_KEY_MEDIA_ENGINE;
+        if (!key) throw new Error("The AI planning worker is not configured. Retry the same request after setup.");
+        const response = await fetch("https://api.trigger.dev/api/v1/tasks/marketing-ai-plan/trigger", {
+          method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify({ payload: { runId: run.runId }, options: { idempotencyKey: `marketing-plan:${run.runId}`, idempotencyKeyTTL: "7d" } }),
+          signal: AbortSignal.timeout(8_000), redirect: "error",
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || typeof result.id !== "string")
+          throw new Error("Worker dispatch is unconfirmed. Retry this same request before starting another.");
+      }
+      return NextResponse.json({ result: run, researchNotice }, { headers });
+    }
+    if (input.action === "import-hyper-render") {
+      const payload = z.object({ projectId: id, jobId: z.string().uuid().transform(value => value.toLowerCase()), rightsConfirmed: z.literal(true) }).strict().parse(input.payload);
+      const imported = await marketingCall<{ importId: string; attempt: number; status: string }>("requestHyperImport", payload);
+      if (imported.status === "queued") {
+        const key = process.env.TRIGGER_SECRET_KEY || (await vaultService("trigger")).TRIGGER_SECRET_KEY_MEDIA_ENGINE;
+        if (!key) throw new Error("The import worker is not configured. Retry this same request after setup.");
+        const response = await fetch("https://api.trigger.dev/api/v1/tasks/marketing-hyper-import/trigger", {
+          method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify({ payload: { projectId: payload.projectId, importId: imported.importId, attempt: imported.attempt },
+            options: { idempotencyKey: `hyper-import:${imported.importId}:${imported.attempt}`, idempotencyKeyTTL: "7d" } }),
+          signal: AbortSignal.timeout(15_000), redirect: "error",
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || typeof result.id !== "string") throw new Error("Import dispatch is unconfirmed. Retry this same request.");
+      }
+      return NextResponse.json({ result: imported }, { headers });
     }
     if (input.action === "available-renders") {
       const result = await marketingCall("availableRenders", {

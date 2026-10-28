@@ -44,6 +44,7 @@ export const marketingTables = {
       v.literal("paused"),
     ),
     version: v.number(),
+    researchVersion: v.optional(v.number()),
     factsConfirmedAt: v.optional(v.number()),
     generationLimitMinor: v.number(),
     advertisingLimitMinor: v.number(),
@@ -73,6 +74,73 @@ export const marketingTables = {
     .index("by_organization", ["organizationId"])
     .index("by_organization_onboarding", ["organizationId", "onboardingKey"])
     .index("by_status_next_plan", ["status", "nextPlanAt"]),
+
+  // Immutable revisions keep a project brief change from silently rewriting
+  // an owner's planning work. These are planning documents, not publish jobs.
+  marketingPlans: defineTable({
+    organizationId: v.id("organizations"),
+    projectId: v.id("marketingProjects"),
+    projectVersion: v.number(),
+    researchVersion: v.optional(v.number()),
+    revision: v.number(),
+    strategy: v.string(),
+    calendar: v.string(),
+    sources: v.string(),
+    origin: v.union(v.literal("owner"), v.literal("ai")),
+    createdAt: v.number(),
+  }).index("by_project_revision", ["projectId", "revision"]),
+
+  // A brief is a reviewed planning artifact, not a GPU job or authorization.
+  marketingRenderBriefs: defineTable({
+    organizationId: v.id("organizations"), projectId: v.id("marketingProjects"),
+    planId: v.id("marketingPlans"), entryIndex: v.number(), projectVersion: v.number(),
+    researchVersion: v.number(), modelId: v.union(v.literal("minimax-h3"), v.literal("qwen-image-2-1")),
+    prompt: v.string(), channel: v.string(), format: v.string(), createdAt: v.number(),
+  }).index("by_project_created", ["projectId", "createdAt"])
+    .index("by_plan_entry_model", ["planId", "entryIndex", "modelId"]),
+
+  marketingPlanRuns: defineTable({
+    organizationId: v.id("organizations"),
+    projectId: v.id("marketingProjects"),
+    requestKey: v.string(),
+    projectVersion: v.number(),
+    researchVersion: v.optional(v.number()),
+    baseRevision: v.number(),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("completed"), v.literal("failed")),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_project_request", ["projectId", "requestKey"])
+    .index("by_project_created", ["projectId", "createdAt"]),
+
+  // One bounded diagnostic record per project; old workers are fenced by key.
+  marketingAiChecks: defineTable({
+    projectId: v.id("marketingProjects"), requestKey: v.string(),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("completed")),
+    outcome: v.optional(v.union(v.literal("subscription-login"), v.literal("unavailable"))),
+    updatedAt: v.number(),
+  }).index("by_project", ["projectId"]),
+
+  marketingHyperImports: defineTable({
+    projectId: v.id("marketingProjects"), jobId: v.string(),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("verified"), v.literal("failed")),
+    attempt: v.number(), workerRunId: v.optional(v.string()),
+    assetId: v.optional(v.id("marketingAssets")), error: v.optional(v.string()),
+    createdAt: v.number(), updatedAt: v.number(),
+  }).index("by_project_job", ["projectId", "jobId"]).index("by_project_created", ["projectId", "createdAt"]),
+
+  marketingResearch: defineTable({
+    projectId: v.id("marketingProjects"), url: v.string(), title: v.string(),
+    description: v.string(), excerpt: v.string(), kind: v.union(v.literal("project"), v.literal("reference")),
+    origin: v.optional(v.union(v.literal("project"), v.literal("manual"), v.literal("discovered"))),
+    contentHash: v.string(), capturedAt: v.number(),
+  }).index("by_project_url", ["projectId", "url"]).index("by_project", ["projectId"]),
+
+  marketingResearchDiscoveries: defineTable({
+    projectId: v.id("marketingProjects"), requestKey: v.string(), projectVersion: v.number(),
+    status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
+    captured: v.number(), createdAt: v.number(), updatedAt: v.number(),
+  }).index("by_project_request", ["projectId", "requestKey"]).index("by_project_created", ["projectId", "createdAt"]),
 
   marketingProviderAccounts: defineTable({
     providerAccountId: v.string(),
@@ -143,6 +211,8 @@ export const marketingTables = {
   marketingItems: defineTable({
     organizationId: v.optional(v.id("organizations")),
     projectId: v.id("marketingProjects"),
+    planId: v.optional(v.id("marketingPlans")),
+    planEntryIndex: v.optional(v.number()),
     channelId: v.id("marketingChannels"),
     kind: v.union(v.literal("post"), v.literal("ad")),
     title: v.string(),

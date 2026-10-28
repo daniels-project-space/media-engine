@@ -36,6 +36,7 @@ type Workspace = {
     qualified: boolean;
     publishingEnabled: boolean;
     advertisingEnabled: boolean;
+    researchDiscoveryEnabled: boolean;
     integrationLimitMinor: number;
     integrationCurrency: string;
   };
@@ -318,6 +319,8 @@ export default function Marketing() {
       setNotice(
         name === "generate-week"
           ? "Brand-template queue prepared. Review the drafts before starting automation."
+          : name === "generate-plan"
+            ? typeof result.researchNotice === "string" ? result.researchNotice : "AI planning request submitted. Check the run status below."
           : "Saved.",
       );
       return result;
@@ -662,6 +665,10 @@ export default function Marketing() {
                       busy={busy}
                       action={action}
                     />
+                    <div key={`plan-${project._id}`}>
+                      <ProjectResearch project={project} discoveryEnabled={workspace.readiness.researchDiscoveryEnabled} busy={busy} action={action} />
+                      <ProjectPlan project={project} channels={channels} accounts={workspace.accounts} busy={busy} action={action} />
+                    </div>
                     <form
                       onSubmit={upload}
                       className="grid gap-3 border-t border-line pt-5"
@@ -687,7 +694,7 @@ export default function Marketing() {
                       </p>
                     </form>
                     <RenderReuse
-                      key={projectId}
+                      key={`render-${projectId}`}
                       projectId={projectId}
                       imports={selected ? workspace.renderImports : []}
                       busy={busy}
@@ -1351,6 +1358,235 @@ function DraftEditor({
   );
 }
 
+type ResearchSource = { _id: string; url: string; title: string; description: string; excerpt: string; kind: string; origin?: string; capturedAt: number };
+function ProjectResearch({ project, discoveryEnabled, busy, action }: {
+  project: Project; discoveryEnabled: boolean; busy: boolean;
+  action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+}) {
+  const [sources, setSources] = useState<ResearchSource[]>([]);
+  const [reload, setReload] = useState(0);
+  const [failure, setFailure] = useState(false);
+  const [discoveryStatus, setDiscoveryStatus] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/marketing?view=research&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store", signal: controller.signal })
+      .then(responseJson).then(body => { setSources(body.sources as ResearchSource[]); setFailure(false); })
+      .catch(() => { if (!controller.signal.aborted) setFailure(true); });
+    return () => controller.abort();
+  }, [project._id, project.researchVersion, reload]);
+  return <div className="grid gap-3 border-t border-line pt-5">
+    <h3 className="text-sm font-bold">Research sources</h3>
+    <p className="text-xs leading-5 text-ink-dim">Add useful public competitor or market pages. The project website is captured when AI planning starts. Page excerpts are source claims and need review.</p>
+    <button type="button" className={buttonClass} disabled={busy || !discoveryEnabled} onClick={async () => {
+      const result = await action("discover-research", { projectId: project._id, requestKey: crypto.randomUUID() });
+      if (result) {
+        const run = result.result as { status: string; captured: number };
+        setDiscoveryStatus(run.status === "completed" ? `${run.captured} source pages captured; review their claims and relevance.` : `Discovery status: ${run.status}.`);
+        setReload(value => value + 1);
+      }
+    }}>Discover market sources</button>
+    <p className="text-xs text-ink-dim" role="status">{discoveryStatus || (discoveryEnabled ? "Discovery checks the free search plan and runs at most once per project per day." : "Automatic discovery is not connected; add public source URLs below.")}</p>
+    <form className="grid gap-2" onSubmit={async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const result = await action("capture-research", { projectId: project._id, url: new FormData(form).get("url") });
+      if (result) { form.reset(); setReload(value => value + 1); }
+    }}>
+      <Field label="Public research URL"><input name="url" type="url" required placeholder="https://example.com" className={inputClass} /></Field>
+      <button disabled={busy} className={buttonClass}>Capture source</button>
+    </form>
+    {failure ? <p role="alert" className="text-xs text-ink-dim">Research sources could not be loaded.</p> : null}
+    {sources.map(source => <details key={source._id} className="text-xs text-ink-dim">
+      <summary>{source.title} · {source.kind === "project" && new URL(source.url).hostname !== new URL(project.website).hostname ? "old project site, excluded from planning" : source.origin ?? source.kind} · {new Date(source.capturedAt).toLocaleDateString()}</summary>
+      <a href={source.url} target="_blank" rel="noreferrer" className="break-all text-scope underline">{source.url}</a>
+      <p className="whitespace-pre-wrap">{source.description}{source.excerpt ? `\n${source.excerpt}` : ""}</p>
+    </details>)}
+  </div>;
+}
+
+function ProjectPlan({ project, channels, accounts, busy, action }: {
+  project: Project;
+  channels: Doc<"marketingChannels">[];
+  accounts: Doc<"marketingProviderAccounts">[];
+  busy: boolean;
+  action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+}) {
+  const [strategy, setStrategy] = useState("");
+  const [calendar, setCalendar] = useState("");
+  const [sources, setSources] = useState("");
+  const [revision, setRevision] = useState(0);
+  const [planId, setPlanId] = useState("");
+  const [savedCalendar, setSavedCalendar] = useState("");
+  const [origin, setOrigin] = useState("owner");
+  const [run, setRun] = useState<null | { status: string; requestKey: string; error?: string; recoverable?: boolean }>(null);
+  const [aiCheck, setAiCheck] = useState<null | { status: string; requestKey: string; outcome?: string; updatedAt: number; recoverable?: boolean }>(null);
+  const [aiAllowed, setAiAllowed] = useState(false);
+  const [reload, setReload] = useState(0);
+  const [planProjectVersion, setPlanProjectVersion] = useState<number | null>(null);
+  const [planResearchVersion, setPlanResearchVersion] = useState<number | null>(null);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, {
+      cache: "no-store", signal: controller.signal,
+    }).then(responseJson).then((body) => {
+      const plan = body.plan as null | { _id: string; strategy: string; calendar: string; sources: string; revision: number; projectVersion: number; researchVersion?: number; origin: string };
+      if (plan) {
+        setStrategy(plan.strategy); setCalendar(plan.calendar); setSources(plan.sources);
+        setSavedCalendar(plan.calendar); setPlanId(plan._id);
+        setRevision(plan.revision); setPlanProjectVersion(plan.projectVersion); setPlanResearchVersion(plan.researchVersion ?? 0); setOrigin(plan.origin);
+      }
+      setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean });
+      setAiAllowed(body.aiAllowed === true);
+      setAiCheck(body.aiCheck as typeof aiCheck);
+      setLoadState("ready");
+    }).catch(() => { if (!controller.signal.aborted) setLoadState("error"); });
+    return () => controller.abort();
+  }, [project._id, reload]);
+  const runStatus = run?.status;
+  const checkStatus = aiCheck?.status;
+  useEffect(() => {
+    if (![runStatus, checkStatus].some(status => status && ["queued", "running"].includes(status))) return;
+    const controller = new AbortController();
+    const timer = window.setInterval(() => {
+      fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store", signal: controller.signal })
+        .then(responseJson).then((body) => {
+          setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean });
+          setAiCheck(body.aiCheck as typeof aiCheck);
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => { window.clearInterval(timer); controller.abort(); };
+  }, [project._id, runStatus, checkStatus]);
+  return <><form className="grid gap-3 border-t border-line pt-5" onSubmit={async (event) => {
+    event.preventDefault();
+    const result = await action("save-plan", {
+      projectId: project._id, expectedProjectVersion: project.version,
+      expectedResearchVersion: project.researchVersion ?? 0, expectedRevision: revision, strategy, calendar, sources,
+    });
+    if (result) {
+      const saved = result.result as { planId?: string } | undefined;
+      if (saved?.planId) setPlanId(saved.planId);
+      setSavedCalendar(calendar);
+      setRevision(revision + 1);
+      setPlanProjectVersion(project.version);
+      setPlanResearchVersion(project.researchVersion ?? 0);
+      setOrigin("owner");
+    }
+  }}>
+    <h3 className="text-sm font-bold">Strategy and content plan</h3>
+    <p className="text-xs leading-5 text-ink-dim">Save or edit this project’s strategy and two-week content plan. AI drafts use the confirmed brief and captured source pages.</p>
+    <p className="text-xs leading-5 text-ink-dim">AI safety switch: {loadState === "ready" ? (aiAllowed ? "enabled" : "paused") : "checking"}.</p>
+    <p className="text-xs leading-5 text-ink-dim" role="status">Cloud worker login: {aiCheck?.status === "completed" ? `${aiCheck.outcome === "subscription-login" ? "subscription login detected" : "unavailable or not signed in"} · checked ${new Date(aiCheck.updatedAt).toLocaleString()}` : aiCheck ? `${aiCheck.status}${aiCheck.recoverable ? " · timed out; check again" : ""}` : "not checked"}. This diagnostic does not test model generation or guarantee future availability.</p>
+    <button type="button" className={buttonClass} disabled={busy || loadState !== "ready" || (aiCheck?.status === "running" && !aiCheck.recoverable)} onClick={async () => {
+      const requestKey = aiCheck?.status === "queued" && !aiCheck.recoverable ? aiCheck.requestKey : crypto.randomUUID();
+      await action("check-ai-worker", { projectId: project._id, requestKey });
+      try {
+        const body = await responseJson(await fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store" }));
+        setAiCheck(body.aiCheck as typeof aiCheck);
+      } catch { /* The parent displays any request failure. */ }
+    }}>{aiCheck?.status === "queued" && !aiCheck.recoverable ? "Retry worker check" : "Check cloud worker login"}</button>
+    <button type="button" className={buttonClass} disabled={busy || loadState !== "ready" || !aiAllowed || (run?.status === "running" && !run.recoverable)} onClick={async () => {
+      const requestKey = run?.status === "queued" ? run.requestKey : crypto.randomUUID();
+      const result = await action("generate-plan", { projectId: project._id, requestKey });
+      if (result) setRun({ requestKey, status: "queued" });
+      else {
+        // The request may have reached the server before a timeout. Read the
+        // durable record rather than inventing a queued state in the UI.
+        try {
+          const body = await responseJson(await fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store" }));
+          setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean });
+          setAiAllowed(body.aiAllowed === true);
+        } catch { /* The parent displays the original request failure. */ }
+      }
+    }}>{run?.status === "queued" ? "Retry planning request" : run?.recoverable ? "Retry timed-out planning" : "Generate AI plan"}</button>
+    {run ? <p className="text-xs text-ink-dim" role="status">AI planning: {run.status}{run.error ? ` · ${run.error}` : ""}</p> : null}
+    {run?.status === "completed" ? <button type="button" className={buttonClass} onClick={() => setReload(value => value + 1)}>Load generated revision</button> : null}
+    {loadState === "error" ? <p role="alert">Could not load the saved plan. Refresh to try again.</p> : null}
+    {planProjectVersion !== null && (planProjectVersion !== project.version || planResearchVersion !== (project.researchVersion ?? 0)) ? <p role="alert" className="text-xs text-amber-600">The project brief or research changed since this plan was saved. Review it before saving.</p> : null}
+    <Field label="Strategy"><textarea className={inputClass} value={strategy} maxLength={20000} onChange={(event) => setStrategy(event.target.value)} required /></Field>
+    <Field label="14-day content plan"><textarea className={inputClass} value={calendar} maxLength={20000} onChange={(event) => setCalendar(event.target.value)} /></Field>
+    <Field label="Research sources and assumptions"><textarea className={inputClass} value={sources} maxLength={10000} onChange={(event) => setSources(event.target.value)} /></Field>
+    <button className={buttonClass} disabled={busy || loadState !== "ready"}>Save plan revision</button>
+    {revision > 0 ? <p className="text-xs text-ink-dim">Saved revision {revision} · {origin === "ai" ? "AI-generated draft" : "owner-authored"}</p> : null}
+  </form>
+  <PlanCalendar project={project} planId={planId} calendar={savedCalendar} stale={planProjectVersion !== project.version || planResearchVersion !== (project.researchVersion ?? 0) || calendar !== savedCalendar} channels={channels} accounts={accounts} busy={busy} action={action} />
+  <RenderBriefs project={project} />
+  </>;
+}
+
+function PlanCalendar({ project, planId, calendar, stale, channels, accounts, busy, action }: {
+  project: Project; planId: string; calendar: string; stale: boolean;
+  channels: Doc<"marketingChannels">[]; accounts: Doc<"marketingProviderAccounts">[]; busy: boolean;
+  action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+}) {
+  type CalendarEntry = { day: number; channel: string; format: string; rationale: string; caption: string; hashtags: string[]; videoScript: string };
+  let entries: Array<{ entry: CalendarEntry; index: number }> = [];
+  try {
+    const value: unknown = JSON.parse(calendar);
+    if (Array.isArray(value)) entries = value.map((entry, index) => ({ entry, index })).filter(({ entry }) =>
+      entry && Number.isInteger(entry.day) && entry.day >= 1 && entry.day <= 14 && typeof entry.channel === "string" &&
+      typeof entry.format === "string" && typeof entry.caption === "string" && typeof entry.rationale === "string" &&
+      typeof entry.videoScript === "string" && Array.isArray(entry.hashtags) && entry.hashtags.every((tag: unknown) => typeof tag === "string"));
+  } catch { /* An owner-authored free-text plan has no structured entries. */ }
+  if (!entries.length || !planId) return null;
+  return <div className="grid gap-3 border-t border-line pt-5">
+    <h3 className="text-sm font-bold">Calendar drafts</h3>
+    <p className="text-xs leading-5 text-ink-dim">Each draft proposes 09:00 in {project.timezone}, on the indicated day from today. Review before approving; creating a draft does not publish it.</p>
+    {stale ? <p className="text-xs text-amber-600" role="status">Save and review the current plan before creating drafts.</p> : null}
+    {entries.map(({ entry, index }) => {
+      const eligible = channels.filter(channel => accounts.some(account => account._id === channel.accountId && account.platform === entry.channel));
+      return <div key={`${index}-${entry.day}`} className="grid gap-2 rounded-xl border border-line p-3">
+        <p className="text-xs font-bold">Day {entry.day} · {entry.channel} · {entry.format}</p>
+        <p className="whitespace-pre-wrap text-xs leading-5 text-ink-dim">{entry.caption}</p>
+        {Array.isArray(entry.hashtags) && entry.hashtags.length ? <p className="text-xs text-ink-dim">{entry.hashtags.join(" ")}</p> : null}
+        {entry.rationale ? <p className="text-xs text-ink-dim">Why: {entry.rationale}</p> : null}
+        {entry.videoScript ? <details className="text-xs text-ink-dim"><summary>Video script</summary><p className="whitespace-pre-wrap">{entry.videoScript}</p></details> : null}
+        {entry.videoScript ? <form className="flex flex-wrap gap-2" onSubmit={async event => {
+          event.preventDefault();
+          await action("create-render-brief", { projectId: project._id, planId, entryIndex: index, modelId: new FormData(event.currentTarget).get("modelId") });
+          window.dispatchEvent(new Event("marketing-render-briefs-changed"));
+        }}><select name="modelId" className={inputClass} aria-label={`Render model for day ${entry.day}`}>
+          <option value="minimax-h3">Video · MiniMax H3</option><option value="qwen-image-2-1">Image · Qwen Image 2.1</option>
+        </select><button className={buttonClass} disabled={busy || stale}>Save render brief</button></form> : null}
+        {eligible.length ? <form className="flex flex-wrap gap-2" onSubmit={async event => {
+          event.preventDefault();
+          await action("create-plan-draft", { projectId: project._id, planId, entryIndex: index, channelId: new FormData(event.currentTarget).get("channelId") });
+        }}><select name="channelId" className={inputClass} aria-label={`Channel for day ${entry.day}`} required>
+          {eligible.map(channel => <option key={channel._id} value={channel._id}>{accounts.find(account => account._id === channel.accountId)?.label ?? "Channel"}</option>)}
+        </select><button className={buttonClass} disabled={busy || stale}>Create review draft</button></form> : <p className="text-xs text-ink-dim">Connect a matching channel to create a review draft.</p>}
+      </div>;
+    })}
+  </div>;
+}
+
+function RenderBriefs({ project }: { project: Project }) {
+  const [briefs, setBriefs] = useState<Doc<"marketingRenderBriefs">[]>([]);
+  const [error, setError] = useState(false);
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/marketing?view=render-briefs&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store", signal: controller.signal })
+      .then(responseJson).then(body => { setBriefs(body.briefs as Doc<"marketingRenderBriefs">[]); setError(false); })
+      .catch(() => { if (!controller.signal.aborted) setError(true); });
+    return () => controller.abort();
+  }, [project._id, revision]);
+  useEffect(() => {
+    const refresh = () => setRevision(value => value + 1);
+    window.addEventListener("marketing-render-briefs-changed", refresh);
+    return () => window.removeEventListener("marketing-render-briefs-changed", refresh);
+  }, []);
+  return <section className="grid gap-3 border-t border-line pt-5">
+    <h3 className="text-sm font-bold">Render briefs</h3>
+    <p className="text-xs leading-5 text-ink-dim">Saved creative scripts for the new GPU service. These are planning briefs only: no render, spend or approval has been initiated. Model qualification, project connection and enforceable spending controls are still required.</p>
+    {error ? <p className="text-xs text-amber-600" role="alert">Could not load render briefs.</p> : null}
+    {briefs.map(brief => <details key={brief._id} className="rounded-xl border border-line p-3 text-xs">
+      <summary className="font-bold">{brief.format} · {brief.channel} · {brief.modelId}{brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0) ? " · brief changed since saving" : ""}</summary>
+      <p className="whitespace-pre-wrap pt-2 text-ink-dim">{brief.prompt}</p>
+    </details>)}
+  </section>;
+}
+
 function RenderReuse({
   projectId,
   imports,
@@ -1368,16 +1604,71 @@ function RenderReuse({
   const [renders, setRenders] = useState<
     Array<{ jobId: string; title: string }>
   >([]);
+  const [renderStatus, setRenderStatus] = useState<string>(
+    "Checking the new rendering service…",
+  );
+  const [connectionStatus, setConnectionStatus] = useState("");
+  const [hyperJobId, setHyperJobId] = useState("");
+  const [hyperRights, setHyperRights] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/marketing/render-readiness", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("unavailable");
+        return response.json() as Promise<{
+          models: Array<{ nativeQualified: boolean }>;
+          hardware: { initial: string; future: string };
+        }>;
+      })
+      .then((result) => {
+        const qualified = result.models.filter((model) => model.nativeQualified).length;
+        setRenderStatus(
+          `${qualified} of ${result.models.length} model routes have native qualification. ` +
+            `Hardware: ${result.hardware.initial.toUpperCase()} initially; ${result.hardware.future.toUpperCase()} planned. ` +
+            "Project connection, available capacity, output delivery and permission to spend still require verification.",
+        );
+      })
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setRenderStatus("The new rendering service status is unavailable. No render can be launched here.");
+      });
+    return () => controller.abort();
+  }, []);
   return (
     <div className="grid gap-3 border-t border-line pt-5">
+      <h3 className="text-sm font-bold">New GPU rendering service</h3>
+      <p className="text-xs leading-5 text-ink-dim" role="status">{renderStatus}</p>
+      <p className="text-xs leading-5 text-ink-dim">
+        Marketing video and image generation will use the new service once the project connection and render workflow are qualified. No GPU job is submitted by this status check.
+      </p>
+      <div className="grid gap-2">
+        <label className="text-xs text-ink-dim" htmlFor="hyper-job-id">Optional existing new-service job ID</label>
+        <input id="hyper-job-id" className={inputClass} value={hyperJobId} onChange={(event) => setHyperJobId(event.target.value)} placeholder="Job ID" />
+        <button type="button" className={buttonClass} disabled={busy} onClick={async () => {
+          setConnectionStatus("Checking project connection…");
+          try {
+            const params = new URLSearchParams({ projectId });
+            if (hyperJobId.trim()) params.set("jobId", hyperJobId.trim());
+            const data = await responseJson(await fetch(`/api/marketing/hyper-project?${params}`, { cache: "no-store" }));
+            if (!data.connected) { setConnectionStatus("This project has no configured new-service connection."); return; }
+            const job = data.job as null | { state: string; modelId: string; receipt: null | { available: boolean } };
+            const imported = data.latestImport as null | { status: string; error?: string };
+            setConnectionStatus(job ? `Job ${job.state} · ${job.modelId}. ${job.receipt ? "A project-scoped receipt exists." : "No output receipt yet."}${imported ? ` Import: ${imported.status}${imported.error ? ` · ${imported.error}` : ""}.` : " Object hash not yet verified by Media Engine."}` : "Project credential and storage scope verified. Render submission remains disabled.");
+          } catch { setConnectionStatus("Could not verify the project connection or job. Check its setup and try again."); }
+        }}>Check new-service connection</button>
+        <label className="flex gap-2 text-xs text-ink-dim"><input type="checkbox" checked={hyperRights} onChange={(event) => setHyperRights(event.target.checked)} />I have permission to use this completed job for this project.</label>
+        <button type="button" className={buttonClass} disabled={busy || !hyperRights || !hyperJobId.trim()} onClick={async () => {
+          const result = await action("import-hyper-render", { projectId, jobId: hyperJobId.trim(), rightsConfirmed: true });
+          if (result) {
+            const receipt = result.result as { status?: string } | undefined;
+            setConnectionStatus(receipt?.status === "verified" ? "This render was already verified and imported." : "Import requested. Check the job again to see verification status.");
+          }
+        }}>Verify and import completed render</button>
+        {connectionStatus ? <p className="text-xs leading-5 text-ink-dim" role="status">{connectionStatus}</p> : null}
+      </div>
       <h3 className="text-sm font-bold">Reuse an approved final video</h3>
       <p className="text-xs leading-5 text-ink-dim">
-        Use the existing{" "}
-        <Link className="text-scope underline" href="/work">
-          storyboard and render workflow
-        </Link>{" "}
-        for new videos. Import preserves the completed original, verifies its R2
-        hash, and selects it for future posts. No render is launched here.
+        Import a previously approved video from the existing library. This preserves the completed original, verifies its R2 hash, and selects it for future posts. No render is launched here.
       </p>
       <button
         className={buttonClass}

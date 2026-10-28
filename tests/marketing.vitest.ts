@@ -99,6 +99,54 @@ async function item(
 }
 
 describe("marketing isolation and dispatch invariants", () => {
+  it("fences worker diagnostics, reuses retries and isolates projects", async () => {
+    const f = await projects();
+    const m = (name: string) => makeFunctionReference<"mutation">(`marketingPlans:${name}`);
+    const q = makeFunctionReference<"query">("marketingPlans:latestAiCheck");
+    const request = { projectId: f.a, requestKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" };
+    const later = { projectId: f.a, requestKey: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };
+    expect(await f.t.mutation(m("startAiCheck"), request)).toEqual({ status: "queued" });
+    expect(await f.t.mutation(m("startAiCheck"), request)).toEqual({ status: "queued" });
+    await expect(f.t.mutation(m("startAiCheck"), later)).rejects.toThrow(/Wait/);
+    expect(await f.t.mutation(m("claimAiCheck"), request)).toBe(true);
+    expect(await f.t.mutation(m("claimAiCheck"), request)).toBe(false);
+    expect(await f.t.query(q, { projectId: f.b, asOfMinute: Math.floor(Date.now() / 60_000) })).toBeNull();
+    const check = await f.t.query(q, { projectId: f.a, asOfMinute: Math.floor(Date.now() / 60_000) });
+    await f.t.run(ctx => ctx.db.patch(check!._id, { updatedAt: Date.now() - 180_000 }));
+    expect(await f.t.mutation(m("startAiCheck"), later)).toEqual({ status: "queued" });
+    expect(await f.t.mutation(m("finishAiCheck"), { ...request, outcome: "subscription-login" })).toBe(false);
+    expect(await f.t.mutation(m("claimAiCheck"), later)).toBe(true);
+    expect(await f.t.mutation(m("finishAiCheck"), { ...later, outcome: "unavailable" })).toBe(true);
+    expect(await f.t.query(q, { projectId: f.a, asOfMinute: Math.floor(Date.now() / 60_000) })).toMatchObject({ status: "completed", outcome: "unavailable" });
+  });
+  it("reads the existing AI kill switch through the internal marketing boundary and fails closed", async () => {
+    const t = convexTest(schema, modules);
+    const aiAllowed = makeFunctionReference<"query">("marketingPlans:aiAllowed");
+    expect(await t.query(aiAllowed, {})).toBe(false);
+    const id = await t.run(ctx => ctx.db.insert("settings", { key: "aiEnabled", value: "true" }));
+    expect(await t.query(aiAllowed, {})).toBe(false);
+    await t.run(ctx => ctx.db.patch(id, { value: true }));
+    expect(await t.query(aiAllowed, {})).toBe(true);
+    await t.run(ctx => ctx.db.patch(id, { value: false }));
+    expect(await t.query(aiAllowed, {})).toBe(false);
+  });
+  it("keeps render briefs project-scoped, idempotent and tied to the current plan", async () => {
+    const f = await projects();
+    const planMutation = (name: string) => makeFunctionReference<"mutation">(`marketingPlans:${name}`);
+    const planQuery = (name: string) => makeFunctionReference<"query">(`marketingPlans:${name}`);
+    const calendar = JSON.stringify([{ day: 1, channel: "x", format: "video", videoScript: "Show the product and its benefit" }]);
+    const saved = await f.t.mutation(planMutation("save"), { projectId: f.a, expectedProjectVersion: 1,
+      expectedResearchVersion: 0, expectedRevision: 0, strategy: "Introduce the product", calendar, sources: "" });
+    const request = { projectId: f.a, planId: saved.planId, entryIndex: 0, modelId: "minimax-h3" };
+    const first = await f.t.mutation(planMutation("createRenderBrief"), request);
+    expect(await f.t.mutation(planMutation("createRenderBrief"), request)).toEqual({ briefId: first.briefId, reused: true });
+    expect((await f.t.query(planQuery("listRenderBriefs"), { projectId: f.a }))[0]).toMatchObject({ prompt: "Show the product and its benefit", modelId: "minimax-h3" });
+    expect(await f.t.query(planQuery("listRenderBriefs"), { projectId: f.b })).toHaveLength(0);
+    await expect(f.t.mutation(planMutation("createRenderBrief"), { ...request, projectId: f.b })).rejects.toThrow();
+    await f.t.mutation(planMutation("save"), { projectId: f.a, expectedProjectVersion: 1,
+      expectedResearchVersion: 0, expectedRevision: 1, strategy: "Revised", calendar, sources: "" });
+    await expect(f.t.mutation(planMutation("createRenderBrief"), { ...request, modelId: "qwen-image-2-1" })).rejects.toThrow(/current plan/);
+  });
   it("admin cleanup refuses connected projects and removes only an exact unused draft", async () => {
     const f = await projects();
     await expect(
@@ -123,6 +171,12 @@ describe("marketing isolation and dispatch invariants", () => {
         expectedName: "unused",
       }),
     ).toEqual({ removed: true });
+    const checked = await f.t.mutation(mutation("createProject"), draft("checked"));
+    await f.t.mutation(makeFunctionReference<"mutation">("marketingPlans:startAiCheck"), {
+      projectId: checked, requestKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+    await expect(f.t.mutation(mutation("removeEmptyProject"), { projectId: checked, expectedName: "checked" }))
+      .rejects.toThrow(/content or connections/);
   });
 
   it("replays the same onboarding request without creating a duplicate or accepting a different brief", async () => {
@@ -674,5 +728,152 @@ describe("cost and source policy", () => {
       expect(() => website(url)).toThrow();
     expect(snapshotHash({ b: 2, a: 1 })).toBe(snapshotHash({ a: 1, b: 2 }));
     expect(snapshotHash({ a: 2 })).not.toBe(snapshotHash({ a: 1 }));
+  });
+});
+
+describe("project planning revisions", () => {
+  it("deduplicates and rate-limits project research discovery attempts", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("discovery"));
+    const start = makeFunctionReference<"mutation">("marketingResearch:startDiscovery");
+    const finish = makeFunctionReference<"mutation">("marketingResearch:finishDiscovery");
+    const args = { projectId, expectedProjectVersion: 1, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" };
+    const first = await t.mutation(start, args);
+    expect(first.canRun).toBe(true);
+    expect(await t.mutation(start, args)).toMatchObject({ discoveryId: first.discoveryId, canRun: false });
+    await expect(t.mutation(start, { ...args, requestKey: "6c23d114-ef9b-41a8-aee4-2728e9fa6dab" })).rejects.toThrow(/one attempt/);
+    await t.mutation(finish, { projectId, discoveryId: first.discoveryId, success: true, captured: 2 });
+    expect(await t.mutation(start, args)).toMatchObject({ canRun: false, status: "completed", captured: 2 });
+  });
+  it("isolates attributed research and fences planning if source evidence changes", async () => {
+    const t = convexTest(schema, modules);
+    const a = await t.mutation(mutation("createProject"), draft("research-a"));
+    const b = await t.mutation(mutation("createProject"), draft("research-b"));
+    const research = makeFunctionReference<"mutation">("marketingResearch:save");
+    const list = makeFunctionReference<"query">("marketingResearch:list");
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const latest = makeFunctionReference<"query">("marketingPlans:latest");
+    const start = makeFunctionReference<"mutation">("marketingPlans:start");
+    const claim = makeFunctionReference<"mutation">("marketingPlans:claim");
+    const finish = makeFunctionReference<"mutation">("marketingPlans:finish");
+    const source = { projectId: a, expectedProjectVersion: 1, url: "https://competitor.example/", title: "Competitor", description: "Source claim", excerpt: "Untrusted page content", kind: "reference", capturedAt: Date.now() };
+    await t.mutation(research, source);
+    expect(await t.mutation(research, { ...source, capturedAt: Date.now() })).toMatchObject({ changed: false, researchVersion: 1 });
+    expect(await t.query(list, { projectId: b })).toEqual([]);
+    await t.mutation(save, { projectId: a, expectedProjectVersion: 1, expectedResearchVersion: 1, expectedRevision: 0, strategy: "Owner strategy", calendar: "", sources: "Reference" });
+    const run = await t.mutation(start, { projectId: a, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" });
+    const context = await t.mutation(claim, { runId: run.runId });
+    expect(context.research).toMatchObject([{ url: source.url, excerpt: source.excerpt }]);
+    await t.mutation(research, { ...source, excerpt: "Changed source content", capturedAt: Date.now() });
+    expect(await t.query(latest, { projectId: a })).toMatchObject({ stale: true });
+    expect(await t.mutation(finish, { runId: run.runId, strategy: "AI", calendar: "Plan" })).toEqual({ saved: false });
+    await expect(t.mutation(save, { projectId: a, expectedProjectVersion: 1, expectedResearchVersion: 1, expectedRevision: 1, strategy: "Old", calendar: "", sources: "" })).rejects.toThrow(/Research sources changed/);
+  });
+  it("does not feed an old project website to the planner after the brief points elsewhere", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("old-site"));
+    const research = makeFunctionReference<"mutation">("marketingResearch:save");
+    await t.mutation(research, { projectId, expectedProjectVersion: 1, url: "https://old-site.example/", title: "Old site", description: "", excerpt: "Old page", kind: "project", capturedAt: Date.now() });
+    const { name, offer, audience, facts, tone, timezone, cadence, generationLimitMinor, advertisingLimitMinor } = draft("old-site");
+    await t.mutation(mutation("updateProject"), { projectId, expectedVersion: 1, name, website: "https://new-site.example/", offer, audience, facts, tone, timezone, cadence, generationLimitMinor, advertisingLimitMinor });
+    const start = makeFunctionReference<"mutation">("marketingPlans:start"), claim = makeFunctionReference<"mutation">("marketingPlans:claim");
+    const run = await t.mutation(start, { projectId, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" });
+    expect((await t.mutation(claim, { runId: run.runId })).research).toEqual([]);
+  });
+  it("turns a saved calendar entry into one isolated review draft without dispatch", async () => {
+    const f = await projects();
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const create = makeFunctionReference<"mutation">("marketingPlans:createDraft");
+    const calendar = JSON.stringify([{ day: 2, channel: "x", format: "Introduction", rationale: "Explain the offer", caption: "Meet our tool", hashtags: ["#design"], videoScript: "" }]);
+    const plan = await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 0, strategy: "Useful strategy", calendar, sources: "Owner brief" });
+    const args = { projectId: f.a, planId: plan.planId, entryIndex: 0, channelId: f.channelA };
+    await expect(f.t.mutation(create, { ...args, channelId: f.channelB })).rejects.toThrow(/does not belong/);
+    const draftItem = await f.t.mutation(create, args);
+    expect(await f.t.mutation(create, args)).toEqual({ itemId: draftItem.itemId, reused: true });
+    const workspace = await f.t.query(query("listWorkspace"), { projectId: f.a });
+    expect(workspace.items).toHaveLength(1);
+    expect(workspace.items[0]).toMatchObject({ status: "draft", planId: plan.planId, content: "Meet our tool\n\n#design" });
+    expect((await f.t.query(query("listWorkspace"), { projectId: f.b })).items).toHaveLength(0);
+    await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 1, strategy: "Revised strategy", calendar, sources: "Owner brief" });
+    await expect(f.t.mutation(create, args)).rejects.toThrow(/current plan/);
+  });
+  it("saves a validated worker result as a separate AI revision", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("ai-plan"));
+    const start = makeFunctionReference<"mutation">("marketingPlans:start");
+    const claim = makeFunctionReference<"mutation">("marketingPlans:claim");
+    const finish = makeFunctionReference<"mutation">("marketingPlans:finish");
+    const latest = makeFunctionReference<"query">("marketingPlans:latest");
+    const run = await t.mutation(start, { projectId, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" });
+    await t.mutation(claim, { runId: run.runId });
+    expect(await t.mutation(finish, { runId: run.runId, strategy: "Strategy", calendar: "Calendar", sources: "Brief" })).toEqual({ saved: true });
+    expect(await t.query(latest, { projectId })).toMatchObject({ origin: "ai", strategy: "Strategy", revision: 1 });
+    expect(await t.mutation(finish, { runId: run.runId, strategy: "Duplicate", calendar: "Duplicate" })).toEqual({ saved: false });
+  });
+  it("deduplicates and fences AI runs when a manual plan changes", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("run-a"));
+    const start = makeFunctionReference<"mutation">("marketingPlans:start");
+    const claim = makeFunctionReference<"mutation">("marketingPlans:claim");
+    const finish = makeFunctionReference<"mutation">("marketingPlans:finish");
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const latest = makeFunctionReference<"query">("marketingPlans:latest");
+    const args = { projectId, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" };
+    const first = await t.mutation(start, args);
+    expect(await t.mutation(start, args)).toEqual(first);
+    await expect(t.mutation(start, { ...args, requestKey: "6c23d114-ef9b-41a8-aee4-2728e9fa6dab" })).rejects.toThrow(/already in progress/);
+    expect(await t.mutation(claim, { runId: first.runId })).toMatchObject({ name: "run-a" });
+    expect(await t.mutation(claim, { runId: first.runId })).toBeNull();
+    await t.mutation(save, { projectId, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 0, strategy: "Owner edits", calendar: "", sources: "" });
+    expect(await t.mutation(finish, { runId: first.runId, strategy: "Model plan", calendar: "Model calendar" })).toEqual({ saved: false });
+    expect(await t.query(latest, { projectId })).toMatchObject({ strategy: "Owner edits", origin: "owner" });
+  });
+  it("isolates plans, prevents lost edits and marks a plan stale after a brief change", async () => {
+    const t = convexTest(schema, modules);
+    const a = await t.mutation(mutation("createProject"), draft("plan-a"));
+    const b = await t.mutation(mutation("createProject"), draft("plan-b"));
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const latest = makeFunctionReference<"query">("marketingPlans:latest");
+    const input = { projectId: a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 0,
+      strategy: "Serve alpha customers", calendar: "Day 1: introduction", sources: "Owner brief" };
+    await t.mutation(save, input);
+    expect(await t.query(latest, { projectId: b })).toBeNull();
+    await expect(t.mutation(save, input)).rejects.toThrow(/Plan changed/);
+    const plan = await t.query(latest, { projectId: a });
+    expect(plan).toMatchObject({ strategy: input.strategy, revision: 1, stale: false, origin: "owner" });
+    await expect(t.mutation(mutation("removeEmptyProject"), { projectId: a, expectedName: "plan-a" })).rejects.toThrow(/content or connections/);
+    const { name, website, offer, audience, facts, tone, timezone, cadence, generationLimitMinor, advertisingLimitMinor } = draft("plan-a");
+    await t.mutation(mutation("updateProject"), { projectId: a, expectedVersion: 1, name,
+      website, offer: `${offer} revised`, audience, facts, tone, timezone, cadence,
+      generationLimitMinor, advertisingLimitMinor });
+    expect(await t.query(latest, { projectId: a })).toMatchObject({ revision: 1, stale: true });
+    await expect(t.mutation(save, { ...input, expectedRevision: 1 })).rejects.toThrow(/brief changed/);
+  });
+});
+
+describe("new-service render import", () => {
+  it("requires rights, claims once, fences workers and registers only a scoped verified receipt", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("hyper-import"));
+    const other = await t.mutation(mutation("createProject"), draft("hyper-other"));
+    const req = makeFunctionReference<"mutation">("marketingHyperImports:request");
+    const claim = makeFunctionReference<"mutation">("marketingHyperImports:claim");
+    const settle = makeFunctionReference<"mutation">("marketingHyperImports:settle");
+    const jobId = "6c23d114-ef9b-41a8-aee4-2728e9fa6dab";
+    await expect(t.mutation(req, { projectId, jobId, rightsConfirmed: false })).rejects.toThrow(/rights/);
+    const pending = await t.mutation(req, { projectId, jobId, rightsConfirmed: true });
+    expect(await t.mutation(req, { projectId, jobId, rightsConfirmed: true })).toEqual(pending);
+    const identity = { projectId, importId: pending.importId, attempt: 1, workerRunId: "worker-1" };
+    await expect(t.mutation(claim, { ...identity, projectId: other })).rejects.toThrow();
+    await t.mutation(claim, identity);
+    await expect(t.mutation(claim, identity)).rejects.toThrow();
+    const sha256 = "a".repeat(64);
+    const receipt = { key: `marketing/${projectId}/assets/${sha256}.png`, sha256, bytes: 50, contentType: "image/png" };
+    await expect(t.mutation(settle, { ...identity, workerRunId: "wrong", receipt })).rejects.toThrow();
+    await expect(t.mutation(settle, { ...identity, receipt: { ...receipt, key: `marketing/${other}/assets/${sha256}.png` } })).rejects.toThrow(/invalid/);
+    expect(await t.mutation(settle, { ...identity, receipt })).toMatchObject({ status: "verified" });
+    const workspace = await t.query(query("listWorkspace"), { projectId });
+    expect(workspace.assets).toHaveLength(1);
+    expect((await t.query(query("listWorkspace"), { projectId: other })).assets).toHaveLength(0);
   });
 });

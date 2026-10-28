@@ -101,6 +101,7 @@ export function marketingReadiness() {
     generationCostMinor: 0,
     integrationLimitMinor: 3_000,
     integrationCurrency: "USD",
+    researchDiscoveryEnabled: process.env.MARKETING_TAVILY_DISCOVERY_ENABLED === "true",
   };
 }
 
