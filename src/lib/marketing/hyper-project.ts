@@ -7,6 +7,7 @@ const connectionSchema = z.object({ projectId: uuid, token: z.string().min(16).m
   bucket: z.literal("media-engine"), prefix: z.string().min(1).max(300)
     .refine(value => !value.startsWith("/") && value.endsWith("/") && !value.includes("..")) }).strict();
 const guideSchema = z.object({ project: z.object({ id: uuid, output: z.object({ bucket: z.string(), prefix: z.string() }) }) });
+const environmentSchema = z.object({ id: uuid, modelId: z.string().min(1).max(100), prepared: z.boolean() });
 const jobSchema = z.object({ id: uuid, projectId: uuid, modelId: z.string(), state: z.string(),
   generation: z.number().int().nonnegative(), errorCode: z.string().nullable().optional(),
   output: z.object({ projectId: uuid, jobId: uuid, generation: z.number().int().nonnegative(),
@@ -71,4 +72,13 @@ export async function inspectHyperProject(connection: Connection, jobId?: string
   return { ...base, job: { id: job.id, state: job.state, modelId: job.modelId, errorCode: job.errorCode ?? null,
     receipt: job.output ? { sha256: job.output.sha256, bytes: job.output.bytes, contentType: job.output.contentType,
       available: job.output.available, objectHashVerifiedByMediaEngine: false } : null } };
+}
+
+/** Read-only check: preparation and a matching model do not qualify execution. */
+export async function inspectHyperEnvironment(connection: Connection, environmentId: string, modelId: string, fetcher: typeof fetch = fetch) {
+  await projectAndJob(connection, undefined, fetcher);
+  const id = uuid.parse(environmentId);
+  const environment = environmentSchema.parse(await apiGet(`/projects/${connection.projectId}/environments/${id}`, connection.token, fetcher));
+  if (environment.id !== id) throw new Error("Render environment does not match the requested project environment");
+  return { id: environment.id, modelId: environment.modelId, modelMatches: environment.modelId === modelId, prepared: environment.prepared };
 }

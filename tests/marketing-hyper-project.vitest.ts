@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { hyperProjectConnection, inspectHyperProject } from "../src/lib/marketing/hyper-project";
+import { hyperProjectConnection, inspectHyperEnvironment, inspectHyperProject } from "../src/lib/marketing/hyper-project";
 import { vaultService } from "../src/lib/vault";
 
 vi.mock("../src/lib/vault", () => ({ vaultService: vi.fn() }));
@@ -34,5 +34,17 @@ describe("new rendering service project scope", () => {
     const crossJob = { ...job, output: { ...job.output, key: "projects/beta/output.png" } };
     const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(guide))).mockResolvedValueOnce(new Response(JSON.stringify(crossJob))) as unknown as typeof fetch;
     await expect(inspectHyperProject(connection, jobId, fetcher)).rejects.toThrow(/receipt/);
+  });
+  it("checks the project-scoped environment without claiming capacity or dispatch", async () => {
+    const env = { id: jobId, modelId: "qwen-image-2-1", prepared: true, spec: { secret: "never-returned" } };
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(guide))).mockResolvedValueOnce(new Response(JSON.stringify(env))) as unknown as typeof fetch;
+    const result = await inspectHyperEnvironment(connection, jobId, "minimax-h3", fetcher);
+    expect(result).toEqual({ id: jobId, modelId: "qwen-image-2-1", modelMatches: false, prepared: true });
+    expect(JSON.stringify(result)).not.toContain("never-returned");
+    expect(JSON.stringify(result)).not.toContain(connection.token);
+  });
+  it("rejects an environment whose returned identity does not match the request", async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(guide))).mockResolvedValueOnce(new Response(JSON.stringify({ id: projectId, modelId: "minimax-h3", prepared: true }))) as unknown as typeof fetch;
+    await expect(inspectHyperEnvironment(connection, jobId, "minimax-h3", fetcher)).rejects.toThrow(/environment/);
   });
 });

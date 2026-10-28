@@ -29,3 +29,13 @@ Actual GPU submission remains gated on a concrete approved request and
 spending authorization, a qualified native model/environment, available
 capacity, and an idempotent durable action that reconciles uncertain writes.
 No paid provider operation is performed by the connection check.
+
+Each saved creative brief can run a read-only readiness check. It reads the
+current model catalogue and, when a project connection exists, verifies the
+project and output scope. An optional existing environment UUID checks that
+the environment belongs to that project, uses the selected model, and reports
+its prepared flag. Preparation and a native catalogue qualification do not
+prove that the particular environment is qualified or that a worker is ready.
+The check does not create environments, reserve capacity, authorize spend, or
+submit a job. A changed project brief, research or newer plan marks the saved
+creative brief stale.
