@@ -2,25 +2,83 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { findDefaultOrganization } from "./controlPlaneModel";
 
+export const track = internalMutation({
+  args: { projectId: v.id("marketingProjects"), briefId: v.id("marketingRenderBriefs"), jobId: v.string(), modelId: v.string(), providerState: v.string(), errorCode: v.optional(v.string()), rightsConfirmed: v.boolean() },
+  handler: async (ctx, args) => {
+    const [project, org, brief] = await Promise.all([ctx.db.get(args.projectId), findDefaultOrganization(ctx), ctx.db.get(args.briefId)]);
+    if (!project || !org || project.organizationId !== org._id) throw new Error("Marketing project not found");
+    if (!brief || brief.projectId !== project._id || brief.organizationId !== project.organizationId) throw new Error("Render brief does not belong to this project");
+    if (!args.rightsConfirmed || !/^[a-f0-9-]{36}$/.test(args.jobId)) throw new Error("A valid job and confirmed usage rights are required");
+    if (brief.modelId !== args.modelId) throw new Error("Render model differs from this creative brief");
+    const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", project._id)).order("desc").first();
+    if (latest?._id !== brief.planId || brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0))
+      throw new Error("Review the current strategy and recreate this render brief before tracking a job");
+    if (brief.renderJobId && brief.renderJobId !== args.jobId && brief.renderState !== "failed")
+      throw new Error("This creative brief already has a render in progress or ready");
+    const existing = await ctx.db.query("marketingHyperImports").withIndex("by_project_job", q => q.eq("projectId", project._id).eq("jobId", args.jobId)).unique();
+    if (existing?.briefId && existing.briefId !== brief._id) throw new Error("This render job is already linked to another creative brief");
+    const terminalFailure = args.providerState === "failed" || args.providerState === "cancelled";
+    const now = Date.now();
+    if (existing) {
+      const status = existing.status === "queued" || existing.status === "running" || existing.status === "verified"
+        ? existing.status : terminalFailure ? "failed" : "tracked";
+      await ctx.db.patch(existing._id, { briefId: brief._id, modelId: args.modelId, providerState: args.providerState,
+        ...(status === "failed" ? { error: args.errorCode ?? args.providerState } : {}), status, updatedAt: now });
+      await ctx.db.patch(brief._id, { renderJobId: args.jobId,
+        renderState: status === "verified" ? "ready" : status === "failed" ? "failed" : status === "tracked" ? "tracked" : "importing",
+        renderProviderState: args.providerState,
+        ...(existing.assetId ? { renderAssetId: existing.assetId } : {}) });
+      return { importId: existing._id, status, providerState: args.providerState };
+    }
+    const imports = await ctx.db.query("marketingHyperImports").withIndex("by_project_created", q => q.eq("projectId", project._id)).take(100);
+    if (imports.length >= 100) throw new Error("Project render import limit reached");
+    const status = terminalFailure ? "failed" as const : "tracked" as const;
+    const importId = await ctx.db.insert("marketingHyperImports", { projectId: project._id, jobId: args.jobId, briefId: brief._id,
+      modelId: args.modelId, providerState: args.providerState, status, attempt: 0,
+      ...(terminalFailure ? { error: args.errorCode ?? args.providerState } : {}), createdAt: now, updatedAt: now });
+    await ctx.db.patch(brief._id, { renderJobId: args.jobId, renderState: terminalFailure ? "failed" : "tracked", renderProviderState: args.providerState, renderAssetId: undefined });
+    return { importId, status, providerState: args.providerState };
+  },
+});
+
 export const request = internalMutation({
-  args: { projectId: v.id("marketingProjects"), jobId: v.string(), rightsConfirmed: v.boolean() },
+  args: { projectId: v.id("marketingProjects"), jobId: v.string(), briefId: v.optional(v.id("marketingRenderBriefs")), rightsConfirmed: v.boolean() },
   handler: async (ctx, args) => {
     const [project, org] = await Promise.all([ctx.db.get(args.projectId), findDefaultOrganization(ctx)]);
     if (!project || !org || project.organizationId !== org._id) throw new Error("Marketing project not found");
     if (!args.rightsConfirmed || !/^[a-f0-9-]{36}$/.test(args.jobId)) throw new Error("A valid job and confirmed usage rights are required");
+    const brief = args.briefId ? await ctx.db.get(args.briefId) : null;
+    if (args.briefId) {
+      if (!brief || brief.projectId !== project._id || brief.organizationId !== project.organizationId)
+        throw new Error("Render brief does not belong to this project");
+      const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", project._id)).order("desc").first();
+      if (latest?._id !== brief.planId || brief.projectVersion !== project.version || brief.researchVersion !== (project.researchVersion ?? 0))
+        throw new Error("Review the current strategy and recreate this render brief before importing media");
+      if (brief.renderJobId && brief.renderJobId !== args.jobId && brief.renderState !== "failed")
+        throw new Error("This creative brief already has a render in progress or ready");
+    }
     const existing = await ctx.db.query("marketingHyperImports").withIndex("by_project_job", q => q.eq("projectId", args.projectId).eq("jobId", args.jobId)).unique();
+    if (existing?.briefId && args.briefId && existing.briefId !== args.briefId)
+      throw new Error("This render job is already linked to another creative brief");
     const staleWorker = existing?.status === "running" && existing.updatedAt < Date.now() - 10 * 60_000;
-    if (existing && existing.status !== "failed" && !staleWorker) return { importId: existing._id, attempt: existing.attempt, status: existing.status };
-    if (existing && existing.attempt >= 3) throw new Error("Three attempts failed; inspect the source before retrying.");
+    if (existing && existing.status !== "failed" && existing.status !== "tracked" && !staleWorker) {
+      if (brief) await ctx.db.patch(brief._id, { renderJobId: args.jobId, renderState: existing.status === "verified" ? "ready" : "importing", ...(existing.assetId ? { renderAssetId: existing.assetId } : {}) });
+      if (!existing.briefId && brief) await ctx.db.patch(existing._id, { briefId: brief._id });
+      return { importId: existing._id, attempt: existing.attempt, status: existing.status };
+    }
+    if (existing && existing.status === "failed" && existing.attempt >= 3) throw new Error("Three attempts failed; inspect the source before retrying.");
     const now = Date.now();
     if (existing) {
-      await ctx.db.patch(existing._id, { status: "queued", attempt: existing.attempt + 1, workerRunId: undefined, error: undefined, updatedAt: now });
-      return { importId: existing._id, attempt: existing.attempt + 1, status: "queued" as const };
+      const attempt = existing.attempt + 1;
+      await ctx.db.patch(existing._id, { status: "queued", ...(brief ? { briefId: brief._id } : {}), attempt, workerRunId: undefined, error: undefined, updatedAt: now });
+      if (brief) await ctx.db.patch(brief._id, { renderJobId: args.jobId, renderState: "importing", renderAssetId: undefined });
+      return { importId: existing._id, attempt, status: "queued" as const };
     }
     const imports = await ctx.db.query("marketingHyperImports").withIndex("by_project_created", q => q.eq("projectId", args.projectId)).take(100);
     if (imports.length >= 100) throw new Error("Project render import limit reached");
-    const importId = await ctx.db.insert("marketingHyperImports", { projectId: args.projectId, jobId: args.jobId,
+    const importId = await ctx.db.insert("marketingHyperImports", { projectId: args.projectId, jobId: args.jobId, ...(brief ? { briefId: brief._id } : {}),
       status: "queued", attempt: 1, createdAt: now, updatedAt: now });
+    if (brief) await ctx.db.patch(brief._id, { renderJobId: args.jobId, renderState: "importing", renderAssetId: undefined });
     return { importId, attempt: 1, status: "queued" as const };
   },
 });
@@ -44,6 +102,11 @@ export const settle = internalMutation({
       throw new Error("Import settlement does not belong to this worker");
     if (args.error || !args.receipt) {
       await ctx.db.patch(item._id, { status: "failed", error: args.error?.slice(0, 500) ?? "R2 verification failed", updatedAt: Date.now() });
+      if (item.briefId) {
+        const brief = await ctx.db.get(item.briefId);
+        if (brief?.projectId === project._id && brief.renderJobId === item.jobId)
+          await ctx.db.patch(brief._id, { renderState: "failed" });
+      }
       return { status: "failed" as const };
     }
     const r = args.receipt;
@@ -58,6 +121,11 @@ export const settle = internalMutation({
     const assetId = existing?._id ?? await ctx.db.insert("marketingAssets", { organizationId: project.organizationId, projectId: project._id,
       ...r, source: "approved_render", rightsConfirmed: true, createdAt: Date.now() });
     await ctx.db.patch(item._id, { status: "verified", assetId, updatedAt: Date.now() });
+    if (item.briefId) {
+      const brief = await ctx.db.get(item.briefId);
+      if (brief?.projectId === project._id && brief.renderJobId === item.jobId)
+        await ctx.db.patch(brief._id, { renderState: "ready", renderAssetId: assetId });
+    }
     await ctx.db.patch(project._id, { defaultAssetId: assetId, updatedAt: Date.now() });
     return { status: "verified" as const, assetId };
   },

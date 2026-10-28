@@ -18,6 +18,7 @@ const mutations = {
   claimAiCheck: "marketingPlans:claimAiCheck",
   finishAiCheck: "marketingPlans:finishAiCheck",
   requestHyperImport: "marketingHyperImports:request",
+  trackHyperImport: "marketingHyperImports:track",
   claimHyperImport: "marketingHyperImports:claim",
   settleHyperImport: "marketingHyperImports:settle",
   createProject: "marketing:createProject",
