@@ -318,6 +318,8 @@ export default function Marketing() {
       setNotice(
         name === "generate-week"
           ? "Brand-template queue prepared. Review the drafts before starting automation."
+          : name === "generate-plan"
+            ? "AI planning request submitted. Check the run status below."
           : "Saved.",
       );
       return result;
@@ -1361,6 +1363,9 @@ function ProjectPlan({ project, busy, action }: {
   const [calendar, setCalendar] = useState("");
   const [sources, setSources] = useState("");
   const [revision, setRevision] = useState(0);
+  const [origin, setOrigin] = useState("owner");
+  const [run, setRun] = useState<null | { status: string; requestKey: string; error?: string; recoverable?: boolean }>(null);
+  const [reload, setReload] = useState(0);
   const [planProjectVersion, setPlanProjectVersion] = useState<number | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   useEffect(() => {
@@ -1368,15 +1373,27 @@ function ProjectPlan({ project, busy, action }: {
     fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, {
       cache: "no-store", signal: controller.signal,
     }).then(responseJson).then((body) => {
-      const plan = body.plan as null | { strategy: string; calendar: string; sources: string; revision: number; projectVersion: number };
+      const plan = body.plan as null | { strategy: string; calendar: string; sources: string; revision: number; projectVersion: number; origin: string };
       if (plan) {
         setStrategy(plan.strategy); setCalendar(plan.calendar); setSources(plan.sources);
-        setRevision(plan.revision); setPlanProjectVersion(plan.projectVersion);
+        setRevision(plan.revision); setPlanProjectVersion(plan.projectVersion); setOrigin(plan.origin);
       }
+      setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean });
       setLoadState("ready");
     }).catch(() => { if (!controller.signal.aborted) setLoadState("error"); });
     return () => controller.abort();
-  }, [project._id]);
+  }, [project._id, reload]);
+  const runStatus = run?.status;
+  useEffect(() => {
+    if (!runStatus || !["queued", "running"].includes(runStatus)) return;
+    const controller = new AbortController();
+    const timer = window.setInterval(() => {
+      fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store", signal: controller.signal })
+        .then(responseJson).then((body) => setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean }))
+        .catch(() => {});
+    }, 5000);
+    return () => { window.clearInterval(timer); controller.abort(); };
+  }, [project._id, runStatus]);
   return <form className="grid gap-3 border-t border-line pt-5" onSubmit={async (event) => {
     event.preventDefault();
     const result = await action("save-plan", {
@@ -1386,17 +1403,26 @@ function ProjectPlan({ project, busy, action }: {
     if (result) {
       setRevision(revision + 1);
       setPlanProjectVersion(project.version);
+      setOrigin("owner");
     }
   }}>
     <h3 className="text-sm font-bold">Strategy and content plan</h3>
-    <p className="text-xs leading-5 text-ink-dim">Save your strategy, two-week plan and research sources for this project. This editor saves your own notes; AI planning is not yet connected.</p>
+    <p className="text-xs leading-5 text-ink-dim">Save or edit this project’s strategy and two-week content plan. AI drafts use the confirmed brief; they do not yet include independent market research.</p>
+    <button type="button" className={buttonClass} disabled={busy || loadState !== "ready" || (run?.status === "running" && !run.recoverable)} onClick={async () => {
+      const requestKey = run?.status === "queued" ? run.requestKey : crypto.randomUUID();
+      const result = await action("generate-plan", { projectId: project._id, requestKey });
+      if (result) setRun({ requestKey, status: "queued" });
+      else setRun({ requestKey, status: "queued", error: "Dispatch could not be confirmed. Retry this request." });
+    }}>{run?.status === "queued" ? "Retry planning request" : run?.recoverable ? "Retry timed-out planning" : "Generate AI plan"}</button>
+    {run ? <p className="text-xs text-ink-dim" role="status">AI planning: {run.status}{run.error ? ` · ${run.error}` : ""}</p> : null}
+    {run?.status === "completed" ? <button type="button" className={buttonClass} onClick={() => setReload(value => value + 1)}>Load generated revision</button> : null}
     {loadState === "error" ? <p role="alert">Could not load the saved plan. Refresh to try again.</p> : null}
     {planProjectVersion !== null && planProjectVersion !== project.version ? <p role="alert" className="text-xs text-amber-600">The project brief changed since this plan was saved. Review it against the current brief before saving.</p> : null}
     <Field label="Strategy"><textarea className={inputClass} value={strategy} maxLength={20000} onChange={(event) => setStrategy(event.target.value)} required /></Field>
     <Field label="14-day content plan"><textarea className={inputClass} value={calendar} maxLength={20000} onChange={(event) => setCalendar(event.target.value)} /></Field>
     <Field label="Research sources and assumptions"><textarea className={inputClass} value={sources} maxLength={10000} onChange={(event) => setSources(event.target.value)} /></Field>
     <button className={buttonClass} disabled={busy || loadState !== "ready"}>Save plan revision</button>
-    {revision > 0 ? <p className="text-xs text-ink-dim">Saved revision {revision} · owner-authored</p> : null}
+    {revision > 0 ? <p className="text-xs text-ink-dim">Saved revision {revision} · {origin === "ai" ? "AI-generated draft" : "owner-authored"}</p> : null}
   </form>;
 }
 

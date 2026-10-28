@@ -44,8 +44,12 @@ export async function GET(request: NextRequest) {
     const view = request.nextUrl.searchParams.get("view");
     if (view === "plan") {
       const projectId = id.parse(request.nextUrl.searchParams.get("projectId"));
+      const [plan, run] = await Promise.all([
+        marketingCall("latestPlan", { projectId }),
+        marketingCall("latestPlanRun", { projectId, asOfMinute: Math.floor(Date.now() / 60_000) }),
+      ]);
       return NextResponse.json(
-        { plan: await marketingCall("latestPlan", { projectId }) },
+        { plan, run },
         { headers },
       );
     }
@@ -164,6 +168,23 @@ export async function POST(request: NextRequest) {
         sources: z.string().max(10_000),
       }).strict().parse(input.payload);
       return NextResponse.json({ result: await marketingCall("savePlan", payload) }, { headers });
+    }
+    if (input.action === "generate-plan") {
+      const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
+      const run = await marketingCall<{ runId: string; status: string }>("startPlan", payload);
+      if (run.status === "queued") {
+        const key = process.env.TRIGGER_SECRET_KEY || (await vaultService("trigger")).TRIGGER_SECRET_KEY_MEDIA_ENGINE;
+        if (!key) throw new Error("The AI planning worker is not configured. Retry the same request after setup.");
+        const response = await fetch("https://api.trigger.dev/api/v1/tasks/marketing-ai-plan/trigger", {
+          method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify({ payload: { runId: run.runId }, options: { idempotencyKey: `marketing-plan:${run.runId}`, idempotencyKeyTTL: "7d" } }),
+          signal: AbortSignal.timeout(15_000), redirect: "error",
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || typeof result.id !== "string")
+          throw new Error("Worker dispatch is unconfirmed. Retry this same request before starting another.");
+      }
+      return NextResponse.json({ result: run }, { headers });
     }
     if (input.action === "available-renders") {
       const result = await marketingCall("availableRenders", {

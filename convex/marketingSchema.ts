@@ -84,9 +84,22 @@ export const marketingTables = {
     strategy: v.string(),
     calendar: v.string(),
     sources: v.string(),
-    origin: v.literal("owner"),
+    origin: v.union(v.literal("owner"), v.literal("ai")),
     createdAt: v.number(),
   }).index("by_project_revision", ["projectId", "revision"]),
+
+  marketingPlanRuns: defineTable({
+    organizationId: v.id("organizations"),
+    projectId: v.id("marketingProjects"),
+    requestKey: v.string(),
+    projectVersion: v.number(),
+    baseRevision: v.number(),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("completed"), v.literal("failed")),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_project_request", ["projectId", "requestKey"])
+    .index("by_project_created", ["projectId", "createdAt"]),
 
   marketingProviderAccounts: defineTable({
     providerAccountId: v.string(),

@@ -678,6 +678,37 @@ describe("cost and source policy", () => {
 });
 
 describe("project planning revisions", () => {
+  it("saves a validated worker result as a separate AI revision", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("ai-plan"));
+    const start = makeFunctionReference<"mutation">("marketingPlans:start");
+    const claim = makeFunctionReference<"mutation">("marketingPlans:claim");
+    const finish = makeFunctionReference<"mutation">("marketingPlans:finish");
+    const latest = makeFunctionReference<"query">("marketingPlans:latest");
+    const run = await t.mutation(start, { projectId, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" });
+    await t.mutation(claim, { runId: run.runId });
+    expect(await t.mutation(finish, { runId: run.runId, strategy: "Strategy", calendar: "Calendar", sources: "Brief" })).toEqual({ saved: true });
+    expect(await t.query(latest, { projectId })).toMatchObject({ origin: "ai", strategy: "Strategy", revision: 1 });
+    expect(await t.mutation(finish, { runId: run.runId, strategy: "Duplicate", calendar: "Duplicate" })).toEqual({ saved: false });
+  });
+  it("deduplicates and fences AI runs when a manual plan changes", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("run-a"));
+    const start = makeFunctionReference<"mutation">("marketingPlans:start");
+    const claim = makeFunctionReference<"mutation">("marketingPlans:claim");
+    const finish = makeFunctionReference<"mutation">("marketingPlans:finish");
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const latest = makeFunctionReference<"query">("marketingPlans:latest");
+    const args = { projectId, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" };
+    const first = await t.mutation(start, args);
+    expect(await t.mutation(start, args)).toEqual(first);
+    await expect(t.mutation(start, { ...args, requestKey: "6c23d114-ef9b-41a8-aee4-2728e9fa6dab" })).rejects.toThrow(/already in progress/);
+    expect(await t.mutation(claim, { runId: first.runId })).toMatchObject({ name: "run-a" });
+    expect(await t.mutation(claim, { runId: first.runId })).toBeNull();
+    await t.mutation(save, { projectId, expectedProjectVersion: 1, expectedRevision: 0, strategy: "Owner edits", calendar: "", sources: "" });
+    expect(await t.mutation(finish, { runId: first.runId, strategy: "Model plan", calendar: "Model calendar" })).toEqual({ saved: false });
+    expect(await t.query(latest, { projectId })).toMatchObject({ strategy: "Owner edits", origin: "owner" });
+  });
   it("isolates plans, prevents lost edits and marks a plan stale after a brief change", async () => {
     const t = convexTest(schema, modules);
     const a = await t.mutation(mutation("createProject"), draft("plan-a"));
