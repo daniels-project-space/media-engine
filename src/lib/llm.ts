@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 import { aiEnabled } from "./ai-gate";
 
@@ -22,6 +23,14 @@ export type ChatOpts = {
 
 const run = promisify(execFile);
 const CODEX_STATUS_TIMEOUT_MS = 10_000;
+
+// Trigger installs additional packages in /app/node_modules, but does not
+// automatically add that directory's .bin to the task process PATH.
+export function codexExecutable(): string {
+  if (process.env.CODEX_CLI) return process.env.CODEX_CLI;
+  const packaged = "/app/node_modules/.bin/codex";
+  return existsSync(packaged) ? packaged : "codex";
+}
 
 /**
  * `codex login status` is intentionally the authentication authority here.
@@ -72,7 +81,7 @@ export function codexExecArgs(prompt: string, noTools = false): string[] {
 }
 
 /** Checks local CLI login state; never returns credentials or calls a model. */
-export async function inspectCodexEnvironment(cli = process.env.CODEX_CLI ?? "codex"): Promise<{
+export async function inspectCodexEnvironment(cli = codexExecutable()): Promise<{
   login: "subscription-login" | "unavailable"; cli: "present" | "missing" | "unknown";
   storedCredentialConfigured: boolean;
 }> {
@@ -94,7 +103,7 @@ export async function inspectCodexEnvironment(cli = process.env.CODEX_CLI ?? "co
   }
 }
 
-export async function inspectCodexSubscription(cli = process.env.CODEX_CLI ?? "codex"): Promise<"subscription-login" | "unavailable"> {
+export async function inspectCodexSubscription(cli = codexExecutable()): Promise<"subscription-login" | "unavailable"> {
   return (await inspectCodexEnvironment(cli)).login;
 }
 
@@ -115,7 +124,7 @@ async function chatWithGate(opts: ChatOpts, permitted: () => Promise<boolean>): 
   ].filter(Boolean).join("\n\n");
 
   try {
-    const cli = process.env.CODEX_CLI ?? "codex";
+    const cli = codexExecutable();
     await requireChatGptLogin(cli);
     const { stdout } = await run(cli, codexExecArgs(prompt, opts.noTools), {
       cwd: "/tmp",
