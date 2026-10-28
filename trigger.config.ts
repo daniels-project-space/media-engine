@@ -1,5 +1,5 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
-import { ffmpeg, additionalFiles, syncEnvVars } from "@trigger.dev/build/extensions/core";
+import { ffmpeg, additionalFiles, additionalPackages, syncEnvVars } from "@trigger.dev/build/extensions/core";
 
 function triggerRuntimeEnvironment(): Record<string, string> | undefined {
   const keys = [
@@ -40,6 +40,9 @@ export default defineConfig({
     // Bundle the brand font so ffmpeg drawtext works in the fontless container.
     extensions: [
       ffmpeg({ version: "7" }),
+      // The reasoning worker shells out to this CLI. Pin the version already
+      // used by the owner; do not silently switch providers or model quality.
+      additionalPackages({ packages: ["@openai/codex@0.163.0"] }),
       additionalFiles({ files: ["./assets/brand.ttf"] }),
       syncEnvVars(triggerRuntimeEnvironment),
     ],
