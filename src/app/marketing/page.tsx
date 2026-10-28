@@ -664,7 +664,9 @@ export default function Marketing() {
                       busy={busy}
                       action={action}
                     />
-                    <ProjectPlan key={project._id} project={project} busy={busy} action={action} />
+                    <div key={`plan-${project._id}`}>
+                      <ProjectPlan project={project} channels={channels} accounts={workspace.accounts} busy={busy} action={action} />
+                    </div>
                     <form
                       onSubmit={upload}
                       className="grid gap-3 border-t border-line pt-5"
@@ -690,7 +692,7 @@ export default function Marketing() {
                       </p>
                     </form>
                     <RenderReuse
-                      key={projectId}
+                      key={`render-${projectId}`}
                       projectId={projectId}
                       imports={selected ? workspace.renderImports : []}
                       busy={busy}
@@ -1354,8 +1356,10 @@ function DraftEditor({
   );
 }
 
-function ProjectPlan({ project, busy, action }: {
+function ProjectPlan({ project, channels, accounts, busy, action }: {
   project: Project;
+  channels: Doc<"marketingChannels">[];
+  accounts: Doc<"marketingProviderAccounts">[];
   busy: boolean;
   action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
 }) {
@@ -1363,6 +1367,8 @@ function ProjectPlan({ project, busy, action }: {
   const [calendar, setCalendar] = useState("");
   const [sources, setSources] = useState("");
   const [revision, setRevision] = useState(0);
+  const [planId, setPlanId] = useState("");
+  const [savedCalendar, setSavedCalendar] = useState("");
   const [origin, setOrigin] = useState("owner");
   const [run, setRun] = useState<null | { status: string; requestKey: string; error?: string; recoverable?: boolean }>(null);
   const [reload, setReload] = useState(0);
@@ -1373,9 +1379,10 @@ function ProjectPlan({ project, busy, action }: {
     fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, {
       cache: "no-store", signal: controller.signal,
     }).then(responseJson).then((body) => {
-      const plan = body.plan as null | { strategy: string; calendar: string; sources: string; revision: number; projectVersion: number; origin: string };
+      const plan = body.plan as null | { _id: string; strategy: string; calendar: string; sources: string; revision: number; projectVersion: number; origin: string };
       if (plan) {
         setStrategy(plan.strategy); setCalendar(plan.calendar); setSources(plan.sources);
+        setSavedCalendar(plan.calendar); setPlanId(plan._id);
         setRevision(plan.revision); setPlanProjectVersion(plan.projectVersion); setOrigin(plan.origin);
       }
       setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean });
@@ -1394,13 +1401,16 @@ function ProjectPlan({ project, busy, action }: {
     }, 5000);
     return () => { window.clearInterval(timer); controller.abort(); };
   }, [project._id, runStatus]);
-  return <form className="grid gap-3 border-t border-line pt-5" onSubmit={async (event) => {
+  return <><form className="grid gap-3 border-t border-line pt-5" onSubmit={async (event) => {
     event.preventDefault();
     const result = await action("save-plan", {
       projectId: project._id, expectedProjectVersion: project.version,
       expectedRevision: revision, strategy, calendar, sources,
     });
     if (result) {
+      const saved = result.result as { planId?: string } | undefined;
+      if (saved?.planId) setPlanId(saved.planId);
+      setSavedCalendar(calendar);
       setRevision(revision + 1);
       setPlanProjectVersion(project.version);
       setOrigin("owner");
@@ -1423,7 +1433,47 @@ function ProjectPlan({ project, busy, action }: {
     <Field label="Research sources and assumptions"><textarea className={inputClass} value={sources} maxLength={10000} onChange={(event) => setSources(event.target.value)} /></Field>
     <button className={buttonClass} disabled={busy || loadState !== "ready"}>Save plan revision</button>
     {revision > 0 ? <p className="text-xs text-ink-dim">Saved revision {revision} · {origin === "ai" ? "AI-generated draft" : "owner-authored"}</p> : null}
-  </form>;
+  </form>
+  <PlanCalendar project={project} planId={planId} calendar={savedCalendar} stale={planProjectVersion !== project.version || calendar !== savedCalendar} channels={channels} accounts={accounts} busy={busy} action={action} />
+  </>;
+}
+
+function PlanCalendar({ project, planId, calendar, stale, channels, accounts, busy, action }: {
+  project: Project; planId: string; calendar: string; stale: boolean;
+  channels: Doc<"marketingChannels">[]; accounts: Doc<"marketingProviderAccounts">[]; busy: boolean;
+  action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+}) {
+  type CalendarEntry = { day: number; channel: string; format: string; rationale: string; caption: string; hashtags: string[]; videoScript: string };
+  let entries: Array<{ entry: CalendarEntry; index: number }> = [];
+  try {
+    const value: unknown = JSON.parse(calendar);
+    if (Array.isArray(value)) entries = value.map((entry, index) => ({ entry, index })).filter(({ entry }) =>
+      entry && Number.isInteger(entry.day) && entry.day >= 1 && entry.day <= 14 && typeof entry.channel === "string" &&
+      typeof entry.format === "string" && typeof entry.caption === "string" && typeof entry.rationale === "string" &&
+      typeof entry.videoScript === "string" && Array.isArray(entry.hashtags) && entry.hashtags.every((tag: unknown) => typeof tag === "string"));
+  } catch { /* An owner-authored free-text plan has no structured entries. */ }
+  if (!entries.length || !planId) return null;
+  return <div className="grid gap-3 border-t border-line pt-5">
+    <h3 className="text-sm font-bold">Calendar drafts</h3>
+    <p className="text-xs leading-5 text-ink-dim">Each draft proposes 09:00 in {project.timezone}, on the indicated day from today. Review before approving; creating a draft does not publish it.</p>
+    {stale ? <p className="text-xs text-amber-600" role="status">Save and review the current plan before creating drafts.</p> : null}
+    {entries.map(({ entry, index }) => {
+      const eligible = channels.filter(channel => accounts.some(account => account._id === channel.accountId && account.platform === entry.channel));
+      return <div key={`${index}-${entry.day}`} className="grid gap-2 rounded-xl border border-line p-3">
+        <p className="text-xs font-bold">Day {entry.day} · {entry.channel} · {entry.format}</p>
+        <p className="whitespace-pre-wrap text-xs leading-5 text-ink-dim">{entry.caption}</p>
+        {Array.isArray(entry.hashtags) && entry.hashtags.length ? <p className="text-xs text-ink-dim">{entry.hashtags.join(" ")}</p> : null}
+        {entry.rationale ? <p className="text-xs text-ink-dim">Why: {entry.rationale}</p> : null}
+        {entry.videoScript ? <details className="text-xs text-ink-dim"><summary>Video script</summary><p className="whitespace-pre-wrap">{entry.videoScript}</p></details> : null}
+        {eligible.length ? <form className="flex flex-wrap gap-2" onSubmit={async event => {
+          event.preventDefault();
+          await action("create-plan-draft", { projectId: project._id, planId, entryIndex: index, channelId: new FormData(event.currentTarget).get("channelId") });
+        }}><select name="channelId" className={inputClass} aria-label={`Channel for day ${entry.day}`} required>
+          {eligible.map(channel => <option key={channel._id} value={channel._id}>{accounts.find(account => account._id === channel.accountId)?.label ?? "Channel"}</option>)}
+        </select><button className={buttonClass} disabled={busy || stale}>Create review draft</button></form> : <p className="text-xs text-ink-dim">Connect a matching channel to create a review draft.</p>}
+      </div>;
+    })}
+  </div>;
 }
 
 function RenderReuse({

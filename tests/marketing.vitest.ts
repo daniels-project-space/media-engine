@@ -678,6 +678,23 @@ describe("cost and source policy", () => {
 });
 
 describe("project planning revisions", () => {
+  it("turns a saved calendar entry into one isolated review draft without dispatch", async () => {
+    const f = await projects();
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const create = makeFunctionReference<"mutation">("marketingPlans:createDraft");
+    const calendar = JSON.stringify([{ day: 2, channel: "x", format: "Introduction", rationale: "Explain the offer", caption: "Meet our tool", hashtags: ["#design"], videoScript: "" }]);
+    const plan = await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedRevision: 0, strategy: "Useful strategy", calendar, sources: "Owner brief" });
+    const args = { projectId: f.a, planId: plan.planId, entryIndex: 0, channelId: f.channelA };
+    await expect(f.t.mutation(create, { ...args, channelId: f.channelB })).rejects.toThrow(/does not belong/);
+    const draftItem = await f.t.mutation(create, args);
+    expect(await f.t.mutation(create, args)).toEqual({ itemId: draftItem.itemId, reused: true });
+    const workspace = await f.t.query(query("listWorkspace"), { projectId: f.a });
+    expect(workspace.items).toHaveLength(1);
+    expect(workspace.items[0]).toMatchObject({ status: "draft", planId: plan.planId, content: "Meet our tool\n\n#design" });
+    expect((await f.t.query(query("listWorkspace"), { projectId: f.b })).items).toHaveLength(0);
+    await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedRevision: 1, strategy: "Revised strategy", calendar, sources: "Owner brief" });
+    await expect(f.t.mutation(create, args)).rejects.toThrow(/current plan/);
+  });
   it("saves a validated worker result as a separate AI revision", async () => {
     const t = convexTest(schema, modules);
     const projectId = await t.mutation(mutation("createProject"), draft("ai-plan"));

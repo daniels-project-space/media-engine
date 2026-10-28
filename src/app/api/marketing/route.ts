@@ -169,6 +169,10 @@ export async function POST(request: NextRequest) {
       }).strict().parse(input.payload);
       return NextResponse.json({ result: await marketingCall("savePlan", payload) }, { headers });
     }
+    if (input.action === "create-plan-draft") {
+      const payload = z.object({ projectId: id, planId: id, entryIndex: z.number().int().min(0).max(27), channelId: id }).strict().parse(input.payload);
+      return NextResponse.json({ result: await marketingCall("createPlanDraft", payload) }, { headers });
+    }
     if (input.action === "generate-plan") {
       const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
       const run = await marketingCall<{ runId: string; status: string }>("startPlan", payload);

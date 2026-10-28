@@ -178,6 +178,8 @@ export const marketingTables = {
   marketingItems: defineTable({
     organizationId: v.optional(v.id("organizations")),
     projectId: v.id("marketingProjects"),
+    planId: v.optional(v.id("marketingPlans")),
+    planEntryIndex: v.optional(v.number()),
     channelId: v.id("marketingChannels"),
     kind: v.union(v.literal("post"), v.literal("ad")),
     title: v.string(),
