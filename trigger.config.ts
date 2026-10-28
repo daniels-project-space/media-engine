@@ -6,6 +6,15 @@ function triggerRuntimeEnvironment(): Record<string, string> | undefined {
     "VAULT_ACCESS_TOKEN",
     "FORM_SEVEN_OUTBOX_DRAIN_URL",
     "FORM_SEVEN_OUTBOX_DRAIN_TOKEN",
+    // These flags are permissions, not proof of live qualification. All are
+    // absent/disabled by default; account IDs are an explicit dispatch allowlist.
+    "MARKETING_AUTOMATION_ENABLED",
+    "MARKETING_ZERNIO_QUALIFIED",
+    "MARKETING_PUBLISH_ENABLED",
+    "MARKETING_ADS_ENABLED",
+    "MARKETING_METRICS_ENABLED",
+    "MARKETING_AUTHORISED_ACCOUNT_IDS",
+    "MARKETING_PRICING_VERIFIED_AT",
   ] as const;
   const values = Object.fromEntries(
     keys.flatMap((key) => {

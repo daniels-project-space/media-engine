@@ -12,6 +12,7 @@ type NavigationSection = { label: string; items: NavigationItem[] };
 // governed replacement for the legacy control plane.
 const NAVIGATION: NavigationSection[] = [
   { label: "Home", items: [{ href: "/", label: "Overview", detail: "Work needing attention" }] },
+  { label: "Marketing", items: [{ href: "/marketing", label: "Project marketing", detail: "Projects, content, campaigns and verified results" }] },
   {
     label: "Control center",
     items: [
@@ -82,7 +83,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-void md:flex">
       {navOpen && <button aria-label="Close navigation" onClick={() => setNavOpen(false)} className="fixed inset-0 z-30 bg-black/60 md:hidden" />}
-      <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-line bg-panel shadow-2xl transition-transform md:static md:translate-x-0 md:shadow-none ${navOpen ? "translate-x-0" : "-translate-x-full"}`}>
+      <aside className={`fixed inset-y-0 left-0 z-40 w-72 shrink-0 flex-col border-r border-line bg-panel shadow-2xl md:static md:flex md:shadow-none ${navOpen ? "flex" : "hidden"}`}>
         <div className="flex h-16 items-center justify-between border-b border-line px-5">
           <Link href="/" className="flex items-center gap-3" onClick={() => setNavOpen(false)}>
             <span className="grid size-8 place-items-center rounded-sm bg-signal text-xs font-extrabold text-void">ME</span>

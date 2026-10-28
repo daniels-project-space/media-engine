@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local analysis and anonymous development are not application inputs.
+.convex/
+.serena/
+.agents/
+.trigger/
+graphify-out/
