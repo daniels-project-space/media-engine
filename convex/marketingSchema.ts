@@ -74,6 +74,20 @@ export const marketingTables = {
     .index("by_organization_onboarding", ["organizationId", "onboardingKey"])
     .index("by_status_next_plan", ["status", "nextPlanAt"]),
 
+  // Immutable revisions keep a project brief change from silently rewriting
+  // an owner's planning work. These are planning documents, not publish jobs.
+  marketingPlans: defineTable({
+    organizationId: v.id("organizations"),
+    projectId: v.id("marketingProjects"),
+    projectVersion: v.number(),
+    revision: v.number(),
+    strategy: v.string(),
+    calendar: v.string(),
+    sources: v.string(),
+    origin: v.literal("owner"),
+    createdAt: v.number(),
+  }).index("by_project_revision", ["projectId", "revision"]),
+
   marketingProviderAccounts: defineTable({
     providerAccountId: v.string(),
     profileId: v.string(),

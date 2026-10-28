@@ -676,3 +676,27 @@ describe("cost and source policy", () => {
     expect(snapshotHash({ a: 2 })).not.toBe(snapshotHash({ a: 1 }));
   });
 });
+
+describe("project planning revisions", () => {
+  it("isolates plans, prevents lost edits and marks a plan stale after a brief change", async () => {
+    const t = convexTest(schema, modules);
+    const a = await t.mutation(mutation("createProject"), draft("plan-a"));
+    const b = await t.mutation(mutation("createProject"), draft("plan-b"));
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const latest = makeFunctionReference<"query">("marketingPlans:latest");
+    const input = { projectId: a, expectedProjectVersion: 1, expectedRevision: 0,
+      strategy: "Serve alpha customers", calendar: "Day 1: introduction", sources: "Owner brief" };
+    await t.mutation(save, input);
+    expect(await t.query(latest, { projectId: b })).toBeNull();
+    await expect(t.mutation(save, input)).rejects.toThrow(/Plan changed/);
+    const plan = await t.query(latest, { projectId: a });
+    expect(plan).toMatchObject({ strategy: input.strategy, revision: 1, stale: false, origin: "owner" });
+    await expect(t.mutation(mutation("removeEmptyProject"), { projectId: a, expectedName: "plan-a" })).rejects.toThrow(/content or connections/);
+    const { name, website, offer, audience, facts, tone, timezone, cadence, generationLimitMinor, advertisingLimitMinor } = draft("plan-a");
+    await t.mutation(mutation("updateProject"), { projectId: a, expectedVersion: 1, name,
+      website, offer: `${offer} revised`, audience, facts, tone, timezone, cadence,
+      generationLimitMinor, advertisingLimitMinor });
+    expect(await t.query(latest, { projectId: a })).toMatchObject({ revision: 1, stale: true });
+    await expect(t.mutation(save, { ...input, expectedRevision: 1 })).rejects.toThrow(/brief changed/);
+  });
+});

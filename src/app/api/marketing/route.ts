@@ -42,6 +42,13 @@ export async function GET(request: NextRequest) {
   if (denied) return denied;
   try {
     const view = request.nextUrl.searchParams.get("view");
+    if (view === "plan") {
+      const projectId = id.parse(request.nextUrl.searchParams.get("projectId"));
+      return NextResponse.json(
+        { plan: await marketingCall("latestPlan", { projectId }) },
+        { headers },
+      );
+    }
     if (view === "overview")
       return NextResponse.json(
         await marketingCall("overview", {
@@ -146,6 +153,17 @@ export async function POST(request: NextRequest) {
         .parse(input.payload);
       const result = await marketingCall("updateProject", payload);
       return NextResponse.json({ result }, { headers });
+    }
+    if (input.action === "save-plan") {
+      const payload = z.object({
+        projectId: id,
+        expectedProjectVersion: z.number().int().min(1),
+        expectedRevision: z.number().int().min(0),
+        strategy: z.string().min(1).max(20_000),
+        calendar: z.string().max(20_000),
+        sources: z.string().max(10_000),
+      }).strict().parse(input.payload);
+      return NextResponse.json({ result: await marketingCall("savePlan", payload) }, { headers });
     }
     if (input.action === "available-renders") {
       const result = await marketingCall("availableRenders", {

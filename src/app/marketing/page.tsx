@@ -662,6 +662,7 @@ export default function Marketing() {
                       busy={busy}
                       action={action}
                     />
+                    <ProjectPlan key={project._id} project={project} busy={busy} action={action} />
                     <form
                       onSubmit={upload}
                       className="grid gap-3 border-t border-line pt-5"
@@ -1349,6 +1350,54 @@ function DraftEditor({
       </form>
     </details>
   );
+}
+
+function ProjectPlan({ project, busy, action }: {
+  project: Project;
+  busy: boolean;
+  action: (name: string, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+}) {
+  const [strategy, setStrategy] = useState("");
+  const [calendar, setCalendar] = useState("");
+  const [sources, setSources] = useState("");
+  const [revision, setRevision] = useState(0);
+  const [planProjectVersion, setPlanProjectVersion] = useState<number | null>(null);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, {
+      cache: "no-store", signal: controller.signal,
+    }).then(responseJson).then((body) => {
+      const plan = body.plan as null | { strategy: string; calendar: string; sources: string; revision: number; projectVersion: number };
+      if (plan) {
+        setStrategy(plan.strategy); setCalendar(plan.calendar); setSources(plan.sources);
+        setRevision(plan.revision); setPlanProjectVersion(plan.projectVersion);
+      }
+      setLoadState("ready");
+    }).catch(() => { if (!controller.signal.aborted) setLoadState("error"); });
+    return () => controller.abort();
+  }, [project._id]);
+  return <form className="grid gap-3 border-t border-line pt-5" onSubmit={async (event) => {
+    event.preventDefault();
+    const result = await action("save-plan", {
+      projectId: project._id, expectedProjectVersion: project.version,
+      expectedRevision: revision, strategy, calendar, sources,
+    });
+    if (result) {
+      setRevision(revision + 1);
+      setPlanProjectVersion(project.version);
+    }
+  }}>
+    <h3 className="text-sm font-bold">Strategy and content plan</h3>
+    <p className="text-xs leading-5 text-ink-dim">Save your strategy, two-week plan and research sources for this project. This editor saves your own notes; AI planning is not yet connected.</p>
+    {loadState === "error" ? <p role="alert">Could not load the saved plan. Refresh to try again.</p> : null}
+    {planProjectVersion !== null && planProjectVersion !== project.version ? <p role="alert" className="text-xs text-amber-600">The project brief changed since this plan was saved. Review it against the current brief before saving.</p> : null}
+    <Field label="Strategy"><textarea className={inputClass} value={strategy} maxLength={20000} onChange={(event) => setStrategy(event.target.value)} required /></Field>
+    <Field label="14-day content plan"><textarea className={inputClass} value={calendar} maxLength={20000} onChange={(event) => setCalendar(event.target.value)} /></Field>
+    <Field label="Research sources and assumptions"><textarea className={inputClass} value={sources} maxLength={10000} onChange={(event) => setSources(event.target.value)} /></Field>
+    <button className={buttonClass} disabled={busy || loadState !== "ready"}>Save plan revision</button>
+    {revision > 0 ? <p className="text-xs text-ink-dim">Saved revision {revision} · owner-authored</p> : null}
+  </form>;
 }
 
 function RenderReuse({

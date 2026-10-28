@@ -5,6 +5,7 @@ import { v } from "convex/values";
 // This fixed dispatch table is a server capability boundary, not a public RPC
 // proxy. No caller may choose an arbitrary Convex module or function.
 const mutations = {
+  savePlan: "marketingPlans:save",
   createProject: "marketing:createProject",
   updateProject: "marketing:updateProject",
   recordCost: "marketingOverview:recordCost",
@@ -33,6 +34,7 @@ const mutations = {
   settleRenderImport: "marketingRenders:settleImport",
 } as const;
 const queries = {
+  latestPlan: "marketingPlans:latest",
   overview: "marketingOverview:overview",
   contentTable: "marketingOverview:contentTable",
   listWorkspace: "marketing:listWorkspace",
