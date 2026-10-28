@@ -76,6 +76,7 @@ async function prepareHyperMediaRequest(projectId: string, briefId: string, envi
   const template = buildHyperMediaRequestTemplate(preflight.model, brief.prompt, brief.format);
   const blockers: HyperRenderBlocker[] = [];
   if (!template.nativeQualified) blockers.push("native-model-unqualified");
+  if (!preflight.gpuProfileVerified) blockers.push("gpu-profile-unverified");
   if (preflight.projectConnection === "missing") blockers.push("project-connection-missing");
   if (preflight.projectConnection === "unavailable") blockers.push("project-connection-unavailable");
   if (!environmentId) blockers.push("environment-required");

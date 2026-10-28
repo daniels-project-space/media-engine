@@ -124,6 +124,7 @@ export const marketingTables = {
       settings: v.union(v.object({}), v.object({ width: v.number(), height: v.number() })),
       blockers: v.array(v.union(
         v.literal("native-model-unqualified"),
+        v.literal("gpu-profile-unverified"),
         v.literal("project-connection-missing"),
         v.literal("project-connection-unavailable"),
         v.literal("environment-required"),

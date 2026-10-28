@@ -65,8 +65,9 @@ The new service catalogue reports the initial and future hardware profile and
 model-specific qualified GPU types. As checked on 28 October 2026 it reported
 `rtx3090` initially, `rtx5090` as future hardware, and no native-qualified model
 routes. The UI reads that catalogue live; neither GPU name implies available
-capacity or permission to render. Refresh and verify model qualification before
-any pilot.
+capacity or permission to render. Preflight also fails closed unless that live
+profile still matches the pinned 3090-initial / 5090-future plan. Refresh and
+verify model qualification before any pilot.
 5. Generate a structured two-week strategy and calendar when the configured
    Codex subscription worker and owner AI gate are available. Items include
    channel copy, hashtags, proposed local times, CTAs, confirmed promotions,
