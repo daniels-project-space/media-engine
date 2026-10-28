@@ -186,6 +186,23 @@ export async function POST(request: NextRequest) {
       }
       return NextResponse.json({ result: run }, { headers });
     }
+    if (input.action === "import-hyper-render") {
+      const payload = z.object({ projectId: id, jobId: z.string().uuid().transform(value => value.toLowerCase()), rightsConfirmed: z.literal(true) }).strict().parse(input.payload);
+      const imported = await marketingCall<{ importId: string; attempt: number; status: string }>("requestHyperImport", payload);
+      if (imported.status === "queued") {
+        const key = process.env.TRIGGER_SECRET_KEY || (await vaultService("trigger")).TRIGGER_SECRET_KEY_MEDIA_ENGINE;
+        if (!key) throw new Error("The import worker is not configured. Retry this same request after setup.");
+        const response = await fetch("https://api.trigger.dev/api/v1/tasks/marketing-hyper-import/trigger", {
+          method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify({ payload: { projectId: payload.projectId, importId: imported.importId, attempt: imported.attempt },
+            options: { idempotencyKey: `hyper-import:${imported.importId}:${imported.attempt}`, idempotencyKeyTTL: "7d" } }),
+          signal: AbortSignal.timeout(15_000), redirect: "error",
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || typeof result.id !== "string") throw new Error("Import dispatch is unconfirmed. Retry this same request.");
+      }
+      return NextResponse.json({ result: imported }, { headers });
+    }
     if (input.action === "available-renders") {
       const result = await marketingCall("availableRenders", {
         projectId: id.parse(input.payload.projectId),

@@ -731,3 +731,30 @@ describe("project planning revisions", () => {
     await expect(t.mutation(save, { ...input, expectedRevision: 1 })).rejects.toThrow(/brief changed/);
   });
 });
+
+describe("new-service render import", () => {
+  it("requires rights, claims once, fences workers and registers only a scoped verified receipt", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("hyper-import"));
+    const other = await t.mutation(mutation("createProject"), draft("hyper-other"));
+    const req = makeFunctionReference<"mutation">("marketingHyperImports:request");
+    const claim = makeFunctionReference<"mutation">("marketingHyperImports:claim");
+    const settle = makeFunctionReference<"mutation">("marketingHyperImports:settle");
+    const jobId = "6c23d114-ef9b-41a8-aee4-2728e9fa6dab";
+    await expect(t.mutation(req, { projectId, jobId, rightsConfirmed: false })).rejects.toThrow(/rights/);
+    const pending = await t.mutation(req, { projectId, jobId, rightsConfirmed: true });
+    expect(await t.mutation(req, { projectId, jobId, rightsConfirmed: true })).toEqual(pending);
+    const identity = { projectId, importId: pending.importId, attempt: 1, workerRunId: "worker-1" };
+    await expect(t.mutation(claim, { ...identity, projectId: other })).rejects.toThrow();
+    await t.mutation(claim, identity);
+    await expect(t.mutation(claim, identity)).rejects.toThrow();
+    const sha256 = "a".repeat(64);
+    const receipt = { key: `marketing/${projectId}/assets/${sha256}.png`, sha256, bytes: 50, contentType: "image/png" };
+    await expect(t.mutation(settle, { ...identity, workerRunId: "wrong", receipt })).rejects.toThrow();
+    await expect(t.mutation(settle, { ...identity, receipt: { ...receipt, key: `marketing/${other}/assets/${sha256}.png` } })).rejects.toThrow(/invalid/);
+    expect(await t.mutation(settle, { ...identity, receipt })).toMatchObject({ status: "verified" });
+    const workspace = await t.query(query("listWorkspace"), { projectId });
+    expect(workspace.assets).toHaveLength(1);
+    expect((await t.query(query("listWorkspace"), { projectId: other })).assets).toHaveLength(0);
+  });
+});

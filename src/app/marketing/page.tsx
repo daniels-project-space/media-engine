@@ -1448,6 +1448,7 @@ function RenderReuse({
   );
   const [connectionStatus, setConnectionStatus] = useState("");
   const [hyperJobId, setHyperJobId] = useState("");
+  const [hyperRights, setHyperRights] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/marketing/render-readiness", { signal: controller.signal })
@@ -1490,9 +1491,18 @@ function RenderReuse({
             const data = await responseJson(await fetch(`/api/marketing/hyper-project?${params}`, { cache: "no-store" }));
             if (!data.connected) { setConnectionStatus("This project has no configured new-service connection."); return; }
             const job = data.job as null | { state: string; modelId: string; receipt: null | { available: boolean } };
-            setConnectionStatus(job ? `Job ${job.state} · ${job.modelId}. ${job.receipt ? "A project-scoped receipt exists; Media Engine has not independently verified its object hash." : "No output receipt yet."}` : "Project credential and storage scope verified. Render submission remains disabled.");
+            const imported = data.latestImport as null | { status: string; error?: string };
+            setConnectionStatus(job ? `Job ${job.state} · ${job.modelId}. ${job.receipt ? "A project-scoped receipt exists." : "No output receipt yet."}${imported ? ` Import: ${imported.status}${imported.error ? ` · ${imported.error}` : ""}.` : " Object hash not yet verified by Media Engine."}` : "Project credential and storage scope verified. Render submission remains disabled.");
           } catch { setConnectionStatus("Could not verify the project connection or job. Check its setup and try again."); }
         }}>Check new-service connection</button>
+        <label className="flex gap-2 text-xs text-ink-dim"><input type="checkbox" checked={hyperRights} onChange={(event) => setHyperRights(event.target.checked)} />I have permission to use this completed job for this project.</label>
+        <button type="button" className={buttonClass} disabled={busy || !hyperRights || !hyperJobId.trim()} onClick={async () => {
+          const result = await action("import-hyper-render", { projectId, jobId: hyperJobId.trim(), rightsConfirmed: true });
+          if (result) {
+            const receipt = result.result as { status?: string } | undefined;
+            setConnectionStatus(receipt?.status === "verified" ? "This render was already verified and imported." : "Import requested. Check the job again to see verification status.");
+          }
+        }}>Verify and import completed render</button>
         {connectionStatus ? <p className="text-xs leading-5 text-ink-dim" role="status">{connectionStatus}</p> : null}
       </div>
       <h3 className="text-sm font-bold">Reuse an approved final video</h3>

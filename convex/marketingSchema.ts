@@ -101,6 +101,14 @@ export const marketingTables = {
   }).index("by_project_request", ["projectId", "requestKey"])
     .index("by_project_created", ["projectId", "createdAt"]),
 
+  marketingHyperImports: defineTable({
+    projectId: v.id("marketingProjects"), jobId: v.string(),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("verified"), v.literal("failed")),
+    attempt: v.number(), workerRunId: v.optional(v.string()),
+    assetId: v.optional(v.id("marketingAssets")), error: v.optional(v.string()),
+    createdAt: v.number(), updatedAt: v.number(),
+  }).index("by_project_job", ["projectId", "jobId"]).index("by_project_created", ["projectId", "createdAt"]),
+
   marketingProviderAccounts: defineTable({
     providerAccountId: v.string(),
     profileId: v.string(),

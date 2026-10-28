@@ -13,8 +13,10 @@ export async function GET(request: NextRequest) {
     await marketingCall("listWorkspace", { projectId });
     const connection = await hyperProjectConnection(projectId);
     if (!connection) return NextResponse.json({ connected: false, dispatchEnabled: false }, { headers });
-    const jobId = request.nextUrl.searchParams.get("jobId") || undefined;
-    return NextResponse.json(await inspectHyperProject(connection, jobId), { headers });
+    const jobId = request.nextUrl.searchParams.get("jobId")?.toLowerCase() || undefined;
+    const result = await inspectHyperProject(connection, jobId);
+    const latestImport = jobId ? await marketingCall("latestHyperImport", { projectId, jobId }) : null;
+    return NextResponse.json({ ...result, latestImport }, { headers });
   } catch {
     return NextResponse.json({ error: "Could not verify this project's new rendering service connection or job." }, { status: 503, headers });
   }

@@ -9,6 +9,9 @@ const mutations = {
   startPlan: "marketingPlans:start",
   claimPlan: "marketingPlans:claim",
   finishPlan: "marketingPlans:finish",
+  requestHyperImport: "marketingHyperImports:request",
+  claimHyperImport: "marketingHyperImports:claim",
+  settleHyperImport: "marketingHyperImports:settle",
   createProject: "marketing:createProject",
   updateProject: "marketing:updateProject",
   recordCost: "marketingOverview:recordCost",
@@ -39,6 +42,7 @@ const mutations = {
 const queries = {
   latestPlan: "marketingPlans:latest",
   latestPlanRun: "marketingPlans:latestRun",
+  latestHyperImport: "marketingHyperImports:latest",
   overview: "marketingOverview:overview",
   contentTable: "marketingOverview:contentTable",
   listWorkspace: "marketing:listWorkspace",
