@@ -37,6 +37,7 @@ import type * as marketingOverview from "../marketingOverview.js";
 import type * as marketingPlans from "../marketingPlans.js";
 import type * as marketingPolicy from "../marketingPolicy.js";
 import type * as marketingRenders from "../marketingRenders.js";
+import type * as marketingResearch from "../marketingResearch.js";
 import type * as marketingSchema from "../marketingSchema.js";
 import type * as marketingSnapshots from "../marketingSnapshots.js";
 import type * as marketingStats from "../marketingStats.js";
@@ -93,6 +94,7 @@ declare const fullApi: ApiFromModules<{
   marketingPlans: typeof marketingPlans;
   marketingPolicy: typeof marketingPolicy;
   marketingRenders: typeof marketingRenders;
+  marketingResearch: typeof marketingResearch;
   marketingSchema: typeof marketingSchema;
   marketingSnapshots: typeof marketingSnapshots;
   marketingStats: typeof marketingStats;

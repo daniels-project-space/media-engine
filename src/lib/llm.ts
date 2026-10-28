@@ -15,6 +15,9 @@ export type ChatOpts = {
   json?: boolean;
   temperature?: number;
   maxTokens?: number;
+  // For untrusted third-party source material: disable command, connector,
+  // delegation, hook and web-search features in the subscription worker.
+  noTools?: boolean;
 };
 
 const run = promisify(execFile);
@@ -62,6 +65,12 @@ export function codexChildEnv(parent: NodeJS.ProcessEnv = process.env): NodeJS.P
   };
 }
 
+export function codexExecArgs(prompt: string, noTools = false): string[] {
+  return ["--config", 'forced_login_method="chatgpt"', "exec",
+    ...(noTools ? ["--disable", "shell_tool", "--disable", "apps", "--disable", "multi_agent", "--disable", "goals", "--disable", "hooks", "--config", 'web_search="disabled"'] : []),
+    "--ephemeral", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", prompt];
+}
+
 async function requireChatGptLogin(cli: string): Promise<void> {
   try {
     const { stdout } = await run(cli, ["login", "status"], {
@@ -92,19 +101,7 @@ export async function chat(opts: ChatOpts): Promise<string> {
   try {
     const cli = process.env.CODEX_CLI ?? "codex";
     await requireChatGptLogin(cli);
-    const { stdout } = await run(cli, [
-      // This is defense in depth for the status gate above. The CLI itself
-      // rejects any non-ChatGPT saved credential before it can run a prompt.
-      "--config", 'forced_login_method="chatgpt"',
-      "exec",
-      "--ephemeral",
-      "--ignore-user-config",
-      "--ignore-rules",
-      "--sandbox", "read-only",
-      "--skip-git-repo-check",
-      "--color", "never",
-      prompt,
-    ], {
+    const { stdout } = await run(cli, codexExecArgs(prompt, opts.noTools), {
       cwd: "/tmp",
       timeout: 170_000,
       maxBuffer: 24 * 1024 * 1024,

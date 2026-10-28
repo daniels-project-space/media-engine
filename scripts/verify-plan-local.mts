@@ -33,6 +33,9 @@ try {
   await page.getByRole("combobox", { name: "Current project" }).selectOption(projectId);
   await expect(page.getByRole("heading", { name: `Local plan ${run}`, exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Strategy and content plan" })).toHaveCount(1);
+  await page.getByLabel("Public research URL").fill("https://media-engine-seven.vercel.app/");
+  await page.getByRole("button", { name: "Capture source" }).click();
+  await expect.poll(async () => (await call("listResearch", { projectId }) as unknown[]).length, { timeout: 20_000 }).toBe(1);
   const strategy = page.getByLabel("Strategy", { exact: true });
   await expect(strategy).toBeVisible();
   await strategy.fill("A useful local strategy for testers.");

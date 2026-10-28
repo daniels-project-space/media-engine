@@ -678,12 +678,47 @@ describe("cost and source policy", () => {
 });
 
 describe("project planning revisions", () => {
+  it("isolates attributed research and fences planning if source evidence changes", async () => {
+    const t = convexTest(schema, modules);
+    const a = await t.mutation(mutation("createProject"), draft("research-a"));
+    const b = await t.mutation(mutation("createProject"), draft("research-b"));
+    const research = makeFunctionReference<"mutation">("marketingResearch:save");
+    const list = makeFunctionReference<"query">("marketingResearch:list");
+    const save = makeFunctionReference<"mutation">("marketingPlans:save");
+    const latest = makeFunctionReference<"query">("marketingPlans:latest");
+    const start = makeFunctionReference<"mutation">("marketingPlans:start");
+    const claim = makeFunctionReference<"mutation">("marketingPlans:claim");
+    const finish = makeFunctionReference<"mutation">("marketingPlans:finish");
+    const source = { projectId: a, expectedProjectVersion: 1, url: "https://competitor.example/", title: "Competitor", description: "Source claim", excerpt: "Untrusted page content", kind: "reference", capturedAt: Date.now() };
+    await t.mutation(research, source);
+    expect(await t.mutation(research, { ...source, capturedAt: Date.now() })).toMatchObject({ changed: false, researchVersion: 1 });
+    expect(await t.query(list, { projectId: b })).toEqual([]);
+    await t.mutation(save, { projectId: a, expectedProjectVersion: 1, expectedResearchVersion: 1, expectedRevision: 0, strategy: "Owner strategy", calendar: "", sources: "Reference" });
+    const run = await t.mutation(start, { projectId: a, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" });
+    const context = await t.mutation(claim, { runId: run.runId });
+    expect(context.research).toMatchObject([{ url: source.url, excerpt: source.excerpt }]);
+    await t.mutation(research, { ...source, excerpt: "Changed source content", capturedAt: Date.now() });
+    expect(await t.query(latest, { projectId: a })).toMatchObject({ stale: true });
+    expect(await t.mutation(finish, { runId: run.runId, strategy: "AI", calendar: "Plan" })).toEqual({ saved: false });
+    await expect(t.mutation(save, { projectId: a, expectedProjectVersion: 1, expectedResearchVersion: 1, expectedRevision: 1, strategy: "Old", calendar: "", sources: "" })).rejects.toThrow(/Research sources changed/);
+  });
+  it("does not feed an old project website to the planner after the brief points elsewhere", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(mutation("createProject"), draft("old-site"));
+    const research = makeFunctionReference<"mutation">("marketingResearch:save");
+    await t.mutation(research, { projectId, expectedProjectVersion: 1, url: "https://old-site.example/", title: "Old site", description: "", excerpt: "Old page", kind: "project", capturedAt: Date.now() });
+    const { name, offer, audience, facts, tone, timezone, cadence, generationLimitMinor, advertisingLimitMinor } = draft("old-site");
+    await t.mutation(mutation("updateProject"), { projectId, expectedVersion: 1, name, website: "https://new-site.example/", offer, audience, facts, tone, timezone, cadence, generationLimitMinor, advertisingLimitMinor });
+    const start = makeFunctionReference<"mutation">("marketingPlans:start"), claim = makeFunctionReference<"mutation">("marketingPlans:claim");
+    const run = await t.mutation(start, { projectId, requestKey: "4cd9662c-4267-4d8d-8f20-96ed2a2ab184" });
+    expect((await t.mutation(claim, { runId: run.runId })).research).toEqual([]);
+  });
   it("turns a saved calendar entry into one isolated review draft without dispatch", async () => {
     const f = await projects();
     const save = makeFunctionReference<"mutation">("marketingPlans:save");
     const create = makeFunctionReference<"mutation">("marketingPlans:createDraft");
     const calendar = JSON.stringify([{ day: 2, channel: "x", format: "Introduction", rationale: "Explain the offer", caption: "Meet our tool", hashtags: ["#design"], videoScript: "" }]);
-    const plan = await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedRevision: 0, strategy: "Useful strategy", calendar, sources: "Owner brief" });
+    const plan = await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 0, strategy: "Useful strategy", calendar, sources: "Owner brief" });
     const args = { projectId: f.a, planId: plan.planId, entryIndex: 0, channelId: f.channelA };
     await expect(f.t.mutation(create, { ...args, channelId: f.channelB })).rejects.toThrow(/does not belong/);
     const draftItem = await f.t.mutation(create, args);
@@ -692,7 +727,7 @@ describe("project planning revisions", () => {
     expect(workspace.items).toHaveLength(1);
     expect(workspace.items[0]).toMatchObject({ status: "draft", planId: plan.planId, content: "Meet our tool\n\n#design" });
     expect((await f.t.query(query("listWorkspace"), { projectId: f.b })).items).toHaveLength(0);
-    await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedRevision: 1, strategy: "Revised strategy", calendar, sources: "Owner brief" });
+    await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 1, strategy: "Revised strategy", calendar, sources: "Owner brief" });
     await expect(f.t.mutation(create, args)).rejects.toThrow(/current plan/);
   });
   it("saves a validated worker result as a separate AI revision", async () => {
@@ -722,7 +757,7 @@ describe("project planning revisions", () => {
     await expect(t.mutation(start, { ...args, requestKey: "6c23d114-ef9b-41a8-aee4-2728e9fa6dab" })).rejects.toThrow(/already in progress/);
     expect(await t.mutation(claim, { runId: first.runId })).toMatchObject({ name: "run-a" });
     expect(await t.mutation(claim, { runId: first.runId })).toBeNull();
-    await t.mutation(save, { projectId, expectedProjectVersion: 1, expectedRevision: 0, strategy: "Owner edits", calendar: "", sources: "" });
+    await t.mutation(save, { projectId, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 0, strategy: "Owner edits", calendar: "", sources: "" });
     expect(await t.mutation(finish, { runId: first.runId, strategy: "Model plan", calendar: "Model calendar" })).toEqual({ saved: false });
     expect(await t.query(latest, { projectId })).toMatchObject({ strategy: "Owner edits", origin: "owner" });
   });
@@ -732,7 +767,7 @@ describe("project planning revisions", () => {
     const b = await t.mutation(mutation("createProject"), draft("plan-b"));
     const save = makeFunctionReference<"mutation">("marketingPlans:save");
     const latest = makeFunctionReference<"query">("marketingPlans:latest");
-    const input = { projectId: a, expectedProjectVersion: 1, expectedRevision: 0,
+    const input = { projectId: a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 0,
       strategy: "Serve alpha customers", calendar: "Day 1: introduction", sources: "Owner brief" };
     await t.mutation(save, input);
     expect(await t.query(latest, { projectId: b })).toBeNull();

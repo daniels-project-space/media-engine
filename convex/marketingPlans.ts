@@ -14,7 +14,7 @@ export const latest = internalQuery({
     const plan = await ctx.db.query("marketingPlans")
       .withIndex("by_project_revision", (q) => q.eq("projectId", projectId))
       .order("desc").first();
-    return plan ? { ...plan, stale: plan.projectVersion !== project.version } : null;
+    return plan ? { ...plan, stale: plan.projectVersion !== project.version || (plan.researchVersion ?? 0) !== (project.researchVersion ?? 0) } : null;
   },
 });
 
@@ -22,6 +22,7 @@ export const save = internalMutation({
   args: {
     projectId: v.id("marketingProjects"),
     expectedProjectVersion: v.number(),
+    expectedResearchVersion: v.number(),
     expectedRevision: v.number(),
     strategy: v.string(),
     calendar: v.string(),
@@ -35,6 +36,8 @@ export const save = internalMutation({
       throw new Error("Marketing project not found");
     if (project.version !== args.expectedProjectVersion)
       throw new Error("Project brief changed; refresh and review the plan.");
+    if ((project.researchVersion ?? 0) !== args.expectedResearchVersion)
+      throw new Error("Research sources changed; refresh and review the plan.");
     const latest = await ctx.db.query("marketingPlans")
       .withIndex("by_project_revision", (q) => q.eq("projectId", args.projectId))
       .order("desc").first();
@@ -46,7 +49,7 @@ export const save = internalMutation({
       throw new Error("Provide a strategy within the size limits.");
     const id = await ctx.db.insert("marketingPlans", {
       organizationId: organization._id, projectId: project._id,
-      projectVersion: project.version, revision: revision + 1,
+      projectVersion: project.version, researchVersion: project.researchVersion ?? 0, revision: revision + 1,
       strategy: args.strategy.trim(), calendar: args.calendar.trim(),
       sources: args.sources.trim(), origin: "owner", createdAt: Date.now(),
     });
@@ -72,7 +75,7 @@ export const start = internalMutation({
     }
     const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", projectId)).order("desc").first();
     const now = Date.now();
-    const runId = await ctx.db.insert("marketingPlanRuns", { organizationId: organization._id, projectId, requestKey, projectVersion: project.version, baseRevision: latest?.revision ?? 0, status: "queued", createdAt: now, updatedAt: now });
+    const runId = await ctx.db.insert("marketingPlanRuns", { organizationId: organization._id, projectId, requestKey, projectVersion: project.version, researchVersion: project.researchVersion ?? 0, baseRevision: latest?.revision ?? 0, status: "queued", createdAt: now, updatedAt: now });
     return { runId, status: "queued" as const };
   },
 });
@@ -93,14 +96,17 @@ export const claim = internalMutation({
     const run = await ctx.db.get(runId);
     if (!run || run.status !== "queued") return null;
     const project = await ctx.db.get(run.projectId);
-    if (!project || project.version !== run.projectVersion) {
+    if (!project || project.version !== run.projectVersion || (project.researchVersion ?? 0) !== (run.researchVersion ?? 0)) {
       await ctx.db.patch(runId, { status: "failed", error: "Project brief changed before planning started.", updatedAt: Date.now() });
       return null;
     }
     await ctx.db.patch(runId, { status: "running", updatedAt: Date.now() });
+    const research = await ctx.db.query("marketingResearch").withIndex("by_project", q => q.eq("projectId", project._id)).take(10);
     return { projectId: project._id, name: project.name, website: project.website,
       offer: project.offer, audience: project.audience, facts: project.facts,
-      goal: project.goal, tone: project.tone, timezone: project.timezone, cadence: project.cadence };
+      goal: project.goal, tone: project.tone, timezone: project.timezone, cadence: project.cadence,
+      research: research.filter(source => source.kind !== "project" || new URL(source.url).hostname === new URL(project.website).hostname)
+        .map(({ url, title, description, excerpt, kind, capturedAt }) => ({ url, title, description, excerpt, kind, capturedAt })) };
   },
 });
 
@@ -112,8 +118,8 @@ export const finish = internalMutation({
     const project = await ctx.db.get(run.projectId);
     const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", run.projectId)).order("desc").first();
     let error = args.error?.slice(0, 500);
-    if (!project || project.version !== run.projectVersion || (latest?.revision ?? 0) !== run.baseRevision)
-      error = "The brief or plan changed while the model was working. Generate a fresh plan.";
+    if (!project || project.version !== run.projectVersion || (project.researchVersion ?? 0) !== (run.researchVersion ?? 0) || (latest?.revision ?? 0) !== run.baseRevision)
+      error = "The brief, research or plan changed while the model was working. Generate a fresh plan.";
     if (!error && (!args.strategy?.trim() || args.strategy.length > 20_000 || !args.calendar?.trim() || args.calendar.length > 20_000 || (args.sources?.length ?? 0) > 10_000))
       error = "The planning result was incomplete or exceeded size limits.";
     if (error) {
@@ -121,7 +127,7 @@ export const finish = internalMutation({
       return { saved: false };
     }
     await ctx.db.insert("marketingPlans", { organizationId: run.organizationId, projectId: run.projectId,
-      projectVersion: run.projectVersion, revision: run.baseRevision + 1, strategy: args.strategy!,
+      projectVersion: run.projectVersion, researchVersion: run.researchVersion ?? 0, revision: run.baseRevision + 1, strategy: args.strategy!,
       calendar: args.calendar!, sources: args.sources ?? "", origin: "ai", createdAt: Date.now() });
     await ctx.db.patch(args.runId, { status: "completed", updatedAt: Date.now() });
     return { saved: true };
@@ -139,7 +145,7 @@ export const createDraft = internalMutation({
     if (!project || !organization || project.organizationId !== organization._id) throw new Error("Marketing project not found");
     assertOwned(project._id, plan); assertOwned(project._id, channel);
     const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", project._id)).order("desc").first();
-    if (!plan || latest?._id !== plan._id || plan.projectVersion !== project.version) throw new Error("Review and save a current plan before creating a draft");
+    if (!plan || latest?._id !== plan._id || plan.projectVersion !== project.version || (plan.researchVersion ?? 0) !== (project.researchVersion ?? 0)) throw new Error("Review and save a current plan before creating a draft");
     if (!Number.isInteger(args.entryIndex) || args.entryIndex < 0 || args.entryIndex >= 28) throw new Error("Invalid calendar entry");
     let entries: unknown;
     try { entries = JSON.parse(plan.calendar); } catch { throw new Error("The saved calendar is not a structured plan"); }

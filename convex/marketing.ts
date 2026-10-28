@@ -479,6 +479,10 @@ export const removeEmptyProject = internalMutation({
         .query("marketingHyperImports")
         .withIndex("by_project_created", (q) => q.eq("projectId", project._id))
         .first(),
+      ctx.db
+        .query("marketingResearch")
+        .withIndex("by_project", (q) => q.eq("projectId", project._id))
+        .first(),
     ]);
     if (children.some(Boolean))
       throw new Error(

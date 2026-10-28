@@ -175,3 +175,19 @@ export async function inspectMarketingWebsite(url: string) {
   const result = await publicHtml(url, Date.now() + 10_000);
   return websiteFacts(result.html, result.url);
 }
+
+/** Bounded public-page evidence; page text is untrusted, not verified claims. */
+export function researchWebsiteFacts(html: string, finalUrl: string) {
+  const metadata = websiteFacts(html, finalUrl);
+  const safe = html.replace(/<(script|style|noscript|svg|iframe)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+  const snippets = [...safe.matchAll(/<(h[1-3]|p)\b[^>]*>([\s\S]*?)<\/\1>/gi)]
+    .slice(0, 40).map(match => plain(match[2]).slice(0, 400)).filter(value => value.length >= 20).slice(0, 12);
+  return { url: finalUrl, title: metadata.name, description: metadata.offer,
+    excerpt: snippets.join("\n").slice(0, 4_000), capturedAt: Date.now() };
+}
+
+export async function inspectResearchWebsite(url: string) {
+  const { html, url: finalUrl } = await publicHtml(url, Date.now() + 10_000);
+  return researchWebsiteFacts(html, finalUrl);
+}

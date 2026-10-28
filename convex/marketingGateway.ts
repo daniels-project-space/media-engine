@@ -6,6 +6,7 @@ import { v } from "convex/values";
 // proxy. No caller may choose an arbitrary Convex module or function.
 const mutations = {
   savePlan: "marketingPlans:save",
+  saveResearch: "marketingResearch:save",
   createPlanDraft: "marketingPlans:createDraft",
   startPlan: "marketingPlans:start",
   claimPlan: "marketingPlans:claim",
@@ -42,6 +43,7 @@ const mutations = {
 } as const;
 const queries = {
   latestPlan: "marketingPlans:latest",
+  listResearch: "marketingResearch:list",
   latestPlanRun: "marketingPlans:latestRun",
   latestHyperImport: "marketingHyperImports:latest",
   overview: "marketingOverview:overview",

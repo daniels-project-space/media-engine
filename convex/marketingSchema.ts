@@ -44,6 +44,7 @@ export const marketingTables = {
       v.literal("paused"),
     ),
     version: v.number(),
+    researchVersion: v.optional(v.number()),
     factsConfirmedAt: v.optional(v.number()),
     generationLimitMinor: v.number(),
     advertisingLimitMinor: v.number(),
@@ -80,6 +81,7 @@ export const marketingTables = {
     organizationId: v.id("organizations"),
     projectId: v.id("marketingProjects"),
     projectVersion: v.number(),
+    researchVersion: v.optional(v.number()),
     revision: v.number(),
     strategy: v.string(),
     calendar: v.string(),
@@ -93,6 +95,7 @@ export const marketingTables = {
     projectId: v.id("marketingProjects"),
     requestKey: v.string(),
     projectVersion: v.number(),
+    researchVersion: v.optional(v.number()),
     baseRevision: v.number(),
     status: v.union(v.literal("queued"), v.literal("running"), v.literal("completed"), v.literal("failed")),
     error: v.optional(v.string()),
@@ -108,6 +111,12 @@ export const marketingTables = {
     assetId: v.optional(v.id("marketingAssets")), error: v.optional(v.string()),
     createdAt: v.number(), updatedAt: v.number(),
   }).index("by_project_job", ["projectId", "jobId"]).index("by_project_created", ["projectId", "createdAt"]),
+
+  marketingResearch: defineTable({
+    projectId: v.id("marketingProjects"), url: v.string(), title: v.string(),
+    description: v.string(), excerpt: v.string(), kind: v.union(v.literal("project"), v.literal("reference")),
+    contentHash: v.string(), capturedAt: v.number(),
+  }).index("by_project_url", ["projectId", "url"]).index("by_project", ["projectId"]),
 
   marketingProviderAccounts: defineTable({
     providerAccountId: v.string(),
