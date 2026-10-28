@@ -1419,6 +1419,7 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
   const [savedCalendar, setSavedCalendar] = useState("");
   const [origin, setOrigin] = useState("owner");
   const [run, setRun] = useState<null | { status: string; requestKey: string; error?: string; recoverable?: boolean }>(null);
+  const [aiAllowed, setAiAllowed] = useState(false);
   const [reload, setReload] = useState(0);
   const [planProjectVersion, setPlanProjectVersion] = useState<number | null>(null);
   const [planResearchVersion, setPlanResearchVersion] = useState<number | null>(null);
@@ -1435,6 +1436,7 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
         setRevision(plan.revision); setPlanProjectVersion(plan.projectVersion); setPlanResearchVersion(plan.researchVersion ?? 0); setOrigin(plan.origin);
       }
       setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean });
+      setAiAllowed(body.aiAllowed === true);
       setLoadState("ready");
     }).catch(() => { if (!controller.signal.aborted) setLoadState("error"); });
     return () => controller.abort();
@@ -1468,11 +1470,20 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
   }}>
     <h3 className="text-sm font-bold">Strategy and content plan</h3>
     <p className="text-xs leading-5 text-ink-dim">Save or edit this project’s strategy and two-week content plan. AI drafts use the confirmed brief and captured source pages.</p>
-    <button type="button" className={buttonClass} disabled={busy || loadState !== "ready" || (run?.status === "running" && !run.recoverable)} onClick={async () => {
+    <p className="text-xs leading-5 text-ink-dim">AI safety switch: {loadState === "ready" ? (aiAllowed ? "enabled" : "paused") : "checking"}. The cloud subscription worker and its model availability have not yet been verified.</p>
+    <button type="button" className={buttonClass} disabled={busy || loadState !== "ready" || !aiAllowed || (run?.status === "running" && !run.recoverable)} onClick={async () => {
       const requestKey = run?.status === "queued" ? run.requestKey : crypto.randomUUID();
       const result = await action("generate-plan", { projectId: project._id, requestKey });
       if (result) setRun({ requestKey, status: "queued" });
-      else setRun({ requestKey, status: "queued", error: "Dispatch could not be confirmed. Retry this request." });
+      else {
+        // The request may have reached the server before a timeout. Read the
+        // durable record rather than inventing a queued state in the UI.
+        try {
+          const body = await responseJson(await fetch(`/api/marketing?view=plan&projectId=${encodeURIComponent(project._id)}`, { cache: "no-store" }));
+          setRun(body.run as null | { status: string; requestKey: string; error?: string; recoverable?: boolean });
+          setAiAllowed(body.aiAllowed === true);
+        } catch { /* The parent displays the original request failure. */ }
+      }
     }}>{run?.status === "queued" ? "Retry planning request" : run?.recoverable ? "Retry timed-out planning" : "Generate AI plan"}</button>
     {run ? <p className="text-xs text-ink-dim" role="status">AI planning: {run.status}{run.error ? ` · ${run.error}` : ""}</p> : null}
     {run?.status === "completed" ? <button type="button" className={buttonClass} onClick={() => setReload(value => value + 1)}>Load generated revision</button> : null}

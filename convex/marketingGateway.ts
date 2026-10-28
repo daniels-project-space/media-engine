@@ -45,6 +45,7 @@ const mutations = {
   settleRenderImport: "marketingRenders:settleImport",
 } as const;
 const queries = {
+  marketingAiAllowed: "marketingPlans:aiAllowed",
   latestPlan: "marketingPlans:latest",
   listRenderBriefs: "marketingPlans:listRenderBriefs",
   listResearch: "marketingResearch:list",

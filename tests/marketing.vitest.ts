@@ -99,6 +99,17 @@ async function item(
 }
 
 describe("marketing isolation and dispatch invariants", () => {
+  it("reads the existing AI kill switch through the internal marketing boundary and fails closed", async () => {
+    const t = convexTest(schema, modules);
+    const aiAllowed = makeFunctionReference<"query">("marketingPlans:aiAllowed");
+    expect(await t.query(aiAllowed, {})).toBe(false);
+    const id = await t.run(ctx => ctx.db.insert("settings", { key: "aiEnabled", value: "true" }));
+    expect(await t.query(aiAllowed, {})).toBe(false);
+    await t.run(ctx => ctx.db.patch(id, { value: true }));
+    expect(await t.query(aiAllowed, {})).toBe(true);
+    await t.run(ctx => ctx.db.patch(id, { value: false }));
+    expect(await t.query(aiAllowed, {})).toBe(false);
+  });
   it("keeps render briefs project-scoped, idempotent and tied to the current plan", async () => {
     const f = await projects();
     const planMutation = (name: string) => makeFunctionReference<"mutation">(`marketingPlans:${name}`);

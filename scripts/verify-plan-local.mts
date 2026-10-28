@@ -33,6 +33,8 @@ try {
   await page.getByRole("combobox", { name: "Current project" }).selectOption(projectId);
   await expect(page.getByRole("heading", { name: `Local plan ${run}`, exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Strategy and content plan" })).toHaveCount(1);
+  await expect(page.getByText(/AI safety switch: paused/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Generate AI plan" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Discover market sources" })).toBeDisabled();
   await page.getByLabel("Public research URL").fill("https://media-engine-seven.vercel.app/");
   await page.getByRole("button", { name: "Capture source" }).click();

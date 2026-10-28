@@ -87,8 +87,8 @@ async function requireChatGptLogin(cli: string): Promise<void> {
   throw new Error("Codex CLI requires a ChatGPT subscription login; API-key and access-token authentication are disabled");
 }
 
-export async function chat(opts: ChatOpts): Promise<string> {
-  if (!(await aiEnabled())) throw new Error("AI paused — re-enable in Settings to run the orchestrator");
+async function chatWithGate(opts: ChatOpts, permitted: () => Promise<boolean>): Promise<string> {
+  if (!(await permitted().catch(() => false))) throw new Error("AI paused or its safety switch is unavailable");
 
   const prompt = [
     "You are a Media Engine reasoning worker.",
@@ -114,6 +114,19 @@ export async function chat(opts: ChatOpts): Promise<string> {
     const detail = err instanceof Error ? err.message.slice(0, 220) : String(err).slice(0, 220);
     throw new Error(`Codex CLI subscription worker unavailable: ${detail}`);
   }
+}
+
+export async function chat(opts: ChatOpts): Promise<string> {
+  return chatWithGate(opts, aiEnabled);
+}
+
+// The marketing gateway is authenticated and reads the same existing setting;
+// it does not grant the worker permission to change that setting.
+export async function marketingChat(opts: ChatOpts): Promise<string> {
+  return chatWithGate(opts, async () => {
+    const { marketingCall } = await import("./marketing/service");
+    return (await marketingCall<unknown>("marketingAiAllowed", {})) === true;
+  });
 }
 
 export async function chatJson<T = Record<string, unknown>>(opts: ChatOpts): Promise<T> {

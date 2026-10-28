@@ -50,12 +50,13 @@ export async function GET(request: NextRequest) {
     }
     if (view === "plan") {
       const projectId = id.parse(request.nextUrl.searchParams.get("projectId"));
-      const [plan, run] = await Promise.all([
+      const [plan, run, aiAllowed] = await Promise.all([
         marketingCall("latestPlan", { projectId }),
         marketingCall("latestPlanRun", { projectId, asOfMinute: Math.floor(Date.now() / 60_000) }),
+        marketingCall("marketingAiAllowed", {}),
       ]);
       return NextResponse.json(
-        { plan, run },
+        { plan, run, aiAllowed: aiAllowed === true },
         { headers },
       );
     }
@@ -205,6 +206,8 @@ export async function POST(request: NextRequest) {
     }
     if (input.action === "generate-plan") {
       const payload = z.object({ projectId: id, requestKey: z.string().uuid() }).strict().parse(input.payload);
+      if ((await marketingCall("marketingAiAllowed", {})) !== true)
+        throw new Error("AI planning is paused by the global safety switch. No planning request was created.");
       const previous = await marketingCall<{ requestKey: string; status: string; recoverable?: boolean } | null>("latestPlanRun", { projectId: payload.projectId, asOfMinute: Math.floor(Date.now() / 60_000) });
       if (previous && previous.requestKey !== payload.requestKey && (previous.status === "queued" || (previous.status === "running" && !previous.recoverable)))
         throw new Error("A planning run is already in progress; check its status before retrying.");

@@ -3,6 +3,16 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { findDefaultOrganization } from "./controlPlaneModel";
 import { assertOwned, localPublicationTime, MAX_CONTENT_ROWS, text } from "./marketingPolicy";
 
+// Read the existing global kill switch only through the authenticated gateway.
+// Retired public settings functions intentionally always reject their callers.
+export const aiAllowed = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const row = await ctx.db.query("settings").withIndex("by_key", q => q.eq("key", "aiEnabled")).unique();
+    return row?.value === true;
+  },
+});
+
 export const latest = internalQuery({
   args: { projectId: v.id("marketingProjects") },
   handler: async (ctx, { projectId }) => {
