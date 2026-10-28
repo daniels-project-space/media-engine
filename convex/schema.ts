@@ -1,4 +1,5 @@
 import { defineSchema, defineTable } from "convex/server";
+import { marketingTables } from "./marketingSchema";
 import { v } from "convex/values";
 
 export const streamKind = v.union(
@@ -129,6 +130,7 @@ const creatorFunnelContentSnapshot = v.object({
 });
 
 export default defineSchema({
+  ...marketingTables,
   streams: defineTable({
     slug: v.string(),
     name: v.string(),
@@ -331,7 +333,7 @@ export default defineSchema({
     finalPostId: v.optional(v.id("posts")),
     error: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_stage", ["stage"]).index("by_order", ["orderId"]),
+  }).index("by_stage", ["stage"]).index("by_order", ["orderId"]).index("by_organization_stage", ["organizationId", "stage"]),
 
   // Persisted marketplace/direct-client dialogue. On Fiverr these are drafts
   // for a human to send manually; the application never auto-messages buyers.
