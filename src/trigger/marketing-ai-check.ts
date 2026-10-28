@@ -14,3 +14,13 @@ export const marketingAiCheck = task({
     return { claimed: true };
   },
 });
+
+// The project-scoped diagnostic above needs a saved project. This operational
+// probe supports first-run setup before any projects exist. Only the private
+// Trigger credential can invoke it; its output contains no credential data.
+export const marketingAiEnvironmentCheck = task({
+  id: "marketing-ai-environment-check",
+  maxDuration: 30,
+  retry: { maxAttempts: 1 },
+  run: async () => ({ login: await inspectCodexSubscription() }),
+});
