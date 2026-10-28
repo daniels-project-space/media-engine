@@ -17,6 +17,8 @@ import MarketingOverview, {
   MarketingLibrary,
 } from "@/components/marketing-overview";
 import MarketingOnboarding from "@/components/marketing-onboarding";
+import MarketingCalendarEditor from "@/components/marketing-calendar-editor";
+import MarketingStrategyEditor from "@/components/marketing-strategy-editor";
 import type { Doc } from "../../../convex/_generated/dataModel";
 
 type Project = Omit<Doc<"marketingProjects">, "conversionTokenHash">;
@@ -1417,6 +1419,8 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
   const [revision, setRevision] = useState(0);
   const [planId, setPlanId] = useState("");
   const [savedCalendar, setSavedCalendar] = useState("");
+  const [savedStrategy, setSavedStrategy] = useState("");
+  const [savedSources, setSavedSources] = useState("");
   const [origin, setOrigin] = useState("owner");
   const [run, setRun] = useState<null | { status: string; requestKey: string; error?: string; recoverable?: boolean }>(null);
   const [aiCheck, setAiCheck] = useState<null | { status: string; requestKey: string; outcome?: string; updatedAt: number; recoverable?: boolean }>(null);
@@ -1433,6 +1437,7 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
       const plan = body.plan as null | { _id: string; strategy: string; calendar: string; sources: string; revision: number; projectVersion: number; researchVersion?: number; origin: string };
       if (plan) {
         setStrategy(plan.strategy); setCalendar(plan.calendar); setSources(plan.sources);
+        setSavedStrategy(plan.strategy); setSavedSources(plan.sources);
         setSavedCalendar(plan.calendar); setPlanId(plan._id);
         setRevision(plan.revision); setPlanProjectVersion(plan.projectVersion); setPlanResearchVersion(plan.researchVersion ?? 0); setOrigin(plan.origin);
       }
@@ -1468,6 +1473,7 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
       const saved = result.result as { planId?: string } | undefined;
       if (saved?.planId) setPlanId(saved.planId);
       setSavedCalendar(calendar);
+      setSavedStrategy(strategy); setSavedSources(sources);
       setRevision(revision + 1);
       setPlanProjectVersion(project.version);
       setPlanResearchVersion(project.researchVersion ?? 0);
@@ -1504,13 +1510,13 @@ function ProjectPlan({ project, channels, accounts, busy, action }: {
     {run?.status === "completed" ? <button type="button" className={buttonClass} onClick={() => setReload(value => value + 1)}>Load generated revision</button> : null}
     {loadState === "error" ? <p role="alert">Could not load the saved plan. Refresh to try again.</p> : null}
     {planProjectVersion !== null && (planProjectVersion !== project.version || planResearchVersion !== (project.researchVersion ?? 0)) ? <p role="alert" className="text-xs text-amber-600">The project brief or research changed since this plan was saved. Review it before saving.</p> : null}
-    <Field label="Strategy"><textarea className={inputClass} value={strategy} maxLength={20000} onChange={(event) => setStrategy(event.target.value)} required /></Field>
-    <Field label="14-day content plan"><textarea className={inputClass} value={calendar} maxLength={20000} onChange={(event) => setCalendar(event.target.value)} /></Field>
+    <MarketingStrategyEditor value={strategy} onChange={setStrategy} />
+    <MarketingCalendarEditor value={calendar} onChange={setCalendar} />
     <Field label="Research sources and assumptions"><textarea className={inputClass} value={sources} maxLength={10000} onChange={(event) => setSources(event.target.value)} /></Field>
-    <button className={buttonClass} disabled={busy || loadState !== "ready"}>Save plan revision</button>
+    <button className={buttonClass} disabled={busy || loadState !== "ready" || strategy.length > 20000 || calendar.length > 20000}>Save plan revision</button>
     {revision > 0 ? <p className="text-xs text-ink-dim">Saved revision {revision} · {origin === "ai" ? "AI-generated draft" : "owner-authored"}</p> : null}
   </form>
-  <PlanCalendar project={project} planId={planId} calendar={savedCalendar} stale={planProjectVersion !== project.version || planResearchVersion !== (project.researchVersion ?? 0) || calendar !== savedCalendar} channels={channels} accounts={accounts} busy={busy} action={action} />
+  <PlanCalendar project={project} planId={planId} calendar={savedCalendar} stale={planProjectVersion !== project.version || planResearchVersion !== (project.researchVersion ?? 0) || calendar !== savedCalendar || strategy !== savedStrategy || sources !== savedSources} channels={channels} accounts={accounts} busy={busy} action={action} />
   <RenderBriefs project={project} />
   </>;
 }
