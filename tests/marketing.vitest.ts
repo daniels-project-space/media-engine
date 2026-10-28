@@ -171,6 +171,12 @@ describe("marketing isolation and dispatch invariants", () => {
         expectedName: "unused",
       }),
     ).toEqual({ removed: true });
+    const checked = await f.t.mutation(mutation("createProject"), draft("checked"));
+    await f.t.mutation(makeFunctionReference<"mutation">("marketingPlans:startAiCheck"), {
+      projectId: checked, requestKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+    await expect(f.t.mutation(mutation("removeEmptyProject"), { projectId: checked, expectedName: "checked" }))
+      .rejects.toThrow(/content or connections/);
   });
 
   it("replays the same onboarding request without creating a duplicate or accepting a different brief", async () => {
