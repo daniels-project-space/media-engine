@@ -104,6 +104,8 @@ export default function MarketingFrame({
           <span className="mk-mark">✱</span> MEDIA ENGINE
         </Link>
         <p className="mk-nav-label">WORKSPACE</p>
+        {/* These are same-document views. Native anchors emit hashchange;
+            router pushState updates the URL without notifying the view store. */}
         <nav aria-label="Main navigation">
           {[
             { id: "overview", name: "Overview", icon: "home" },
@@ -112,7 +114,7 @@ export default function MarketingFrame({
             { id: "results", name: "Results", icon: "results" },
             { id: "library", name: "Media library", icon: "content" },
           ].map((item) => (
-            <Link
+            <a
               key={item.id}
               href={`/marketing#${item.id}`}
               className={view === item.id ? "is-active" : ""}
@@ -121,7 +123,7 @@ export default function MarketingFrame({
             >
               <MarketingIcon name={item.icon} />
               {item.name}
-            </Link>
+            </a>
           ))}
         </nav>
         <div className="mk-owner">
