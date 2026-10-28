@@ -244,13 +244,13 @@ export const finish = internalMutation({
 /** Convert a saved plan entry into a draft only; no approval or dispatch. */
 export const createDraft = internalMutation({
   args: { projectId: v.id("marketingProjects"), planId: v.id("marketingPlans"),
-    entryIndex: v.number(), channelId: v.id("marketingChannels") },
+    entryIndex: v.number(), channelId: v.optional(v.id("marketingChannels")) },
   handler: async (ctx, args) => {
     const [project, organization, plan, channel] = await Promise.all([
-      ctx.db.get(args.projectId), findDefaultOrganization(ctx), ctx.db.get(args.planId), ctx.db.get(args.channelId),
+      ctx.db.get(args.projectId), findDefaultOrganization(ctx), ctx.db.get(args.planId), args.channelId ? ctx.db.get(args.channelId) : null,
     ]);
     if (!project || !organization || project.organizationId !== organization._id) throw new Error("Marketing project not found");
-    assertOwned(project._id, plan); assertOwned(project._id, channel);
+    assertOwned(project._id, plan); if (args.channelId) assertOwned(project._id, channel);
     const latest = await ctx.db.query("marketingPlans").withIndex("by_project_revision", q => q.eq("projectId", project._id)).order("desc").first();
     if (!plan || latest?._id !== plan._id || plan.projectVersion !== project.version || (plan.researchVersion ?? 0) !== (project.researchVersion ?? 0)) throw new Error("Review and save a current plan before creating a draft");
     if (!Number.isInteger(args.entryIndex) || args.entryIndex < 0 || args.entryIndex >= 28) throw new Error("Invalid calendar entry");
@@ -262,21 +262,23 @@ export const createDraft = internalMutation({
         typeof entry.channel !== "string" || typeof entry.caption !== "string" || typeof entry.format !== "string" ||
         !Array.isArray(entry.hashtags) || entry.hashtags.length > 8 || !entry.hashtags.every(tag => typeof tag === "string" && tag.length <= 100))
       throw new Error("The saved calendar entry is incomplete");
+    if (entry.channel !== "instagram" && entry.channel !== "x" && entry.channel !== "reddit") throw new Error("Choose a supported social platform");
+    const platform = entry.channel;
     const account = channel ? await ctx.db.get(channel.accountId) : null;
-    if (!channel || !account || account.platform !== entry.channel || !["instagram", "x", "reddit"].includes(account.platform))
+    if (args.channelId && (!channel || !account || account.platform !== platform))
       throw new Error("Choose a matching project social channel");
-    const idempotencyKey = `plan:${plan._id}:${args.entryIndex}:${channel._id}`;
+    const idempotencyKey = `plan:${plan._id}:${args.entryIndex}:${channel?._id ?? "unassigned"}`;
     const existing = await ctx.db.query("marketingItems").withIndex("by_idempotency", q => q.eq("idempotencyKey", idempotencyKey)).unique();
     if (existing) return { itemId: existing._id, reused: true };
     if (project.openItemCount >= MAX_CONTENT_ROWS) throw new Error("Project content limit reached");
     const asset = project.defaultAssetId ? await ctx.db.get(project.defaultAssetId) : null;
     if (asset) { assertOwned(project._id, asset); if (!asset.rightsConfirmed) throw new Error("Confirm media rights first"); }
-    if (account.platform === "instagram" && !asset) throw new Error("Add verified project media before preparing an Instagram draft");
+    if (channel && platform === "instagram" && !asset) throw new Error("Add verified project media before preparing an Instagram draft");
     const tags = (entry.hashtags as string[]).map(tag => tag.trim()).filter(Boolean).join(" ");
-    const content = text(`${entry.caption}${tags ? `\n\n${tags}` : ""}`, "Content", account.platform === "x" ? 280 : account.platform === "instagram" ? 2200 : 10000);
+    const content = text(`${entry.caption}${tags ? `\n\n${tags}` : ""}`, "Content", platform === "x" ? 280 : platform === "instagram" ? 2200 : 10000);
     const now = Date.now();
     const itemId = await ctx.db.insert("marketingItems", { organizationId: project.organizationId, projectId: project._id,
-      planId: plan._id, planEntryIndex: args.entryIndex, channelId: channel._id, kind: "post", title: text(entry.format, "Format", 200),
+      planId: plan._id, planEntryIndex: args.entryIndex, ...(channel ? { channelId: channel._id } : {}), intendedPlatform: platform, kind: "post", title: text(entry.format, "Format", 200),
       content, scheduledAt: localPublicationTime(now, Number(entry.day), project.timezone),
       ...(asset ? { assetId: asset._id } : {}), version: 1, status: "draft", idempotencyKey,
       heldIntegrationMinor: 0, heldAdvertisingMinor: 0, nextCheckAt: now, createdAt: now, updatedAt: now });

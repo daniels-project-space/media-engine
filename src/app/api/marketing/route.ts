@@ -183,7 +183,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ result: await marketingCall("savePlan", payload) }, { headers });
     }
     if (input.action === "create-plan-draft") {
-      const payload = z.object({ projectId: id, planId: id, entryIndex: z.number().int().min(0).max(27), channelId: id }).strict().parse(input.payload);
+      const payload = z.object({ projectId: id, planId: id, entryIndex: z.number().int().min(0).max(27), channelId: id.optional() }).strict().parse(input.payload);
       return NextResponse.json({ result: await marketingCall("createPlanDraft", payload) }, { headers });
     }
     if (input.action === "create-render-brief") {
@@ -342,6 +342,7 @@ export async function POST(request: NextRequest) {
       "create-item": "createItem",
       "approve-item": "approveItem",
       "edit-draft": "editDraft",
+      "assign-draft-channel": "assignDraftChannel",
       "recheck-item": "recheckItem",
       "settle-ad-billing": "settleAdBilling",
       "set-project-status": "setProjectStatus",

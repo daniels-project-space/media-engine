@@ -891,7 +891,7 @@ export default function Marketing() {
                         >
                           <div className="flex flex-wrap justify-between gap-2 text-xs">
                             <span className="text-scope">
-                              {labels[account?.platform ?? ""]} ·{" "}
+                              {labels[account?.platform ?? item.intendedPlatform ?? ""]} ·{" "}
                               {item.kind === "ad"
                                 ? "Paid campaign"
                                 : "Organic post"}
@@ -1014,6 +1014,17 @@ export default function Marketing() {
                               }
                             />
                           ) : null}
+                          {item.status === "draft" && !item.channelId ? (
+                            <div className="mt-4 grid gap-2 text-xs text-ink-dim">
+                              <p>This draft has no assigned account. Connect and assign a matching channel before approval.</p>
+                              {channels.some(row => accountById.get(row.accountId)?.platform === item.intendedPlatform) ? <form className="flex flex-wrap gap-2" onSubmit={async event => {
+                                event.preventDefault();
+                                await action("assign-draft-channel", { projectId, itemId: item._id, expectedVersion: item.version, channelId: new FormData(event.currentTarget).get("channelId") });
+                              }}><select name="channelId" aria-label={`Assign channel for ${item.title}`} className={inputClass} required>
+                                {channels.filter(row => accountById.get(row.accountId)?.platform === item.intendedPlatform).map(row => <option key={row._id} value={row._id}>{accountById.get(row.accountId)?.label}</option>)}
+                              </select><button disabled={busy} className={buttonClass}>Assign channel</button></form> : null}
+                            </div>
+                          ) : null}
                           {item.kind === "ad" && item.status === "paused" ? (
                             <AdBillingReceipt
                               item={item}
@@ -1070,10 +1081,10 @@ export default function Marketing() {
                               </a>
                             ) : null}
                           </div>
-                          {item.status === "draft" &&
-                          channel?.mode !== "automatic" ? (
+                          {item.status === "draft" && channel &&
+                          channel.mode !== "automatic" ? (
                             <p className="mt-3 text-xs text-ink-faint">
-                              Channel is draft-only. Change its policy before
+                              Channel is not set to automatic. Change its policy before
                               approving publication.
                             </p>
                           ) : null}
@@ -1555,12 +1566,14 @@ function PlanCalendar({ project, planId, calendar, stale, channels, accounts, bu
         }}><select name="modelId" className={inputClass} aria-label={`Render model for day ${entry.day}`}>
           <option value="minimax-h3">Video · MiniMax H3</option><option value="qwen-image-2-1">Image · Qwen Image 2.1</option>
         </select><button className={buttonClass} disabled={busy || stale}>Save render brief</button></form> : null}
-        {eligible.length ? <form className="flex flex-wrap gap-2" onSubmit={async event => {
+        <form className="flex flex-wrap gap-2" onSubmit={async event => {
           event.preventDefault();
-          await action("create-plan-draft", { projectId: project._id, planId, entryIndex: index, channelId: new FormData(event.currentTarget).get("channelId") });
-        }}><select name="channelId" className={inputClass} aria-label={`Channel for day ${entry.day}`} required>
+          const channelId = new FormData(event.currentTarget).get("channelId");
+          await action("create-plan-draft", { projectId: project._id, planId, entryIndex: index, ...(channelId ? { channelId } : {}) });
+        }}><select name="channelId" className={inputClass} aria-label={`Channel for day ${entry.day}`}>
+          <option value="">Unassigned · connect later</option>
           {eligible.map(channel => <option key={channel._id} value={channel._id}>{accounts.find(account => account._id === channel.accountId)?.label ?? "Channel"}</option>)}
-        </select><button className={buttonClass} disabled={busy || stale}>Create review draft</button></form> : <p className="text-xs text-ink-dim">Connect a matching channel to create a review draft.</p>}
+        </select><button className={buttonClass} disabled={busy || stale}>Create review draft</button></form>
       </div>;
     })}
   </div>;
