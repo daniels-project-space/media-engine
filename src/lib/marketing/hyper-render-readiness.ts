@@ -11,6 +11,7 @@ const catalogue = z.object({
     nativeQualified: z.boolean(),
     qualifiedGpuTypes: z.array(z.string()).max(10),
     readiness: z.string().max(100),
+    requestGuide: z.unknown().optional(),
   })).max(100),
 });
 

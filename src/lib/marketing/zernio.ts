@@ -3,6 +3,7 @@ import {
   accountPlatform,
   type MarketingPlatform,
 } from "../../../convex/marketingPolicy";
+import type { ConnectionPlatform } from "./connection-state";
 
 // Qualified against official endpoint contracts on 2026-10-28. Live account
 // qualification is separately gated; documentation is not a successful publish.
@@ -54,6 +55,9 @@ export type ProviderAccount = {
   label: string;
   connected: boolean;
 };
+export type ProviderConnectResult =
+  | { authUrl: string }
+  | { alreadyConnected: true; accountId: string; platform: string };
 export type PostState = {
   providerId: string;
   status: "scheduled" | "published" | "failed" | "uncertain" | "cancelled";
@@ -354,6 +358,98 @@ export class ZernioClient {
     } catch {
       throw new ZernioError(502, method !== "GET");
     }
+  }
+
+  async ensureProjectProfile(projectId: string): Promise<string> {
+    const externalId = `media-engine-project:${projectId}`;
+    const params = new URLSearchParams({
+      externalId,
+      includeOverLimit: "true",
+    });
+    const listProfiles = async () =>
+      z
+        .object({ profiles: z.array(z.object({ _id: providerId })) })
+        .parse(await this.request(`/profiles?${params}`)).profiles;
+
+    const existing = await listProfiles();
+    if (existing.length > 1)
+      throw new Error("More than one provider profile matches this project; resolve the duplicate before connecting accounts");
+    if (existing[0]) return existing[0]._id;
+
+    const idempotencyKey = `media-engine-profile:${projectId}`;
+    try {
+      const created = z
+        .object({ profile: z.object({ _id: providerId }) })
+        .parse(
+          await this.request(
+            "/profiles",
+            "POST",
+            {
+              name: `Media Engine project ${projectId}`,
+              description: "Dedicated social and advertising accounts for one Media Engine project.",
+              externalId,
+            },
+            idempotencyKey,
+          ),
+        );
+      return created.profile._id;
+    } catch (error) {
+      if (error instanceof ZernioError && error.status === 409) {
+        const recovered = await listProfiles();
+        if (recovered.length === 1) return recovered[0]._id;
+      }
+      throw error;
+    }
+  }
+
+  async getConnectUrl(
+    platform: ConnectionPlatform,
+    profileId: string,
+    redirectUrl: string,
+  ): Promise<ProviderConnectResult> {
+    providerId.parse(profileId);
+    const redirect = new URL(redirectUrl);
+    if (redirect.protocol !== "https:" || redirect.username || redirect.password)
+      throw new Error("The provider callback must use the configured HTTPS site origin");
+
+    let path: string;
+    const query = new URLSearchParams({
+      profileId,
+      redirect_url: redirect.toString(),
+    });
+    if (platform === "instagram" || platform === "x" || platform === "reddit") {
+      path = `/connect/${platform === "x" ? "twitter" : platform}`;
+      query.set("scopes", "posting,analytics");
+    } else if (platform === "metaads") {
+      path = "/connect/facebook/ads";
+      query.set("loginMode", "business");
+    } else {
+      path = "/connect/googleads/ads";
+    }
+
+    const response = z
+      .object({
+        authUrl: z.string().url().optional(),
+        alreadyConnected: z.boolean().optional(),
+        accountId: providerId.optional(),
+        platform: z.string().optional(),
+      })
+      .parse(await this.request(`${path}?${query}`));
+    if (response.alreadyConnected) {
+      if (!response.accountId || !response.platform)
+        throw new Error("Provider reported an existing account without its identity");
+      return {
+        alreadyConnected: true,
+        accountId: response.accountId,
+        platform: response.platform,
+      };
+    }
+    if (!response.authUrl)
+      throw new Error("Provider did not return an OAuth authorization URL");
+    const authUrl = new URL(response.authUrl);
+    if (authUrl.protocol !== "https:" || authUrl.username || authUrl.password)
+      throw new Error("Provider returned an unsafe OAuth authorization URL");
+    return { authUrl: authUrl.toString() };
   }
 
   async listAccounts(): Promise<{

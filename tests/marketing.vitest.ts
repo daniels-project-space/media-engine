@@ -38,6 +38,14 @@ async function projects() {
   const t = convexTest(schema, modules);
   const a = await t.mutation(mutation("createProject"), draft("alpha"));
   const b = await t.mutation(mutation("createProject"), draft("beta"));
+  await t.mutation(mutation("setProviderProfile"), {
+    projectId: a,
+    profileId: "alpha-profile",
+  });
+  await t.mutation(mutation("setProviderProfile"), {
+    projectId: b,
+    profileId: "beta-profile",
+  });
   await t.mutation(mutation("syncAccounts"), {
     accountCount: 2,
     pricingVerifiedAt: Date.now(),
@@ -59,11 +67,12 @@ async function projects() {
     ],
   });
   const workspace = await t.query(query("listWorkspace"), { projectId: a });
+  const workspaceB = await t.query(query("listWorkspace"), { projectId: b });
   const alphaAccount = workspace.accounts.find(
     (account: { providerAccountId: string }) =>
       account.providerAccountId === "alpha-x",
   );
-  const betaAccount = workspace.accounts.find(
+  const betaAccount = workspaceB.accounts.find(
     (account: { providerAccountId: string }) =>
       account.providerAccountId === "beta-x",
   );
@@ -99,6 +108,72 @@ async function item(
 }
 
 describe("marketing isolation and dispatch invariants", () => {
+  it("scopes project accounts and rejects cross-project provider profiles", async () => {
+    const f = await projects();
+    const workspaceA = await f.t.query(query("listWorkspace"), {
+      projectId: f.a,
+    });
+    const workspaceB = await f.t.query(query("listWorkspace"), {
+      projectId: f.b,
+    });
+    expect(workspaceA.accounts.map((account: { providerAccountId: string }) => account.providerAccountId)).toEqual(["alpha-x"]);
+    expect(workspaceB.accounts.map((account: { providerAccountId: string }) => account.providerAccountId)).toEqual(["beta-x"]);
+
+    const betaAccount = workspaceB.accounts[0];
+    await expect(
+      f.t.mutation(mutation("saveChannel"), {
+        projectId: f.a,
+        accountId: betaAccount._id,
+        mode: "draft",
+        communityApproved: false,
+      }),
+    ).rejects.toThrow(/different project's provider profile/);
+
+    const c = await f.t.mutation(mutation("createProject"), draft("gamma"));
+    await expect(
+      f.t.mutation(mutation("setProviderProfile"), {
+        projectId: c,
+        profileId: "alpha-profile",
+      }),
+    ).rejects.toThrow(/already assigned to another project/);
+  });
+
+  it("binds an unassigned legacy profile when the owner explicitly selects its account", async () => {
+    const t = convexTest(schema, modules);
+    const projectId = await t.mutation(
+      mutation("createProject"),
+      draft("legacy-profile"),
+    );
+    await t.mutation(mutation("syncAccounts"), {
+      accountCount: 1,
+      pricingVerifiedAt: Date.now(),
+      accounts: [
+        {
+          providerAccountId: "legacy-x",
+          profileId: "legacy-profile-id",
+          platform: "x",
+          label: "Legacy X",
+          connected: true,
+        },
+      ],
+    });
+    const globalWorkspace = await t.query(query("listWorkspace"), {});
+    const account = globalWorkspace.accounts[0];
+    await t.mutation(mutation("saveChannel"), {
+      projectId,
+      accountId: account._id,
+      mode: "draft",
+      communityApproved: false,
+    });
+    const projectWorkspace = await t.query(query("listWorkspace"), {
+      projectId,
+    });
+    expect(projectWorkspace.projects[0].zernioProfileId).toBe(
+      "legacy-profile-id",
+    );
+    expect(projectWorkspace.accounts.map((row: { providerAccountId: string }) => row.providerAccountId)).toEqual(["legacy-x"]);
+  });
+
   it("fences worker diagnostics, reuses retries and isolates projects", async () => {
     const f = await projects();
     const m = (name: string) => makeFunctionReference<"mutation">(`marketingPlans:${name}`);
@@ -134,20 +209,65 @@ describe("marketing isolation and dispatch invariants", () => {
     const f = await projects();
     const planMutation = (name: string) => makeFunctionReference<"mutation">(`marketingPlans:${name}`);
     const planQuery = (name: string) => makeFunctionReference<"query">(`marketingPlans:${name}`);
-    const calendar = JSON.stringify([{ day: 1, channel: "x", format: "video", videoScript: "Show the product and its benefit" }]);
+    const calendar = JSON.stringify([
+      { day: 1, channel: "x", format: "video", videoScript: "Show the product and its benefit", videoPrompt: "A focused product demo with a clear final frame." },
+      { day: 2, channel: "instagram", format: "image", videoScript: "", imagePrompt: "A clean product image on a warm studio background." },
+    ]);
     const saved = await f.t.mutation(planMutation("save"), { projectId: f.a, expectedProjectVersion: 1,
       expectedResearchVersion: 0, expectedRevision: 0, strategy: "Introduce the product", calendar, sources: "" });
     const request = { projectId: f.a, planId: saved.planId, entryIndex: 0, modelId: "minimax-h3" };
     const first = await f.t.mutation(planMutation("createRenderBrief"), request);
     expect(await f.t.mutation(planMutation("createRenderBrief"), request)).toEqual({ briefId: first.briefId, reused: true });
-    expect((await f.t.query(planQuery("listRenderBriefs"), { projectId: f.a }))[0]).toMatchObject({ prompt: "Show the product and its benefit", modelId: "minimax-h3" });
+    expect((await f.t.query(planQuery("listRenderBriefs"), { projectId: f.a }))[0]).toMatchObject({
+      prompt: "A focused product demo with a clear final frame.", script: "Show the product and its benefit", modelId: "minimax-h3",
+    });
     expect(await f.t.query(planQuery("listRenderBriefs"), { projectId: f.b })).toHaveLength(0);
-    expect(await f.t.query(planQuery("getRenderBrief"), { projectId: f.a, briefId: first.briefId })).toEqual({ modelId: "minimax-h3", stale: false });
+    expect(await f.t.query(planQuery("getRenderBrief"), { projectId: f.a, briefId: first.briefId })).toMatchObject({ modelId: "minimax-h3", prompt: "A focused product demo with a clear final frame.", stale: false });
+    const videoQuality = { kind: "video", steps: 50, width: 1280, height: 720, frames: 360, durationSeconds: 15, fps: 24,
+      precision: "int8-convrot / nvfp4-awq", approximateCache: false,
+      postprocess: { latentScale: 2, videoRestoration: "seedvr2", finalWidth: 3840, finalHeight: 2160, required: true } };
+    const stage = (blockers: string[]) => f.t.mutation(planMutation("stageHyperMediaRequest"), {
+      projectId: f.a, briefId: first.briefId, modelId: "minimax-h3", requestGuideHash: "a".repeat(64), quality: videoQuality, settings: {}, blockers,
+    });
+    const staged = await stage(["native-model-unqualified", "dispatch-disabled"]);
+    expect(staged).toMatchObject({ reused: false, request: { state: "staged", modelId: "minimax-h3", outputContentType: "video/mp4", blockers: ["native-model-unqualified", "dispatch-disabled"] } });
+    expect(await stage(["native-model-unqualified", "dispatch-disabled"])).toMatchObject({ reused: true, request: { requestHash: staged.request.requestHash } });
+    expect((await f.t.query(planQuery("listRenderBriefs"), { projectId: f.a }))[0].renderRequest).toMatchObject({ state: "staged", requestKey: staged.request.requestKey });
+    const authorize = (requestHash: string, rightsConfirmed = true, spendAuthorized = true) => f.t.mutation(planMutation("authorizeHyperMediaRequest"), {
+      projectId: f.a, briefId: first.briefId, requestHash, rightsConfirmed, spendAuthorized,
+    });
+    await expect(authorize(staged.request.requestHash)).rejects.toThrow(/blocked/);
+    const readyStage = await stage([]);
+    const authorization = await authorize(readyStage.request.requestHash);
+    expect(authorization).toMatchObject({ generationLimitMinor: 500, currency: "USD" });
+    expect((await f.t.query(planQuery("listRenderBriefs"), { projectId: f.a }))[0].renderRequest.authorization)
+      .toMatchObject({ requestHash: readyStage.request.requestHash, generationLimitMinor: 500, source: "owner-action" });
+    await expect(authorize(readyStage.request.requestHash, false, true)).rejects.toThrow();
+    await expect(f.t.mutation(planMutation("createRenderBrief"), { ...request, modelId: "qwen-image-2-1" })).rejects.toThrow(/image-generation prompt/);
+    const imageBrief = await f.t.mutation(planMutation("createRenderBrief"), { ...request, entryIndex: 1, modelId: "qwen-image-2-1" });
+    expect((await f.t.query(planQuery("listRenderBriefs"), { projectId: f.a })).find((brief: { _id: string }) => brief._id === imageBrief.briefId))
+      .toMatchObject({ prompt: "A clean product image on a warm studio background.", modelId: "qwen-image-2-1" });
+    const imageStage = await f.t.mutation(planMutation("stageHyperMediaRequest"), {
+      projectId: f.a, briefId: imageBrief.briefId, modelId: "qwen-image-2-1", requestGuideHash: "b".repeat(64),
+      quality: { kind: "image", precision: "bf16", steps: 40, cfg: 1, outputResolution: 2048, useKvCache: true, cpuOffload: true, defaultSeed: 42 },
+      settings: { width: 1536, height: 2752 }, blockers: ["native-model-unqualified", "dispatch-disabled"],
+    });
+    expect(imageStage).toMatchObject({ request: { modelId: "qwen-image-2-1", outputContentType: "image/png", settings: { width: 1536, height: 2752 } } });
+    await expect(f.t.mutation(planMutation("stageHyperMediaRequest"), {
+      projectId: f.a, briefId: first.briefId, modelId: "qwen-image-2-1", requestGuideHash: "a".repeat(64),
+      quality: { kind: "image", precision: "bf16", steps: 40, cfg: 1, outputResolution: 2048, useKvCache: true, cpuOffload: true, defaultSeed: 42 },
+      settings: { width: 2048, height: 2048 }, blockers: [],
+    })).rejects.toThrow();
+    await expect(f.t.mutation(planMutation("stageHyperMediaRequest"), {
+      projectId: f.b, briefId: first.briefId, modelId: "minimax-h3", requestGuideHash: "a".repeat(64), quality: videoQuality, settings: {}, blockers: [],
+    })).rejects.toThrow();
     await expect(f.t.query(planQuery("getRenderBrief"), { projectId: f.b, briefId: first.briefId })).rejects.toThrow();
     await expect(f.t.mutation(planMutation("createRenderBrief"), { ...request, projectId: f.b })).rejects.toThrow();
     await f.t.mutation(planMutation("save"), { projectId: f.a, expectedProjectVersion: 1,
       expectedResearchVersion: 0, expectedRevision: 1, strategy: "Revised", calendar, sources: "" });
-    expect(await f.t.query(planQuery("getRenderBrief"), { projectId: f.a, briefId: first.briefId })).toEqual({ modelId: "minimax-h3", stale: true });
+    expect(await f.t.query(planQuery("getRenderBrief"), { projectId: f.a, briefId: first.briefId })).toMatchObject({ modelId: "minimax-h3", stale: true });
+    await expect(authorize(readyStage.request.requestHash)).rejects.toThrow(/current strategy/);
+    await expect(stage(["dispatch-disabled"])).rejects.toThrow(/current plan/);
     await expect(f.t.mutation(planMutation("createRenderBrief"), { ...request, modelId: "qwen-image-2-1" })).rejects.toThrow(/current plan/);
   });
   it("admin cleanup refuses connected projects and removes only an exact unused draft", async () => {
@@ -396,6 +516,9 @@ describe("marketing isolation and dispatch invariants", () => {
         }).format(next),
       ).toBe("09:00");
     }
+    const proposed = localPublicationTime(Date.parse("2026-10-28T10:00:00Z"), 1, "Europe/Zurich", "13:15");
+    expect(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" }).format(proposed)).toBe("13:15");
+    expect(() => localPublicationTime(Date.now(), 1, "Europe/Zurich", "24:00")).toThrow(/HH:MM/);
   });
 
   it("versions editable drafts and rejects stale edits and edits after approval", async () => {
@@ -787,7 +910,7 @@ describe("project planning revisions", () => {
     const f = await projects();
     const save = makeFunctionReference<"mutation">("marketingPlans:save");
     const create = makeFunctionReference<"mutation">("marketingPlans:createDraft");
-    const calendar = JSON.stringify([{ day: 2, channel: "x", format: "Introduction", rationale: "Explain the offer", caption: "Meet our tool", hashtags: ["#design"], videoScript: "" }]);
+    const calendar = JSON.stringify([{ day: 2, localTime: "13:15", channel: "x", format: "Introduction", rationale: "Explain the offer", caption: "Meet our tool", cta: "Learn more", promotion: "Free trial available", hashtags: ["#design"], videoScript: "" }]);
     const plan = await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 0, strategy: "Useful strategy", calendar, sources: "Owner brief" });
     const args = { projectId: f.a, planId: plan.planId, entryIndex: 0, channelId: f.channelA };
     await expect(f.t.mutation(create, { ...args, channelId: f.channelB })).rejects.toThrow(/does not belong/);
@@ -795,7 +918,8 @@ describe("project planning revisions", () => {
     expect(await f.t.mutation(create, args)).toEqual({ itemId: draftItem.itemId, reused: true });
     const workspace = await f.t.query(query("listWorkspace"), { projectId: f.a });
     expect(workspace.items).toHaveLength(1);
-    expect(workspace.items[0]).toMatchObject({ status: "draft", planId: plan.planId, content: "Meet our tool\n\n#design" });
+    expect(workspace.items[0]).toMatchObject({ status: "draft", planId: plan.planId, content: "Meet our tool\n\nLearn more\n\nFree trial available\n\n#design" });
+    expect(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" }).format(workspace.items[0].scheduledAt)).toBe("13:15");
     expect((await f.t.query(query("listWorkspace"), { projectId: f.b })).items).toHaveLength(0);
     await f.t.mutation(save, { projectId: f.a, expectedProjectVersion: 1, expectedResearchVersion: 0, expectedRevision: 1, strategy: "Revised strategy", calendar, sources: "Owner brief" });
     await expect(f.t.mutation(create, args)).rejects.toThrow(/current plan/);

@@ -58,6 +58,7 @@ export const marketingTables = {
     nextPlanAt: v.number(),
     planningError: v.optional(v.string()),
     defaultAssetId: v.optional(v.id("marketingAssets")),
+    zernioProfileId: v.optional(v.string()),
     stats: v.optional(
       v.object({
         published: v.number(),
@@ -95,11 +96,53 @@ export const marketingTables = {
     organizationId: v.id("organizations"), projectId: v.id("marketingProjects"),
     planId: v.id("marketingPlans"), entryIndex: v.number(), projectVersion: v.number(),
     researchVersion: v.number(), modelId: v.union(v.literal("minimax-h3"), v.literal("qwen-image-2-1")),
-    prompt: v.string(), channel: v.string(), format: v.string(), createdAt: v.number(),
+    prompt: v.string(), script: v.optional(v.string()), channel: v.string(), format: v.string(), createdAt: v.number(),
     renderJobId: v.optional(v.string()),
     renderState: v.optional(v.union(v.literal("tracked"), v.literal("importing"), v.literal("ready"), v.literal("failed"))),
     renderProviderState: v.optional(v.string()),
+    renderError: v.optional(v.string()),
     renderAssetId: v.optional(v.id("marketingAssets")),
+    renderRequest: v.optional(v.object({
+      state: v.literal("staged"),
+      requestHash: v.string(),
+      requestKey: v.string(),
+      requestGuideHash: v.string(),
+      modelId: v.union(v.literal("minimax-h3"), v.literal("qwen-image-2-1")),
+      outputContentType: v.union(v.literal("video/mp4"), v.literal("image/png")),
+      environmentId: v.optional(v.string()),
+      quality: v.union(
+        v.object({
+          kind: v.literal("video"), steps: v.number(), width: v.number(), height: v.number(), frames: v.number(), fps: v.number(),
+          durationSeconds: v.number(), precision: v.string(), approximateCache: v.boolean(),
+          postprocess: v.object({ latentScale: v.number(), videoRestoration: v.string(), finalWidth: v.number(), finalHeight: v.number(), required: v.boolean() }),
+        }),
+        v.object({
+          kind: v.literal("image"), precision: v.string(), steps: v.number(), cfg: v.number(), outputResolution: v.number(),
+          useKvCache: v.boolean(), cpuOffload: v.boolean(), defaultSeed: v.number(),
+        }),
+      ),
+      settings: v.union(v.object({}), v.object({ width: v.number(), height: v.number() })),
+      blockers: v.array(v.union(
+        v.literal("native-model-unqualified"),
+        v.literal("gpu-profile-unverified"),
+        v.literal("model-gpu-unqualified"),
+        v.literal("project-connection-missing"),
+        v.literal("project-connection-unavailable"),
+        v.literal("environment-required"),
+        v.literal("environment-model-mismatch"),
+        v.literal("environment-not-prepared"),
+        v.literal("requested-format-not-supported"),
+        v.literal("capacity-unverified"),
+        v.literal("spend-control-unverified"),
+        v.literal("output-delivery-unverified"),
+        v.literal("dispatch-disabled"),
+      )),
+      checkedAt: v.number(),
+      authorization: v.optional(v.object({
+        requestHash: v.string(), authorizedAt: v.number(), generationLimitMinor: v.number(), currency: v.string(),
+        source: v.literal("owner-action"),
+      })),
+    })),
   }).index("by_project_created", ["projectId", "createdAt"])
     .index("by_plan_entry_model", ["planId", "entryIndex", "modelId"]),
 

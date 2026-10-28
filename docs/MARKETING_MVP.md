@@ -10,9 +10,11 @@ The canonical release inspected on 28 October 2026 is main
 `1f9d2d394e2b121bb52953c42dbb04add282647d`, deployed at
 `https://media-engine-seven.vercel.app`. Production serves the client creative
 workflow; the fuller creator-promotion interface/workers exist on another
-branch. This change preserves that creative workflow and its approved Render
-Engine route, Convex service gateway, Trigger project and Media Engine R2 bucket.
-It does not revive the retired legacy distribution adapters.
+branch. This change preserves that creative workflow, Convex service gateway,
+Trigger project and Media Engine R2 bucket. Promotional image and video briefs
+in `/marketing` use only the separate Hyper renderer; the legacy Render Engine
+remains paused and is not a provider for this marketing brief workflow. The
+retired distribution adapters remain inactive.
 
 ## Operator workflow
 
@@ -21,19 +23,61 @@ It does not revive the retired legacy distribution adapters.
    untrusted input, not automatically certified product claims.
 2. Set independent generation and advertising allowances in the project currency.
    Save the one-time conversion credential in that website's server secrets.
-3. Connect owned accounts in Zernio, refresh the inventory and map connections to
-   this project. Choose Off, Draft or Automatic. Automatic policies require an
+3. Connect Instagram, X, Reddit, Meta Ads or Google Ads from this project's
+   Channels page. The server creates or recovers a dedicated Zernio profile,
+   then returns through a signed OAuth callback and verifies the account against
+   the provider inventory. Accounts are scoped to one project. Platform consent
+   remains owner-driven; connecting does not create a social identity, publish a
+   post or launch an ad. Existing unassigned Zernio profiles can be adopted
+   during onboarding. Choose Off, Draft or Automatic. Automatic policies require
    explicit authorisation, expire within 30 days and do not authorise individual
    paid campaigns. Reddit also requires an approved community.
 4. Upload an original image with usage rights, or import a completed approved
-   final video. Import runs in Trigger, checks the source approval and full R2
-   hash, copies the original bytes into this project's prefix and verifies the
-   copied hash. It launches no render. Existing approved video creation remains
-   in `/work`, with its separate render approval and hosted-budget gates.
-5. Prepare the first week. The initial generator is explicitly labelled **brand
-   templates**, costs zero and uses confirmed facts. It is not an AI copy/image
-   generator. Drafts can be edited and versioned before exact-version approval.
-   Future weekly posts on an active Automatic channel use its authorised policy.
+   final image/video. Import runs in Trigger, checks the source approval and full
+   R2 hash, copies the original bytes into this project's prefix and verifies the
+   copied hash. The plan keeps a human-readable video script separate from the
+   direct video-generation prompt, and gives image creatives their own direct
+   prompt. Each calendar item has an editable proposed local time, CTA and
+   confirmed promotion; creating its review draft preserves that local time and
+   appends distinct CTA, promotion and hashtags to the draft copy. It remains a
+   draft, not a scheduled or published post.
+
+   `/marketing` routes H3 video and Qwen image requests only through the newer
+   Hyper GPU service's live request guide and immutable quality profile. The
+   worktree includes project-scoped idempotent job submission behind the live
+   readiness gates, plus a durable Trigger watcher for jobs linked to a brief.
+   The watcher records provider state and, when a completed output receipt is
+   available, starts the existing hash-verified R2 import automatically. Its
+   bounded backoff observation window uses Trigger durable waits; it never
+   submits a render itself. Staging is always side-effect-free. A separate
+   submit action rechecks readiness and requires one-time owner confirmations
+   for the exact request hash, media rights, and configured generation
+   allowance; the authorization is recorded with the brief. The live catalogue currently reports no qualified
+   marketing model, and no project connection, capacity, enforceable spend
+   control or verified delivery path is available, so production remains staged
+   and no GPU job is submitted. H3 currently accepts
+   prompt-only landscape video. Qwen accepts prompt-only PNG images with
+   guide-approved 2K dimensions; the optional reference-image handoff is not
+   wired yet. The separate `/work` creative tools do not provide the Media Engine
+   marketing request path.
+
+The new service catalogue reports the initial and future hardware profile and
+model-specific qualified GPU types. As checked on 28 October 2026 it reported
+`rtx3090` initially, `rtx5090` as future hardware, and no native-qualified model
+routes. The UI reads that catalogue live; neither GPU name implies available
+capacity or permission to render. Preflight also fails closed unless that live
+profile still matches the pinned 3090-initial / 5090-future plan. Refresh and
+verify model qualification before any pilot. A selected model must also list
+the initial RTX 3090 in its own qualified GPU types; qualification on a
+different GPU cannot unlock this marketing path.
+5. Generate a structured two-week strategy and calendar when the configured
+   Codex subscription worker and owner AI gate are available. Items include
+   channel copy, hashtags, proposed local times, CTAs, confirmed promotions,
+   video scripts and direct Hyper prompts. The current production worker login
+   and AI gate are not qualified; until they are, the app must report that
+   limitation and must not present fallback brand templates as AI output.
+   Drafts remain editable and versioned before exact-version approval. Future
+   weekly posts on an active Automatic channel use its authorised policy.
 6. Prepare a Search or Meta website campaign. Review the actual copy, account,
    destination, creative, countries, keywords, duration and maximum exposure.
    Approve its exact version separately. Google/Meta account currency, selected
@@ -55,10 +99,15 @@ publisher is not implemented. Self-hosting Postiz/Mixpost or adding n8n would ad
 operations and another scheduler to the existing Trigger stack.
 
 Pricing checked on 28 October 2026: the first two active connections are free;
-connections 3–10 cost $6 each, graduated. Ad connections count too. X URL posts
-cost $0.20; resource reads cost $0.005. The implementation conservatively reserves
-one cent per X analytics read and two cents per short new campaign for possible
-managed-ad metering across billing periods. See [official pricing](https://docs.zernio.com/pricing).
+connections 3–10 cost $6 each, 11–100 cost $3 each, and later accounts cost $1
+each; rates are graduated. Profiles are free and ad accounts count as connections.
+The page refuses a new connection when its projected account base would exceed
+the $30/month target. X API usage is separate: a regular post costs $0.015, a
+post with a URL costs $0.20, and resource reads cost $0.005. The first 500 active
+managed ads are free, then each running or in-review ad costs $0.01/month; Zernio
+does not take a percentage of platform ad spend. The implementation reserves a
+small amount for X reads and managed-ad usage before scheduling. See [official
+pricing](https://docs.zernio.com/pricing).
 
 | Example | Base connection estimate, before usage/tax |
 | --- | ---: |
@@ -66,11 +115,10 @@ managed-ad metering across billing periods. See [official pricing](https://docs.
 | Five connections: Instagram, X, Reddit, Google Ads, Meta Ads | $18/month |
 | Two projects with five dedicated connections each | $48/month; exceeds target |
 
-Two projects sharing those same five authorised connections, each posting about
-13 X URL posts/month with up to five reads/post, reserve approximately $24.58
-including four new short campaigns. This is an example, not the actual account
-inventory or an invoice. Dedicated accounts for every future project cannot fit
-an unlimited number of brands into $30.
+Dedicated accounts for each future project cannot fit an unlimited number of
+brands into $30. These are base estimates, not a forecast or invoice. X API
+activity, managed ads beyond the free allowance, tax and platform ad spend can
+raise the realized total.
 
 Account refresh reads the team's billing count and current-period usage, not
 only a potentially scoped API key's visible connections. The app enforces its
@@ -132,7 +180,10 @@ Server credentials:
 - `MEDIA_ENGINE_CONVEX_SERVICE_TOKEN`: shared server/Convex capability, existing
   media-engine vault fallback supported. Never expose it to the browser.
 - `ZERNIO_API_KEY`: existing owned Zernio account key in the media-engine vault or
-  server environment. Do not create or subscribe to an account automatically.
+  server environment. OAuth buttons may create project profiles through this
+  key; they never create a Zernio team, subscription or social identity.
+- `MEDIA_ENGINE_PUBLIC_ORIGIN`: canonical bare HTTPS origin used by the signed
+  provider callback. Do not build OAuth return URLs from request Host headers.
 - `ZERNIO_WEBHOOK_SECRET`: Vercel server environment, at least 32 characters.
 - Existing Media Engine Trigger credential and Cloudflare R2 credentials.
 
@@ -150,7 +201,9 @@ Dispatch configuration, disabled/absent initially:
 Before any public/paid pilot, obtain its real project URL, account IDs, approved
 copy/assets, permitted Reddit community and explicit content/ad allowances.
 Human OAuth, business verification and platform billing setup remain necessary
-where required. Universal automatic account creation is deferred.
+where required. Creating social identities and ad accounts automatically is
+not supported by the platforms; their existing accounts must be authorized by
+the owner.
 
 Live qualification must prove a native publication URL per required network;
 actual Search/Meta paused creation, authorised activation, native pause and spend

@@ -45,11 +45,13 @@ async function request(action: string, payload: Record<string, unknown>) {
 
 export default function MarketingOnboarding({
   accounts,
+  reservedProfileIds,
   onRefresh,
   onComplete,
   onCancel,
 }: {
   accounts: Account[];
+  reservedProfileIds: string[];
   onRefresh: () => Promise<void>;
   onComplete: (projectId: string, token: string) => Promise<void>;
   onCancel?: () => void;
@@ -87,7 +89,15 @@ export default function MarketingOnboarding({
     projectId: string;
     token: string;
   } | null>(null);
-  const connected = accounts.filter((account) => account.connected);
+  const selectedProfileId = Object.values(choices)
+    .map((row) => accounts.find((account) => account._id === row.accountId)?.profileId)
+    .find((profileId): profileId is string => Boolean(profileId));
+  const connected = accounts.filter(
+    (account) =>
+      account.connected &&
+      !reservedProfileIds.includes(account.profileId) &&
+      (!selectedProfileId || account.profileId === selectedProfileId),
+  );
   const update = (name: keyof typeof details, value: string) =>
     setDetails((previous) => ({ ...previous, [name]: value }));
   const choice = (platform: string, patch: Partial<Choice>) =>
@@ -287,7 +297,7 @@ export default function MarketingOnboarding({
             {
               [
                 "We’ll pull in the basics. You stay in control.",
-                "Connect accounts once. Choose what this project uses.",
+                "Choose this project’s connected accounts.",
                 "Confirm your facts and set a comfortable starting pace.",
               ][step]
             }
@@ -387,8 +397,9 @@ export default function MarketingOnboarding({
               </div>
               {!connected.length && (
                 <p className="mk-inline-note">
-                  No connected accounts yet. You can save this project now and
-                  connect them later.
+                  No unassigned connected accounts are available. Save this
+                  project now, then connect accounts from its Channels page or
+                  assign accounts that share one unassigned provider profile.
                 </p>
               )}
               {platforms.map((platform) => {
@@ -683,7 +694,10 @@ export default function MarketingOnboarding({
       <div className="mk-card mk-connections-footer">
         <div>
           <h2>Already connected?</h2>
-          <p>Connect accounts once, then choose which project uses them.</p>
+          <p>
+            Each provider profile is assigned to one project in Media Engine.
+            Connect new accounts from that project&apos;s Channels page.
+          </p>
         </div>
         <a
           className="mk-text-link"

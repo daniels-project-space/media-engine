@@ -311,6 +311,13 @@ export const listWorkspace = internalQuery({
       Reflect.deleteProperty(row, "conversionTokenHash");
       return row;
     });
+    const visibleAccounts = project
+      ? accounts.filter(
+          (account) =>
+            account.profileId === project.zernioProfileId ||
+            channels.some((channel) => channel.accountId === account._id),
+        )
+      : accounts;
     return {
       projects: publicProjects,
       selectedProjectId: project?._id,
@@ -318,7 +325,7 @@ export const listWorkspace = internalQuery({
       items,
       conversions,
       assets,
-      accounts,
+      accounts: visibleAccounts,
       inventory,
       renderImports: project
         ? await ctx.db
@@ -624,6 +631,41 @@ export const syncAccounts = internalMutation({
   },
 });
 
+export const setProviderProfile = internalMutation({
+  args: {
+    projectId: v.id("marketingProjects"),
+    profileId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const project = await projectFor(ctx, args.projectId);
+    const profileId = text(args.profileId, "Provider profile", 120);
+    if (!/^[A-Za-z0-9_-]+$/.test(profileId))
+      throw new Error("Invalid provider profile id");
+    if (project.zernioProfileId && project.zernioProfileId !== profileId)
+      throw new Error("This project's provider profile is already assigned");
+    const projects = await ctx.db
+      .query("marketingProjects")
+      .withIndex("by_organization", (q) =>
+        q.eq("organizationId", project.organizationId),
+      )
+      .take(MAX_PROJECTS);
+    if (
+      projects.some(
+        (candidate) =>
+          candidate._id !== project._id &&
+          candidate.zernioProfileId === profileId,
+      )
+    )
+      throw new Error("Provider profile is already assigned to another project");
+    if (!project.zernioProfileId)
+      await ctx.db.patch(project._id, {
+        zernioProfileId: profileId,
+        updatedAt: Date.now(),
+      });
+    return profileId;
+  },
+});
+
 export const saveChannel = internalMutation({
   args: {
     projectId: v.id("marketingProjects"),
@@ -640,6 +682,11 @@ export const saveChannel = internalMutation({
     const account = await ctx.db.get(args.accountId);
     if (!account || !account.connected || account.syncedAt < Date.now() - DAY)
       throw new Error("Refresh and connect the provider account first");
+    if (
+      project.zernioProfileId &&
+      account.profileId !== project.zernioProfileId
+    )
+      throw new Error("This account belongs to a different project's provider profile");
     if (
       args.mode === "automatic" &&
       (!args.authorisedUntil ||
@@ -672,6 +719,36 @@ export const saveChannel = internalMutation({
     const existing = channels.find(
       (channel) => channel.accountId === account._id,
     );
+    if (!project.zernioProfileId) {
+      const linkedProfiles = new Set<string>();
+      for (const channel of channels) {
+        const linkedAccount = await ctx.db.get(channel.accountId);
+        if (linkedAccount) linkedProfiles.add(linkedAccount.profileId);
+      }
+      if (
+        linkedProfiles.size > 1 ||
+        (linkedProfiles.size === 1 && !linkedProfiles.has(account.profileId))
+      )
+        throw new Error("This project already uses another provider profile; connect matching accounts to continue");
+      const projects = await ctx.db
+        .query("marketingProjects")
+        .withIndex("by_organization", (q) =>
+          q.eq("organizationId", project.organizationId),
+        )
+        .take(MAX_PROJECTS);
+      if (
+        projects.some(
+          (candidate) =>
+            candidate._id !== project._id &&
+            candidate.zernioProfileId === account.profileId,
+        )
+      )
+        throw new Error("This provider profile is already assigned to another project");
+      await ctx.db.patch(project._id, {
+        zernioProfileId: account.profileId,
+        updatedAt: Date.now(),
+      });
+    }
     if (!existing && channels.length >= MAX_CHANNELS)
       throw new Error("Channel limit reached");
     const { projectId, ...values } = args;

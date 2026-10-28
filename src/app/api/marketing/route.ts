@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireOperator } from "@/lib/operator-auth";
 import {
+  assertCurrentProviderPricing,
   boundedJson,
   marketingCall,
   marketingReadiness,
@@ -11,17 +12,41 @@ import {
   providerClient,
   publicFailure,
 } from "@/lib/marketing/service";
-import { snapshotHash } from "../../../../convex/marketingPolicy";
+import { integrationBaseMinor, snapshotHash } from "../../../../convex/marketingPolicy";
 import { vaultService } from "@/lib/vault";
 import { inspectResearchWebsite } from "@/lib/marketing/website";
 import { discoverProjectResearch } from "@/lib/marketing/discover-project";
-import { completedBriefRender, hyperProjectConnection, inspectHyperProject } from "@/lib/marketing/hyper-project";
+import { completedBriefRender, hyperProjectConnection, inspectHyperProject, submitHyperProjectJob } from "@/lib/marketing/hyper-project";
+import { checkHyperPreflight } from "@/lib/marketing/hyper-preflight";
+import { buildHyperMediaRequestTemplate, isPortraitVideoFormat, type HyperRenderBlocker } from "@/lib/marketing/hyper-media-request";
+import { mediaEnginePublicOrigin } from "@/lib/higgsfield-oauth";
+import { connectionPlatforms, signMarketingConnectionState, type ConnectionPlatform } from "@/lib/marketing/connection-state";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "private, no-store" };
 const id = z.string().regex(/^[a-z0-9]{20,64}$/);
+async function triggerHyperWatch(payload: { projectId: string; briefId: string; jobId: string; modelId: string }) {
+  try {
+    const key = process.env.TRIGGER_SECRET_KEY || (await vaultService("trigger")).TRIGGER_SECRET_KEY_MEDIA_ENGINE;
+    if (!key) return "unconfirmed" as const;
+    const response = await fetch("https://api.trigger.dev/api/v1/tasks/marketing-hyper-watch/trigger", {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({ payload, options: {
+        idempotencyKey: `hyper-watch:${payload.projectId}:${payload.jobId}`,
+        idempotencyKeyTTL: "25h",
+      } }),
+      signal: AbortSignal.timeout(10_000),
+      redirect: "error",
+    });
+    const result = await response.json().catch(() => ({}));
+    return response.ok && typeof result.id === "string" ? "queued" as const : "unconfirmed" as const;
+  } catch {
+    return "unconfirmed" as const;
+  }
+}
 const projectInput = z
   .object({
     name: z.string().min(1).max(120),
@@ -39,6 +64,151 @@ const projectInput = z
     onboardingKey: z.string().uuid().optional(),
   })
   .strict();
+
+async function prepareHyperMediaRequest(projectId: string, briefId: string, environmentId?: string) {
+  const brief = await marketingCall<{ modelId: string; prompt: string; format: string; stale: boolean }>("getRenderBrief", { projectId, briefId });
+  if (brief.modelId !== "minimax-h3" && brief.modelId !== "qwen-image-2-1")
+    throw new Error("This marketing brief does not use a supported Hyper image or video model");
+  if (brief.stale) throw new Error("Save and review the current strategy before staging its media request");
+
+  const preflight = await checkHyperPreflight({ projectId, ...(environmentId ? { environmentId } : {}), brief });
+  if (!preflight.model) throw new Error("The current Hyper catalogue does not contain this model's request guide");
+  const template = buildHyperMediaRequestTemplate(preflight.model, brief.prompt, brief.format);
+  const blockers: HyperRenderBlocker[] = [];
+  if (!template.nativeQualified) blockers.push("native-model-unqualified");
+  if (!preflight.gpuProfileVerified) blockers.push("gpu-profile-unverified");
+  if (!preflight.modelGpuVerified) blockers.push("model-gpu-unqualified");
+  if (preflight.projectConnection === "missing") blockers.push("project-connection-missing");
+  if (preflight.projectConnection === "unavailable") blockers.push("project-connection-unavailable");
+  if (!environmentId) blockers.push("environment-required");
+  if (environmentId && !preflight.environment) blockers.push("environment-not-prepared");
+  if (preflight.environment && !preflight.environment.modelMatches) blockers.push("environment-model-mismatch");
+  if (preflight.environment && !preflight.environment.prepared) blockers.push("environment-not-prepared");
+  if (template.kind === "video" && isPortraitVideoFormat(brief.format)) blockers.push("requested-format-not-supported");
+  if (!preflight.capacityVerified) blockers.push("capacity-unverified");
+  if (!preflight.monetaryCapVerified) blockers.push("spend-control-unverified");
+  if (!preflight.outputVerified) blockers.push("output-delivery-unverified");
+  if (!preflight.dispatchEnabled) blockers.push("dispatch-disabled");
+
+  const uniqueBlockers = [...new Set(blockers)];
+  const staged = await marketingCall<{ request: { state: string; requestHash: string; requestKey: string; blockers: string[]; checkedAt: number }; reused: boolean }>(
+    "stageHyperMediaRequest",
+    { projectId, briefId, modelId: template.modelId, requestGuideHash: template.guideHash,
+      ...(environmentId ? { environmentId } : {}), quality: template.quality, settings: template.settings, blockers: uniqueBlockers },
+  );
+  return { staged, template, blockers: [...new Set([...uniqueBlockers, ...staged.request.blockers])] };
+}
+
+async function stageHyperMediaRequest(projectId: string, briefId: string, environmentId?: string) {
+  const { staged, template, blockers } = await prepareHyperMediaRequest(projectId, briefId, environmentId);
+  return {
+    ...staged,
+    modelId: template.modelId,
+    outputContentType: template.outputContentType,
+    readiness: template.readiness,
+    quality: template.quality,
+    settings: template.settings,
+    blockers,
+    submitted: false,
+  };
+}
+
+async function submitHyperMediaRequest(input: {
+  projectId: string;
+  briefId: string;
+  environmentId?: string;
+  expectedRequestHash: string;
+  rightsConfirmed: true;
+  spendAuthorized: true;
+}) {
+  const { staged, template, blockers } = await prepareHyperMediaRequest(input.projectId, input.briefId, input.environmentId);
+  if (staged.request.requestHash !== input.expectedRequestHash)
+    throw new Error("The render request changed. Review the refreshed request before authorizing it.");
+  if (blockers.length > 0) return { submitted: false, requestHash: staged.request.requestHash, blockers };
+  if (!input.environmentId) throw new Error("A prepared Hyper environment is required before submission");
+
+  await marketingCall("authorizeHyperMediaRequest", {
+    projectId: input.projectId,
+    briefId: input.briefId,
+    requestHash: staged.request.requestHash,
+    rightsConfirmed: input.rightsConfirmed,
+    spendAuthorized: input.spendAuthorized,
+  });
+  const connection = await hyperProjectConnection(input.projectId);
+  if (!connection) throw new Error("This project has no configured new Hyper service connection");
+  const job = await submitHyperProjectJob(connection, {
+    environmentId: input.environmentId,
+    idempotencyKey: staged.request.requestKey,
+    modelId: template.modelId,
+    request: template.request,
+  });
+  await marketingCall("trackHyperImport", {
+    projectId: input.projectId,
+    briefId: input.briefId,
+    jobId: job.id,
+    rightsConfirmed: true,
+    modelId: job.modelId,
+    providerState: job.state,
+  });
+  const monitoring = await triggerHyperWatch({ projectId: input.projectId, briefId: input.briefId, jobId: job.id, modelId: job.modelId });
+  return { submitted: true, job: { id: job.id, state: job.state, modelId: job.modelId, monitoring } };
+}
+
+async function beginAccountConnection(projectId: string, platform: ConnectionPlatform) {
+  assertCurrentProviderPricing();
+  await refreshProviderAccounts();
+  const workspace = await marketingCall<{
+    projects: Array<{ _id: string; name: string; zernioProfileId?: string }>;
+    channels: Array<{ accountId: string }>;
+    accounts: Array<{ _id: string; providerAccountId: string; profileId: string; platform: string; connected: boolean }>;
+    inventory: { accountCount: number } | null;
+  }>("listWorkspace", { projectId });
+  const project = workspace.projects.find((row) => row._id === projectId);
+  if (!project) throw new Error("Marketing project not found");
+  const client = await providerClient();
+  let profileId = project.zernioProfileId;
+  if (!profileId) {
+    const channelAccountIds = new Set(
+      workspace.channels.map((channel) => channel.accountId),
+    );
+    const legacyProfiles = new Set(
+      workspace.accounts
+        .filter((account) => channelAccountIds.has(account._id))
+        .map((account) => account.profileId),
+    );
+    if (legacyProfiles.size > 1)
+      throw new Error("This project has channels across multiple provider profiles. Reconcile those channels before connecting another account.");
+    profileId = legacyProfiles.size === 1
+      ? [...legacyProfiles][0]
+      : await client.ensureProjectProfile(projectId);
+    await marketingCall("setProviderProfile", { projectId, profileId });
+  }
+
+  const scoped = await marketingCall<{
+    accounts: Array<{ providerAccountId: string; profileId: string; platform: string; connected: boolean }>;
+    inventory: { accountCount: number } | null;
+  }>("listWorkspace", { projectId });
+  const existing = scoped.accounts.find(
+    (account) => account.profileId === profileId && account.platform === platform,
+  );
+  if (existing?.connected)
+    return { alreadyConnected: true as const, accountId: existing.providerAccountId };
+
+  const accountCount = scoped.inventory?.accountCount ?? workspace.inventory?.accountCount;
+  if (accountCount === undefined)
+    throw new Error("Refresh the provider cost inventory before connecting another account");
+  const projectedBaseMinor = integrationBaseMinor(accountCount + (existing ? 0 : 1));
+  if (projectedBaseMinor > marketingReadiness().integrationLimitMinor)
+    throw new Error("This account would exceed the $30/month provider base-cost target. No account was connected.");
+
+  const connectState = signMarketingConnectionState(
+    { projectId, profileId, platform },
+    await creativeServiceToken(),
+  );
+  const callback = new URL("/api/marketing/connect/callback", mediaEnginePublicOrigin());
+  callback.searchParams.set("connectState", connectState);
+  return client.getConnectUrl(platform, profileId, callback.toString());
+}
 
 export async function GET(request: NextRequest) {
   const denied = requireOperator(request);
@@ -140,6 +310,13 @@ export async function POST(request: NextRequest) {
       const result = await refreshProviderAccounts();
       return NextResponse.json(result, { headers });
     }
+    if (input.action === "connect-account") {
+      const payload = z.object({ projectId: id, platform: z.enum(connectionPlatforms) }).strict().parse(input.payload);
+      return NextResponse.json(
+        await beginAccountConnection(payload.projectId, payload.platform),
+        { headers },
+      );
+    }
     if (input.action === "record-cost") {
       const payload = z
         .object({
@@ -190,7 +367,24 @@ export async function POST(request: NextRequest) {
     if (input.action === "create-render-brief") {
       const payload = z.object({ projectId: id, planId: id, entryIndex: z.number().int().min(0).max(27),
         modelId: z.enum(["minimax-h3", "qwen-image-2-1"]) }).strict().parse(input.payload);
-      return NextResponse.json({ result: await marketingCall("createRenderBrief", payload) }, { headers });
+      const result = await marketingCall<{ briefId: string }>("createRenderBrief", payload);
+      try {
+        const renderRequest = await stageHyperMediaRequest(payload.projectId, result.briefId);
+        return NextResponse.json({ result, renderRequest }, { headers });
+      } catch (error) {
+        // Keep the saved brief usable while reporting that the live service
+        // contract could not be checked. Never imply a GPU job was submitted.
+        return NextResponse.json({ result, renderRequest: { submitted: false, unavailable: publicFailure(error) } }, { headers });
+      }
+    }
+    if (input.action === "stage-hyper-media") {
+      const payload = z.object({ projectId: id, briefId: id, environmentId: z.string().uuid().optional() }).strict().parse(input.payload);
+      return NextResponse.json({ renderRequest: await stageHyperMediaRequest(payload.projectId, payload.briefId, payload.environmentId) }, { headers });
+    }
+    if (input.action === "submit-hyper-media") {
+      const payload = z.object({ projectId: id, briefId: id, environmentId: z.string().uuid().optional(),
+        expectedRequestHash: z.string().regex(/^[a-f0-9]{64}$/), rightsConfirmed: z.literal(true), spendAuthorized: z.literal(true) }).strict().parse(input.payload);
+      return NextResponse.json({ renderSubmission: await submitHyperMediaRequest(payload) }, { headers });
     }
     if (input.action === "capture-research") {
       const payload = z.object({ projectId: id, url: z.string().url().max(700) }).strict().parse(input.payload);
@@ -294,7 +488,8 @@ export async function POST(request: NextRequest) {
       const inspected = await inspectHyperProject(connection, payload.jobId);
       if (!inspected.job || inspected.job.modelId !== brief.modelId) throw new Error("The render job must use the model selected for this creative brief");
       const tracked = await marketingCall("trackHyperImport", { ...payload, modelId: inspected.job.modelId, providerState: inspected.job.state, errorCode: inspected.job.errorCode ?? undefined });
-      return NextResponse.json({ result: { tracked, job: inspected.job } }, { headers });
+      const monitoring = await triggerHyperWatch({ projectId: payload.projectId, briefId: payload.briefId, jobId: payload.jobId, modelId: inspected.job.modelId });
+      return NextResponse.json({ result: { tracked, job: inspected.job, monitoring } }, { headers });
     }
     if (input.action === "available-renders") {
       const result = await marketingCall("availableRenders", {
@@ -377,7 +572,7 @@ export async function POST(request: NextRequest) {
           platform: string;
         }>;
         projects: Array<{ _id: string; currency: string }>;
-      }>("listWorkspace", { projectId: input.payload.projectId });
+      }>("listWorkspace", {});
       const account = workspace.accounts.find(
         (account) => account._id === input.payload.accountId,
       );

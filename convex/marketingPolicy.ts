@@ -159,12 +159,16 @@ export function safeAssetKey(projectId: string, key: string): string {
   return key;
 }
 
-/** Find 09:00 in the project's timezone; iteration accounts for DST offsets. */
+/** Find a proposed local publication time in the project's timezone; account for DST offsets. */
 export function localPublicationTime(
   now: number,
   dayOffset: number,
   timezone: string,
+  localTime = "09:00",
 ): number {
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(localTime))
+    throw new Error("Publication time must use 24-hour HH:MM format");
+  const [hour, minute] = localTime.split(":").map(Number);
   const dateParts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     year: "numeric",
@@ -178,7 +182,8 @@ export function localPublicationTime(
     Number(values.year),
     Number(values.month) - 1,
     Number(values.day) + dayOffset,
-    9,
+    hour,
+    minute,
   );
   let candidate = target;
   for (let iteration = 0; iteration < 3; iteration++) {
@@ -206,7 +211,7 @@ export function localPublicationTime(
   }
   return candidate > now + 5 * 60_000
     ? candidate
-    : localPublicationTime(now, dayOffset + 1, timezone);
+    : localPublicationTime(now, dayOffset + 1, timezone, localTime);
 }
 
 /** Free, explicitly labelled brand templates. No model or fabricated claims. */
