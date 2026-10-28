@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ call: vi.fn(), inspect: vi.fn() }));
+const mocks = vi.hoisted(() => ({ call: vi.fn(), inspect: vi.fn(), environment: vi.fn() }));
 vi.mock("@trigger.dev/sdk", () => ({ task: (definition: unknown) => definition }));
 vi.mock("../src/lib/marketing/service", () => ({ marketingCall: mocks.call }));
-vi.mock("../src/lib/llm", () => ({ inspectCodexSubscription: mocks.inspect }));
+vi.mock("../src/lib/llm", () => ({ inspectCodexSubscription: mocks.inspect, inspectCodexEnvironment: mocks.environment }));
 import { marketingAiCheck, marketingAiEnvironmentCheck } from "../src/trigger/marketing-ai-check";
 
 const worker = marketingAiCheck as unknown as { run: (payload: { projectId: string; requestKey: string }) => Promise<unknown> };
@@ -23,8 +23,8 @@ describe("cloud subscription diagnostic", () => {
   });
   it("checks the worker before onboarding without touching project records", async () => {
     const probe = marketingAiEnvironmentCheck as unknown as { run: () => Promise<unknown> };
-    mocks.inspect.mockResolvedValue("unavailable");
-    expect(await probe.run()).toEqual({ login: "unavailable" });
+    mocks.environment.mockResolvedValue({ login: "unavailable", cli: "missing", storedCredentialConfigured: true });
+    expect(await probe.run()).toEqual({ login: "unavailable", cli: "missing", storedCredentialConfigured: true });
     expect(mocks.call).not.toHaveBeenCalled();
   });
 });

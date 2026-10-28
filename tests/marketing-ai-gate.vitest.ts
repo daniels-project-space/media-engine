@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const { marketingCall } = vi.hoisted(() => ({ marketingCall: vi.fn() }));
 vi.mock("../src/lib/marketing/service", () => ({ marketingCall }));
-import { inspectCodexSubscription, marketingChat } from "../src/lib/llm";
+import { inspectCodexEnvironment, inspectCodexSubscription, marketingChat } from "../src/lib/llm";
 
 describe("marketing AI safety gate", () => {
   beforeEach(() => marketingCall.mockReset());
@@ -21,6 +21,7 @@ describe("marketing AI safety gate", () => {
   });
   it("reports an unavailable CLI without invoking a model or disclosing errors", async () => {
     expect(await inspectCodexSubscription("/nonexistent/marketing-codex-test")).toBe("unavailable");
+    expect(await inspectCodexEnvironment("/nonexistent/marketing-codex-test")).toMatchObject({ login: "unavailable", cli: "missing" });
   });
   it("recognizes an exact subscription status on stdout or stderr, but rejects API-key login", async () => {
     const dir = await mkdtemp(join(tmpdir(), "marketing-cli-test-"));

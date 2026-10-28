@@ -1,5 +1,5 @@
 import { task } from "@trigger.dev/sdk";
-import { inspectCodexSubscription } from "../lib/llm";
+import { inspectCodexEnvironment, inspectCodexSubscription } from "../lib/llm";
 import { marketingCall } from "../lib/marketing/service";
 
 // Read-only diagnostic. It never submits a model prompt or changes the AI gate.
@@ -22,5 +22,5 @@ export const marketingAiEnvironmentCheck = task({
   id: "marketing-ai-environment-check",
   maxDuration: 30,
   retry: { maxAttempts: 1 },
-  run: async () => ({ login: await inspectCodexSubscription() }),
+  run: async () => inspectCodexEnvironment(),
 });

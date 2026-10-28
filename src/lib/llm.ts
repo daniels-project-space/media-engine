@@ -71,8 +71,12 @@ export function codexExecArgs(prompt: string, noTools = false): string[] {
     "--ephemeral", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", prompt];
 }
 
-/** Checks only local CLI login state; does not call a model or qualify it. */
-export async function inspectCodexSubscription(cli = process.env.CODEX_CLI ?? "codex"): Promise<"subscription-login" | "unavailable"> {
+/** Checks local CLI login state; never returns credentials or calls a model. */
+export async function inspectCodexEnvironment(cli = process.env.CODEX_CLI ?? "codex"): Promise<{
+  login: "subscription-login" | "unavailable"; cli: "present" | "missing" | "unknown";
+  storedCredentialConfigured: boolean;
+}> {
+  const storedCredentialConfigured = !!process.env.CODEX_AUTH_JSON_B64;
   try {
     const { stdout, stderr } = await run(cli, ["login", "status"], {
       cwd: "/tmp",
@@ -80,12 +84,18 @@ export async function inspectCodexSubscription(cli = process.env.CODEX_CLI ?? "c
       maxBuffer: 64 * 1024,
       env: codexChildEnv(),
     });
-    if (isChatGptLoginStatus(stdout) || isChatGptLoginStatus(stderr)) return "subscription-login";
-  } catch {
+    return { login: isChatGptLoginStatus(stdout) || isChatGptLoginStatus(stderr) ? "subscription-login" : "unavailable",
+      cli: "present", storedCredentialConfigured };
+  } catch (error) {
     // Do not reveal saved-profile details. All unsuccessful checks have the
-    // same fail-closed result below.
+    // same fail-closed login result; only a bounded CLI presence flag is kept.
+    const code = (error as NodeJS.ErrnoException).code;
+    return { login: "unavailable", cli: code === "ENOENT" ? "missing" : typeof code === "number" ? "present" : "unknown", storedCredentialConfigured };
   }
-  return "unavailable";
+}
+
+export async function inspectCodexSubscription(cli = process.env.CODEX_CLI ?? "codex"): Promise<"subscription-login" | "unavailable"> {
+  return (await inspectCodexEnvironment(cli)).login;
 }
 
 async function requireChatGptLogin(cli: string): Promise<void> {
